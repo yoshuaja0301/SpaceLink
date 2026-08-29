@@ -263,6 +263,48 @@ ul, ol { margin: 0; padding: 0; }
 .nav-sort:focus-visible { border-color: var(--accent); color: var(--text-normal); }
 .nav-sort option { background: var(--bg-secondary); color: var(--text-normal); }
 
+/* Right sidebar tablist.
+ *
+ * Four tabs (Backlinks / Outline / Local graph / Info) do not fit a narrow
+ * sidebar, so the strip scrolls horizontally rather than wrapping onto a
+ * second line. The active tab is marked by weight and an underline as well as
+ * colour, so the state does not depend on hue alone. */
+.right-sidebar-header { gap: var(--space-2); }
+
+.right-sidebar-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--space-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.right-sidebar-tabs::-webkit-scrollbar { display: none; }
+
+.right-sidebar-tab {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.right-sidebar-tab:hover { background: var(--bg-hover); color: var(--text-normal); }
+.right-sidebar-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--text-normal);
+  font-weight: 650;
+}
+
+.right-sidebar-body { padding-top: var(--space-2); }
+
 .sidebar-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-1) var(--space-6); }
 
 /* ======================================================================= *

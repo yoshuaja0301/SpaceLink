@@ -1214,8 +1214,21 @@ function shiftLines<T extends { line: number }>(items: T[], by: number): T[] {
   return items
 }
 
-function makeExcerpt(plain: string): string {
-  const collapsed = plain.replace(/\s+/g, ' ').trim()
+/**
+ * A short prose summary of the note.
+ *
+ * `title` is dropped when the body opens with it — every surface that shows an
+ * excerpt (the hover card, quick switcher, search results) already shows the
+ * title right above it, and repeating it wastes the first line.
+ */
+function makeExcerpt(plain: string, title?: string): string {
+  let collapsed = plain.replace(/\s+/g, ' ').trim()
+  const heading = title?.replace(/\s+/g, ' ').trim()
+  if (heading && collapsed.length > heading.length && collapsed.slice(0, heading.length) === heading) {
+    const rest = collapsed.slice(heading.length)
+    // Only when the title ends a word — "Notes" must not be shaved off "Notes on X".
+    if (/^[\s\p{P}]/u.test(rest)) collapsed = rest.replace(/^[\s\p{Pd}:;,.]+/u, '').trim()
+  }
   if (collapsed.length <= EXCERPT_LENGTH) return collapsed
   const window = collapsed.slice(0, EXCERPT_LENGTH + 1)
   const cut = window.lastIndexOf(' ')
@@ -1272,7 +1285,7 @@ export function parseNote(source: string, fileName: string): ParsedNote {
     headings,
     tasks,
     title,
-    excerpt: makeExcerpt(plain),
+    excerpt: makeExcerpt(plain, title),
     wordCount: plain.match(WORD)?.length ?? 0,
   }
 }

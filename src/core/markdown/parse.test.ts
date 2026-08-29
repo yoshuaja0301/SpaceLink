@@ -625,8 +625,12 @@ describe('parseNote', () => {
   })
 
   it('builds an excerpt from prose, collapsed and cut on a word boundary', () => {
+    // The leading H1 is the note's title, and every surface that shows an
+    // excerpt shows the title directly above it — so the excerpt starts at the
+    // prose. See the "excerpt does not repeat the title" block below.
     const note = parseNote('# Heading\n\n- [ ] A **bold** [[Link|point]] with\n  `code` and more    prose.\n', 'x.md')
-    expect(note.excerpt).toBe('Heading A bold point with code and more prose.')
+    expect(note.title).toBe('Heading')
+    expect(note.excerpt).toBe('A bold point with code and more prose.')
   })
 
   it('truncates long excerpts on a word boundary and adds an ellipsis', () => {
@@ -755,5 +759,28 @@ describe('parseNote', () => {
     expectOffsetsRoundTrip(source, note)
     // Linear passes only: a ~50k-char note is well under a second.
     expect(elapsed).toBeLessThan(1000)
+  })
+})
+
+describe('excerpt does not repeat the title', () => {
+  it('drops a leading H1 that matches the title', () => {
+    const note = parseNote('# Daily Notes\n\nA daily note is one file per day.\n', 'Daily Notes.md')
+    expect(note.title).toBe('Daily Notes')
+    expect(note.excerpt).toBe('A daily note is one file per day.')
+  })
+
+  it('drops a frontmatter title repeated as the first heading', () => {
+    const note = parseNote('---\ntitle: Zettelkasten\n---\n\n# Zettelkasten\n\nGerman for slip box.\n', 'z.md')
+    expect(note.excerpt).toBe('German for slip box.')
+  })
+
+  it('keeps prose that merely starts with the same word', () => {
+    const note = parseNote('# Notes\n\nNotes on the method are kept here.\n', 'Notes.md')
+    expect(note.excerpt).toBe('Notes on the method are kept here.')
+  })
+
+  it('leaves an excerpt alone when the body does not open with the title', () => {
+    const note = parseNote('# Alpha\n\nBeta gamma delta.\n', 'Alpha.md')
+    expect(note.excerpt).toBe('Beta gamma delta.')
   })
 })
