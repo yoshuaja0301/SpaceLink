@@ -20,6 +20,11 @@
  * (frontmatter included), which is what `setNoteContent` expects. They are
  * re-verified at click time, so a mention that has drifted since the last
  * render fails safely instead of corrupting the note.
+ *
+ * The scan reads the whole vault, so it is kept off the typing path three ways:
+ * the per-note masking it needs is cached on the note object, the rescan trails
+ * a typing burst on a timer, and it does not run at all while the panel is off
+ * screen.
  */
 import type { JSX, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -160,14 +165,40 @@ function lineIndexAt(starts: readonly number[], offset: number): number {
   return low
 }
 
+/** Everything the scan needs from one note before it knows what it is looking for. */
+interface ScanSource {
+  /** Prose only, lined up character-for-character with the note's body. */
+  masked: string
+  /** `masked` lowercased once, so a case-insensitive sweep costs nothing extra. */
+  haystack: string
+  /** Offsets at which each line of the note's full content starts. */
+  starts: number[]
+}
+
+/**
+ * Masking a note and walking it for line starts is the entire cost of the scan,
+ * and both are pure functions of the note's text — nothing about them depends
+ * on which note the panel is describing. `makeNote` builds a fresh `Note`
+ * whenever content changes, so a `WeakMap` keyed on the note is exactly as
+ * stale as the note is (never), and the entry is collected along with it.
+ */
+const SCAN_CACHE = new WeakMap<Note, ScanSource>()
+
+function scanSourceOf(note: Note): ScanSource {
+  const cached = SCAN_CACHE.get(note)
+  if (cached) return cached
+  // Frontmatter is skipped entirely: an alias listed there is not a mention.
+  const masked = maskNonProse(note.parsed.body)
+  const source: ScanSource = { masked, haystack: masked.toLowerCase(), starts: lineTable(note.content) }
+  SCAN_CACHE.set(note, source)
+  return source
+}
+
 /** Every whole-word, prose-only occurrence of `names` inside one note. */
 function mentionsIn(note: Note, names: readonly string[]): UnlinkedMention[] {
   const content = note.content
   const offset = note.parsed.bodyOffset
-  // Frontmatter is skipped entirely: an alias listed there is not a mention.
-  const masked = maskNonProse(note.parsed.body)
-  const haystack = masked.toLowerCase()
-  const starts = lineTable(content)
+  const { masked, haystack, starts } = scanSourceOf(note)
   const found: UnlinkedMention[] = []
 
   for (const name of names) {
@@ -230,6 +261,39 @@ export function findUnlinkedMentions(
     (a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || a.source.localeCompare(b.source),
   )
   return groups
+}
+
+/** The names a note is searched for, as one comparable value. */
+function namesKey(note: Note): string {
+  return mentionNames(note).join(' ')
+}
+
+/**
+ * Whether a new note map can change what the scan for `path` reports.
+ *
+ * The scan reads every note *except* the one being described, plus that note's
+ * names — so the keystroke that replaces the map is usually invisible to it:
+ * the panel follows the note the reader is typing in, and its prose is the one
+ * thing the scan never looks at. Renaming it, or editing any other note, does
+ * matter.
+ *
+ * Only identities are compared, which is cheap; the notes themselves are
+ * immutable, so a note that is the same object holds the same text.
+ */
+function scanInputsChanged(
+  previous: ReadonlyMap<NotePath, Note>,
+  next: ReadonlyMap<NotePath, Note>,
+  path: NotePath,
+): boolean {
+  if (previous === next) return false
+  if (previous.size !== next.size) return true
+  const before = previous.get(path)
+  const after = next.get(path)
+  if (before !== after && (!before || !after || namesKey(before) !== namesKey(after))) return true
+  for (const [source, note] of next) {
+    if (source !== path && previous.get(source) !== note) return true
+  }
+  return false
 }
 
 /**
@@ -417,28 +481,53 @@ function Section({ title, count, collapsed, onToggle, children }: SectionProps):
  * Component
  * ------------------------------------------------------------------ */
 
+/** Trailing debounce before a typing burst is reflected in the unlinked scan. */
+const RESCAN_MS = 250
+
+/** Stable identity for "nothing was scanned", so the memos below do not churn. */
+const NO_GROUPS: readonly UnlinkedGroup[] = []
+
 export interface BacklinksPanelProps {
   path: NotePath
+  /** False while the panel is off screen; the unlinked scan is then skipped entirely. */
+  visible?: boolean
 }
 
-export function BacklinksPanel({ path }: BacklinksPanelProps): JSX.Element {
+export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): JSX.Element {
   const notes = useAppStore((state) => state.notes)
   const index = useAppStore((state) => state.index)
   const openPath = useAppStore((state) => state.openPath)
   const reveal = useReveal()
 
   const [collapse, setCollapse] = useState<BacklinksCollapse>(loadCollapse)
+  // The note map the scan last ran against. It trails `notes`, catching up only
+  // once the typing stops, so a burst of keystrokes costs one scan at most
+  // instead of one per character.
+  const [scanNotes, setScanNotes] = useState<ReadonlyMap<NotePath, Note>>(notes)
 
   // Backlinks are derived, not stored: recompute when the note or the link
   // index changes (every edit anywhere in the vault rebuilds the index).
   const linked = useMemo<BacklinkGroup[]>(() => useAppStore.getState().backlinksFor(path), [path, index])
 
-  // The expensive half. Memoised on the note map, so typing in an unrelated
-  // note is the only thing that can trigger a rescan.
-  const unlinked = useMemo<UnlinkedGroup[]>(() => {
-    const linkedSources = new Set(linked.map((group) => group.source))
-    return findUnlinkedMentions(path, notes, linkedSources)
-  }, [path, notes, linked])
+  const linkedSources = useMemo(() => new Set(linked.map((group) => group.source)), [linked])
+  // The same set as a value, because `linked` is a fresh array on every index
+  // rebuild and most rebuilds leave the set of linking notes alone.
+  const linkedKey = useMemo(() => [...linkedSources].sort().join('\n'), [linkedSources])
+
+  useEffect(() => {
+    if (!visible || !scanInputsChanged(scanNotes, notes, path)) return undefined
+    const timer = setTimeout(() => setScanNotes(notes), RESCAN_MS)
+    return () => clearTimeout(timer)
+  }, [visible, notes, scanNotes, path])
+
+  // The expensive half: linear in the vault's prose, and re-run only when the
+  // set of notes, this note's names or the notes already linking here change.
+  // `linkedKey` stands in for `linkedSources`, which changes identity far more
+  // often than it changes content.
+  const unlinked = useMemo<readonly UnlinkedGroup[]>(
+    () => (visible ? findUnlinkedMentions(path, scanNotes, linkedSources) : NO_GROUPS),
+    [visible, path, scanNotes, linkedKey],
+  )
 
   const linkedCount = useMemo(() => linked.reduce((total, group) => total + group.edges.length, 0), [linked])
   const unlinkedCount = useMemo(

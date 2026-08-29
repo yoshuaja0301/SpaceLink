@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Mock } from 'vitest'
 import { afterEach, beforeEach, vi } from 'vitest'
 
 import type { AppState } from '../state/store'
 import type { Note, NotePath } from '../types'
 import { buildIndex, emptyIndex } from '../core/graph/index'
+import { ForceLayout } from '../core/graph/layout'
 import { DEFAULT_SETTINGS, makeNote, useAppStore } from '../state/store'
 import { GraphView } from './GraphView'
 import {
@@ -49,8 +50,9 @@ const CENTRE_Y = VIEW_HEIGHT / 2
  * the renderer actually uses are stubbed — anything new it starts calling will
  * fail loudly rather than silently.
  */
-function createContext2D(): { context: CanvasRenderingContext2D; clearRect: Mock } {
+function createContext2D(): { context: CanvasRenderingContext2D; clearRect: Mock; arc: Mock } {
   const clearRect = vi.fn()
+  const arc = vi.fn()
   const context = {
     canvas: null,
     globalAlpha: 1,
@@ -66,7 +68,7 @@ function createContext2D(): { context: CanvasRenderingContext2D; clearRect: Mock
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
-    arc: vi.fn(),
+    arc,
     fill: vi.fn(),
     stroke: vi.fn(),
     setLineDash: vi.fn(),
@@ -74,14 +76,14 @@ function createContext2D(): { context: CanvasRenderingContext2D; clearRect: Mock
     strokeText: vi.fn(),
     measureText: vi.fn(() => ({ width: 40 })),
   }
-  return { context: context as unknown as CanvasRenderingContext2D, clearRect }
+  return { context: context as unknown as CanvasRenderingContext2D, clearRect, arc }
 }
 
-/** Give the canvas a real 2d context; returns the recorder. */
-function withContext2D(): { clearRect: Mock } {
-  const { context, clearRect } = createContext2D()
+/** Give the canvas a real 2d context; returns the recorders. */
+function withContext2D(): { clearRect: Mock; arc: Mock } {
+  const { context, clearRect, arc } = createContext2D()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
-  return { clearRect }
+  return { clearRect, arc }
 }
 
 /** The jsdom default: no 2d context at all. */
@@ -131,6 +133,56 @@ function stubMatchMedia(matches: (query: string) => boolean): void {
     if (original) Object.defineProperty(window, 'matchMedia', original)
     else Reflect.deleteProperty(window, 'matchMedia')
   }
+}
+
+/**
+ * Records how the hook drives the layout: every `tick` and the step count it
+ * asked for, grouped by the animation frame it happened in. `costPerStep`
+ * milliseconds are added to the clock the settle budget reads, so a test can
+ * make steps expensive enough to force the loop to yield without waiting on
+ * real time.
+ */
+function instrumentLayout(costPerStep = 0): {
+  /** Step count of every `tick` call, in order. */
+  steps: number[]
+  /** Ticks performed inside each completed animation frame. */
+  perFrame: number[]
+  /** Alpha the last tick returned. */
+  lastAlpha: () => number
+} {
+  const steps: number[] = []
+  const perFrame: number[] = []
+  let inFrame = 0
+  let injected = 0
+  let lastAlpha = 1
+
+  if (costPerStep > 0) {
+    // Real time barely moves inside a slice, so the cost of a step is injected
+    // on top of the real clock rather than replacing it — jsdom schedules its
+    // animation frames off the same one.
+    const realNow = performance.now.bind(performance)
+    vi.spyOn(performance, 'now').mockImplementation(() => realNow() + injected)
+  }
+
+  const realTick = ForceLayout.prototype.tick
+  vi.spyOn(ForceLayout.prototype, 'tick').mockImplementation(function (this: ForceLayout, count?: number) {
+    steps.push(count ?? 1)
+    inFrame += 1
+    injected += costPerStep * (count ?? 1)
+    lastAlpha = realTick.call(this, count)
+    return lastAlpha
+  })
+
+  const realFrame = window.requestAnimationFrame.bind(window)
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) =>
+    realFrame((time) => {
+      inFrame = 0
+      callback(time)
+      perFrame.push(inFrame)
+    }),
+  )
+
+  return { steps, perFrame, lastAlpha: () => lastAlpha }
 }
 
 beforeEach(() => {
@@ -489,8 +541,9 @@ describe('GraphView', () => {
     expect(clearRect.mock.calls.length).toBeGreaterThan(first)
   })
 
-  it('settles in one synchronous batch under prefers-reduced-motion', async () => {
+  it('settles without animation under prefers-reduced-motion, in interruptible steps', async () => {
     stubMatchMedia((query) => query.includes('prefers-reduced-motion'))
+    const layout = instrumentLayout()
     const { clearRect } = withContext2D()
     seed({ 'A.md': 'to [[B]]', 'B.md': 'to [[C]]', 'C.md': 'to [[A]]' })
 
@@ -500,9 +553,90 @@ describe('GraphView', () => {
     const drawn = clearRect.mock.calls.length
     await sleep(80)
 
-    // One batch of ticks, one paint, no animation loop at all.
+    // Still no visible animation: one paint of the settled result, no loop.
     expect(drawn).toBe(1)
     expect(clearRect.mock.calls.length).toBe(drawn)
+    // But the settle is a stream of single steps the frame budget can cut off,
+    // never the one 400-step call that froze the tab on a large vault.
+    expect(layout.steps.length).toBeGreaterThan(1)
+    expect(Math.max(...layout.steps)).toBe(1)
+    // And it is still a settled layout at the end.
+    expect(layout.lastAlpha()).toBeLessThanOrEqual(0.005)
+  })
+
+  it('spreads a slow reduced-motion settle across frames and paints none of them', async () => {
+    stubMatchMedia((query) => query.includes('prefers-reduced-motion'))
+    // Six milliseconds of budget per step: an 8 ms slice fits two of them, so
+    // a settle needing hundreds cannot finish inside one frame.
+    const layout = instrumentLayout(6)
+    const { clearRect } = withContext2D()
+    seed({ 'A.md': 'to [[B]]', 'B.md': 'to [[C]]', 'C.md': 'to [[A]]' })
+
+    render(<GraphView />)
+
+    await waitFor(() => expect(layout.perFrame.length).toBeGreaterThanOrEqual(3))
+
+    // Every frame does a couple of steps and hands the thread straight back…
+    expect(Math.max(...layout.perFrame)).toBeLessThanOrEqual(3)
+    expect(Math.max(...layout.steps)).toBe(1)
+    // …and nothing is painted while the graph is still moving.
+    expect(clearRect).not.toHaveBeenCalled()
+  })
+
+  it('re-frames the graph once the reduced-motion settle finishes', async () => {
+    stubMatchMedia((query) => query.includes('prefers-reduced-motion'))
+    const { clearRect, arc } = withContext2D()
+    seed({
+      'A.md': 'to [[B]]',
+      'B.md': 'to [[C]]',
+      'C.md': 'to [[D]]',
+      'D.md': 'to [[E]]',
+      'E.md': 'to [[F]]',
+      'F.md': 'to [[G]]',
+      'G.md': 'to [[H]]',
+      'H.md': '# H',
+    })
+
+    render(<GraphView />)
+    await waitFor(() => expect(clearRect.mock.calls.length).toBe(1))
+
+    // A node outside the viewport is culled before it is drawn, so one arc per
+    // note is the proof that the settled layout was framed again: the fit
+    // taken while every node still sat on the seed spiral leaves a chain this
+    // long hanging off both sides of the canvas.
+    const centres = arc.mock.calls.map(([x, y]) => ({ x: x as number, y: y as number }))
+    expect(centres).toHaveLength(8)
+    for (const centre of centres) {
+      expect(centre.x).toBeGreaterThanOrEqual(0)
+      expect(centre.x).toBeLessThanOrEqual(VIEW_WIDTH)
+      expect(centre.y).toBeGreaterThanOrEqual(0)
+      expect(centre.y).toBeLessThanOrEqual(VIEW_HEIGHT)
+    }
+  })
+
+  it('rebuilds and reheats only when the link structure changes, not on every keystroke', () => {
+    withContext2D()
+    const setData = vi.spyOn(ForceLayout.prototype, 'setData')
+    seed({ 'A.md': 'to [[B]]', 'B.md': 'to [[A]]' })
+
+    render(<GraphView />)
+    expect(screen.getByText('2 nodes · 2 links')).toBeTruthy()
+    expect(setData).not.toHaveBeenCalled()
+
+    // Typing prose replaces both the notes map and the index on every
+    // character, but the graph is the same graph — no rebuild, no reheat.
+    act(() => {
+      seed({ 'A.md': 'to [[B]] plus a sentence of fresh prose', 'B.md': 'to [[A]]' })
+    })
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByText('2 nodes · 2 links')).toBeTruthy()
+
+    // A changed link is a different graph, and does reach the simulation.
+    act(() => {
+      seed({ 'A.md': 'to [[C]]', 'B.md': 'to [[A]]' })
+    })
+    expect(setData).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('3 nodes · 2 links')).toBeTruthy()
   })
 
   it('stops the animation loop when it unmounts', async () => {

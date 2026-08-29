@@ -10,7 +10,7 @@ import { Ribbon } from './Ribbon'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { TabBar, dropSlotFor, tabTitle } from './TabBar'
-import { Workspace, MIN_PANE_WIDTH, PANE_SIZES_KEY, loadPaneSizes, resizePanes } from './Workspace'
+import { Workspace, MIN_PANE_WIDTH, PANE_KEY_STEP, PANE_SIZES_KEY, loadPaneSizes, resizePanes } from './Workspace'
 import { reset as resetHistory } from './paneHistory'
 
 /*
@@ -323,6 +323,46 @@ describe('Workspace panes', () => {
     expect(paneEl(PANE_B).style.flex).toBe(`0 1 ${1000 - MIN_PANE_WIDTH}px`)
   })
 
+  it('resizes the splitter from the keyboard and reports its position', () => {
+    setPanes([pane(PANE_A, [tab('t1', { path: 'a.md' })]), pane(PANE_B, [tab('t2', { path: 'b.md' })])])
+    stubRects((element) =>
+      element.classList.contains('workspace') ? 1000 : element.hasAttribute('data-pane-id') ? 500 : 0,
+    )
+    render(<Workspace />)
+
+    const splitter = screen.getByRole('separator', { name: 'Resize panes' })
+    // Focusable, and it says where it sits — it used to be mouse-only.
+    expect(splitter.tabIndex).toBe(0)
+    expect(splitter.getAttribute('aria-valuenow')).toBe('50')
+    expect(splitter.getAttribute('aria-valuemin')).toBe('0')
+    expect(splitter.getAttribute('aria-valuemax')).toBe('100')
+
+    fireEvent.keyDown(splitter, { key: 'ArrowRight' })
+    expect(paneEl(PANE_A).style.flex).toBe(`0 1 ${500 + PANE_KEY_STEP}px`)
+    expect(paneEl(PANE_B).style.flex).toBe(`0 1 ${500 - PANE_KEY_STEP}px`)
+
+    fireEvent.keyDown(splitter, { key: 'ArrowLeft' })
+    fireEvent.keyDown(splitter, { key: 'ArrowLeft' })
+    expect(paneEl(PANE_A).style.flex).toBe(`0 1 ${500 - PANE_KEY_STEP}px`)
+    expect(JSON.parse(localStorage.getItem(PANE_SIZES_KEY) ?? 'null')).toEqual([500 - PANE_KEY_STEP, 500 + PANE_KEY_STEP])
+  })
+
+  it('sends the splitter to either extreme with Home and End, within the minimums', () => {
+    setPanes([pane(PANE_A, [tab('t1', { path: 'a.md' })]), pane(PANE_B, [tab('t2', { path: 'b.md' })])])
+    stubRects((element) =>
+      element.classList.contains('workspace') ? 1000 : element.hasAttribute('data-pane-id') ? 500 : 0,
+    )
+    render(<Workspace />)
+
+    const splitter = screen.getByRole('separator', { name: 'Resize panes' })
+    fireEvent.keyDown(splitter, { key: 'Home' })
+    expect(paneEl(PANE_A).style.flex).toBe(`0 1 ${MIN_PANE_WIDTH}px`)
+
+    fireEvent.keyDown(splitter, { key: 'End' })
+    expect(paneEl(PANE_A).style.flex).toBe(`0 1 ${1000 - MIN_PANE_WIDTH}px`)
+    expect(splitter.getAttribute('aria-valuenow')).toBe('76')
+  })
+
   it('falls back to equal shares when the pane count no longer matches the saved layout', () => {
     localStorage.setItem(PANE_SIZES_KEY, JSON.stringify([400, 600]))
     setPanes([pane(PANE_A, [tab('t1', { path: 'a.md' })])])
@@ -518,6 +558,50 @@ describe('TabBar', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }))
 
     expect(writeText).toHaveBeenCalledWith('notes/c.md')
+  })
+
+  it('moves selection and focus through the strip with the arrow keys', () => {
+    renderBar([
+      pane(PANE_A, [tab('t1', { path: 'a.md' }), tab('t2', { path: 'b.md' }), tab('t3', { path: 'notes/c.md' })], 't1'),
+    ])
+
+    tabEl('t1').focus()
+    fireEvent.keyDown(tabEl('t1'), { key: 'ArrowRight' })
+    expect(panesNow()[0]?.activeTabId).toBe('t2')
+    // Focus follows selection, so the next arrow starts from the new tab.
+    expect(document.activeElement).toBe(tabEl('t2'))
+
+    fireEvent.keyDown(tabEl('t2'), { key: 'ArrowRight' })
+    expect(panesNow()[0]?.activeTabId).toBe('t3')
+    expect(document.activeElement).toBe(tabEl('t3'))
+
+    // ...and wraps, as a tablist does.
+    fireEvent.keyDown(tabEl('t3'), { key: 'ArrowRight' })
+    expect(panesNow()[0]?.activeTabId).toBe('t1')
+
+    fireEvent.keyDown(tabEl('t1'), { key: 'End' })
+    expect(panesNow()[0]?.activeTabId).toBe('t3')
+    fireEvent.keyDown(tabEl('t3'), { key: 'Home' })
+    expect(panesNow()[0]?.activeTabId).toBe('t1')
+    expect(document.activeElement).toBe(tabEl('t1'))
+  })
+
+  it('keeps one tab stop in the strip and reaches close from the tab itself', () => {
+    renderBar([
+      pane(PANE_A, [tab('t1', { path: 'a.md' }), tab('t2', { path: 'b.md' }), tab('t3', { path: 'notes/c.md' })], 't1'),
+    ])
+
+    // Tabbing through a strip used to stop on every inactive tab's close button.
+    const stops = [...screen.getByRole('tablist').querySelectorAll<HTMLElement>('[tabindex]')].filter(
+      (element) => element.tabIndex >= 0,
+    )
+    expect(stops).toEqual([tabEl('t1')])
+    for (const name of ['Close Alpha', 'Close b', 'Close c']) {
+      expect(screen.getByRole('button', { name }).tabIndex).toBe(-1)
+    }
+
+    fireEvent.keyDown(tabEl('t1'), { key: 'Delete' })
+    expect(panesNow()[0]?.tabs.map((t) => t.id)).toEqual(['t2', 't3'])
   })
 
   it('reopens the most recently closed tab from the more menu', () => {

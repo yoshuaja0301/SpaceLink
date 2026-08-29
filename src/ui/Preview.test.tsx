@@ -2,11 +2,15 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
+import type { JSX } from 'react'
+
 import type { AppState } from '../state/store'
+import type { RenderContext } from '../core/markdown/render'
 import type { Note, NotePath, VaultAdapter, VaultFile } from '../types'
 import { emptyIndex, buildIndex } from '../core/graph/index'
 import { makeNote, useAppStore } from '../state/store'
 import { Preview } from './Preview'
+import { useRenderContext } from './useRenderContext'
 
 /**
  * The whole store as it was when the module loaded, actions included. Restoring
@@ -532,5 +536,429 @@ describe('Preview — attachments', () => {
     expect(img.getAttribute('src')).toMatch(/^(blob:|data:image\/png)/)
     expect(readBinary).toHaveBeenCalledTimes(1)
     expect(readBinary).toHaveBeenCalledWith('assets/diagram-unique.png')
+  })
+})
+
+describe('Preview — embedded notes', () => {
+  const HOST = ['- [ ] buy milk', '- [x] pay rent', '', '![[Tasks]]', '', '- [ ] host tail', ''].join('\n')
+  const EMBEDDED = ['---', 'title: Tasks', '---', '', '- [ ] embedded one', '- [ ] embedded two', ''].join(
+    '\n',
+  )
+
+  const LINKED = {
+    'a/Host.md': 'own [[Note]] here\n\n![[b/Embedded]]\n',
+    'b/Embedded.md': 'see [[Note]]\n',
+    'a/Note.md': '# A note\n\nThe one next to the host.\n',
+    'b/Note.md': '# B note\n\nThe one next to the embedded note.\n',
+  }
+
+  function internalLinks(container: HTMLElement): { own: HTMLElement; embedded: HTMLElement } {
+    const links = [...container.querySelectorAll<HTMLElement>('a.internal-link')]
+    const own = links.find((link) => !link.closest('.embed-body'))
+    const embedded = links.find((link) => link.closest('.embed-body'))
+    if (!own || !embedded) throw new Error('expected a link in the host and one in the embed')
+    return { own, embedded }
+  }
+
+  it('toggles the transcluded note, not the note on screen', () => {
+    seed({ 'Home.md': HOST, 'Tasks.md': EMBEDDED })
+
+    const { container } = render(<Preview path="Home.md" paneId={PANE_ID} />)
+    const boxes = [...container.querySelectorAll<HTMLInputElement>('.task-item input[type="checkbox"]')]
+    const own = boxes.filter((box) => !box.closest('.embed-body'))
+    const embedded = boxes.filter((box) => box.closest('.embed-body'))
+    expect(own).toHaveLength(3)
+    expect(embedded).toHaveLength(2)
+
+    // Each checkbox names the note its line lives in, and the line indexes that
+    // note's own source — frontmatter included, so the transcluded tasks sit at
+    // 4 and 5 while the host's own tasks are at 0, 1 and 5.
+    expect(embedded.map((box) => box.dataset.src)).toEqual(['Tasks.md', 'Tasks.md'])
+    expect(own.map((box) => box.dataset.src)).toEqual(['Home.md', 'Home.md', 'Home.md'])
+    const embeddedLines = EMBEDDED.split('\n')
+    expect(embedded.map((box) => Number(box.dataset.line))).toEqual([
+      embeddedLines.indexOf('- [ ] embedded one'),
+      embeddedLines.indexOf('- [ ] embedded two'),
+    ])
+    expect(Number(own[2]!.dataset.line)).toBe(HOST.split('\n').indexOf('- [ ] host tail'))
+
+    fireEvent.click(embedded[1]!)
+
+    expect(useAppStore.getState().notes.get('Tasks.md')!.content).toBe(
+      ['---', 'title: Tasks', '---', '', '- [ ] embedded one', '- [x] embedded two', ''].join('\n'),
+    )
+    // The host shares that line number with a task of its own and must not move.
+    expect(useAppStore.getState().notes.get('Home.md')!.content).toBe(HOST)
+  })
+
+  it('opens a link inside an embed from the note it was written in', () => {
+    const openLink = vi.fn(async () => {})
+    seed(LINKED, { openLink })
+
+    const { container } = render(<Preview path="a/Host.md" paneId={PANE_ID} />)
+    const { own, embedded } = internalLinks(container)
+
+    fireEvent.click(own)
+    expect(openLink).toHaveBeenLastCalledWith('Note', 'a/Host.md', { newTab: false })
+
+    // Same link text, different owner: the embed resolved it from `b/`, so the
+    // click has to as well.
+    fireEvent.click(embedded)
+    expect(openLink).toHaveBeenLastCalledWith('Note', 'b/Embedded.md', { newTab: false })
+  })
+
+  it('previews the note an embedded link actually resolves to', () => {
+    vi.useFakeTimers()
+    seed(LINKED)
+
+    const { container } = render(<Preview path="a/Host.md" paneId={PANE_ID} />)
+    const { embedded } = internalLinks(container)
+
+    fireEvent.mouseOver(embedded, { clientX: 20, clientY: 20 })
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    expect(container.querySelector('.hover-preview-title')?.textContent).toBe('B note')
+  })
+
+  it('still opens an embed title from the note that wrote the embed', () => {
+    const openLink = vi.fn(async () => {})
+    seed(LINKED, { openLink })
+
+    const { container } = render(<Preview path="a/Host.md" paneId={PANE_ID} />)
+    fireEvent.click(container.querySelector('.embed .embed-title') as HTMLElement)
+
+    expect(openLink).toHaveBeenCalledWith('b/Embedded', 'a/Host.md', { newTab: false })
+  })
+})
+
+describe('Preview — the window event contract', () => {
+  const NOTE = ['# One', '', 'alpha', '', '## Two', '', 'beta', ''].join('\n')
+
+  /** jsdom has no layout, so every heading has to be told where it sits. */
+  function stubTop(element: Element, top: number): void {
+    vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({ top } as DOMRect)
+  }
+
+  function headings(container: HTMLElement): { h1: HTMLElement; h2: HTMLElement } {
+    const h1 = container.querySelector('h1') as HTMLElement
+    const h2 = container.querySelector('h2') as HTMLElement
+    return { h1, h2 }
+  }
+
+  /** jsdom does not implement scrollIntoView; record the call instead. */
+  function watchScrollIntoView(element: HTMLElement): ReturnType<typeof vi.fn> {
+    const spy = vi.fn()
+    Object.defineProperty(element, 'scrollIntoView', { configurable: true, value: spy })
+    return spy
+  }
+
+  it('reveals the heading that owns a revealed line, and ignores other notes', () => {
+    seed({ 'A.md': NOTE, 'B.md': '# Elsewhere\n' })
+
+    const { container, unmount } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    const { h1, h2 } = headings(container)
+    const first = watchScrollIntoView(h1)
+    const second = watchScrollIntoView(h2)
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-line', { detail: { path: 'B.md', line: 6 } }),
+      )
+    })
+    expect(first).not.toHaveBeenCalled()
+    expect(second).not.toHaveBeenCalled()
+
+    // `beta` sits under the second heading, `alpha` under the first.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 6 } }),
+      )
+    })
+    expect(second).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 2 } }),
+      )
+    })
+    expect(first).toHaveBeenCalledTimes(1)
+
+    unmount()
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 6 } }),
+      )
+    })
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('scrolls to the slug of a reveal-heading event for its own note only', () => {
+    seed({ 'A.md': NOTE })
+
+    const { container, unmount } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    const { h2 } = headings(container)
+    const spy = watchScrollIntoView(h2)
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-heading', {
+          detail: { path: 'Other.md', slug: 'two', line: 4 },
+        }),
+      )
+    })
+    expect(spy).not.toHaveBeenCalled()
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-heading', {
+          detail: { path: 'A.md', slug: 'two', line: 4 },
+        }),
+      )
+    })
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    unmount()
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('spacefore:reveal-heading', {
+          detail: { path: 'A.md', slug: 'two', line: 4 },
+        }),
+      )
+    })
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the heading crossing the top of the viewport to the outline', () => {
+    seed({ 'A.md': NOTE })
+
+    const { container, unmount } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    const element = host(container)
+    const { h1, h2 } = headings(container)
+
+    const seen: unknown[] = []
+    const listener = (event: Event): void => void seen.push((event as CustomEvent).detail)
+    window.addEventListener('spacefore:preview-scroll', listener)
+
+    stubTop(element, 0)
+    stubTop(h1, -40)
+    stubTop(h2, 500)
+    fireEvent.scroll(element)
+    expect(seen).toEqual([{ path: 'A.md', slug: 'one' }])
+
+    // Still under the first heading: nothing new to say.
+    fireEvent.scroll(element)
+    expect(seen).toHaveLength(1)
+
+    stubTop(h2, -10)
+    fireEvent.scroll(element)
+    expect(seen).toEqual([
+      { path: 'A.md', slug: 'one' },
+      { path: 'A.md', slug: 'two' },
+    ])
+
+    unmount()
+    expect(seen).toHaveLength(2)
+    window.removeEventListener('spacefore:preview-scroll', listener)
+  })
+})
+
+describe('Preview — scroll memory', () => {
+  it('keeps the offset a note was left at when the next note clamps the scroller', () => {
+    seed({ 'Long.md': 'Long body.\n', 'Short.md': 'Short.\n' })
+
+    const pane = 'pane-clamp'
+    const first = render(<Preview path="Long.md" paneId={pane} />)
+    const element = host(first.container)
+    element.scrollTop = 250
+    fireEvent.scroll(element)
+
+    // Switching tabs swaps the markup in before the effect cleanup runs, so the
+    // browser has already clamped the scroller against the shorter note.
+    element.scrollTop = 0
+    cleanup()
+
+    const back = render(<Preview path="Long.md" paneId={pane} />)
+    expect(host(back.container).scrollTop).toBe(250)
+  })
+})
+
+describe('Preview — hover card', () => {
+  it('emits the classes the stylesheet targets and takes the card down on unmount', () => {
+    vi.useFakeTimers()
+    seed({ 'A.md': 'See [[Target]].', 'Target.md': '# Target Note\n\nA short body.\n' })
+
+    const { container, unmount } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    fireEvent.mouseOver(container.querySelector('a.internal-link') as HTMLElement, {
+      clientX: 10,
+      clientY: 10,
+    })
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    const card = container.querySelector('.hover-preview') as HTMLElement
+    expect(card.getAttribute('role')).toBe('tooltip')
+    expect(card.querySelector('.hover-preview-title')?.textContent).toBe('Target Note')
+    expect(card.querySelector('.hover-preview-excerpt')?.textContent).toContain('A short body.')
+
+    unmount()
+    expect(document.querySelector('.hover-preview')).toBeNull()
+  })
+})
+
+describe('useRenderContext — memoisation', () => {
+  function Probe({ path, seen }: { path: NotePath; seen: RenderContext[] }): JSX.Element {
+    seen.push(useRenderContext(path))
+    return <span />
+  }
+
+  it('survives a keystroke in a note it does not render', () => {
+    seed({ 'A.md': 'Body of A.\n', 'Other.md': 'Body of other.\n' })
+
+    const seen: RenderContext[] = []
+    render(<Probe path="A.md" seen={seen} />)
+    const renders = seen.length
+    expect(renders).toBeGreaterThan(0)
+
+    act(() => {
+      useAppStore.getState().setNoteContent('Other.md', 'Body of other, edited.\n')
+    })
+
+    // The notes map identity changed; nothing this context reads did, so the
+    // preview of A is not re-rendered and its markdown is not re-sanitized.
+    expect(seen).toHaveLength(renders)
+    expect(useAppStore.getState().notes.get('Other.md')!.content).toBe('Body of other, edited.\n')
+  })
+
+  it('is rebuilt when a note it transcludes changes', () => {
+    seed({ 'Host.md': 'Before.\n\n![[Embedded]]\n', 'Embedded.md': 'first body\n' })
+
+    const seen: RenderContext[] = []
+    const { container } = render(
+      <>
+        <Probe path="Host.md" seen={seen} />
+        <Preview path="Host.md" paneId={PANE_ID} />
+      </>,
+    )
+    const last = seen[seen.length - 1]
+    expect(container.querySelector('.embed-body')?.textContent).toContain('first body')
+
+    act(() => {
+      useAppStore.getState().setNoteContent('Embedded.md', 'second body\n')
+    })
+
+    expect(seen[seen.length - 1]).not.toBe(last)
+    expect(container.querySelector('.embed-body')?.textContent).toContain('second body')
+  })
+})
+
+describe('useRenderContext — asset cache', () => {
+  function imageFile(path: NotePath): VaultFile {
+    return {
+      path,
+      name: path.slice(path.lastIndexOf('/') + 1),
+      extension: 'png',
+      isMarkdown: false,
+      size: 4,
+      mtime: 1,
+    }
+  }
+
+  function imageVault(body: string): VaultAdapter {
+    return {
+      kind: 'directory',
+      name: 'vault',
+      writable: true,
+      list: async () => [],
+      read: async () => '',
+      readBinary: async () => new Blob([body], { type: 'image/png' }),
+      write: async () => {},
+      writeBinary: async () => {},
+      remove: async () => {},
+      rename: async () => {},
+      exists: async () => true,
+    } as unknown as VaultAdapter
+  }
+
+  it('does not serve one vault’s image for the same path in the next vault', async () => {
+    const revoked: string[] = []
+    let issued = 0
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      issued += 1
+      return `blob:spacefore/${issued}`
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url: string) => void revoked.push(url))
+
+    const file = imageFile('img/shared-name.png')
+    const first = imageVault('vault one picture')
+    seed({ 'A.md': '![[shared-name.png]]' }, { attachments: [file], adapter: first })
+
+    const { container } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    await waitFor(() => {
+      expect(container.querySelector('img.embed-image')).not.toBeNull()
+    })
+    const before = container.querySelector('img.embed-image')!.getAttribute('src')
+
+    // Same path, different vault: the cached URL belongs to the vault that has
+    // just been closed and must not be handed to the new one.
+    const second = imageVault('vault two picture')
+    await act(async () => {
+      useAppStore.setState({ adapter: second, attachments: [file] })
+    })
+
+    await waitFor(() => {
+      expect(container.querySelector('img.embed-image')?.getAttribute('src')).not.toBe(before)
+    })
+    expect(container.querySelector('img.embed-image')?.getAttribute('src')).toBe('blob:spacefore/2')
+    expect(revoked).toContain(before)
+  })
+})
+
+describe('Preview — rendered markup is not rebuilt on every render', () => {
+  it('keeps the rendered DOM when a re-render produces the same markup', async () => {
+    // React 19 compares `dangerouslySetInnerHTML` by object identity and then
+    // assigns `innerHTML` unconditionally, so a fresh `{ __html }` literal each
+    // render silently rebuilt the whole note. That replaced the element under
+    // the pointer on every render, which is what kept the hover card from ever
+    // reaching its 400 ms delay.
+    seed({ 'a.md': '# A\n\nA link to [[b]] and some prose.\n', 'b.md': '# B\n\nBody.\n' })
+    const { container, rerender } = render(<Preview path="a.md" paneId={PANE_ID} />)
+
+    const link = container.querySelector('.markdown-preview .internal-link')
+    expect(link).not.toBeNull()
+
+    // Three re-renders that leave the markup identical.
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        rerender(<Preview path="a.md" paneId={PANE_ID} />)
+      })
+    }
+
+    // Same node, not an equal-looking replacement.
+    expect(container.querySelector('.markdown-preview .internal-link')).toBe(link)
+    expect(link!.isConnected).toBe(true)
+  })
+
+  it('shows the hover card once the delay elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      seed({ 'a.md': 'See [[b]].\n', 'b.md': '# B note\n\nThe body of B.\n' })
+      const { container } = render(<Preview path="a.md" paneId={PANE_ID} />)
+      const link = container.querySelector('.markdown-preview .internal-link')!
+
+      await act(async () => {
+        fireEvent.mouseOver(link, { bubbles: true })
+      })
+      expect(container.querySelector('.hover-preview')).toBeNull()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(container.querySelector('.hover-preview-title')?.textContent).toBe('B note')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

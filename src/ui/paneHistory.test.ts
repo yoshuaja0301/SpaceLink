@@ -136,6 +136,32 @@ describe('paneHistory — back / forward', () => {
     expect(snapshot(PANE)).toEqual({ entries: [], index: -1 })
   })
 
+  it('steps over entries whose note is gone', () => {
+    push(PANE, 'a.md')
+    push(PANE, 'b.md')
+    push(PANE, 'c.md')
+    const exists = (path: string): boolean => path !== 'b.md'
+
+    // `b.md` was deleted, so Back from `c.md` lands two entries away.
+    expect(canBack(PANE, exists)).toBe(true)
+    expect(back(PANE, exists)).toBe('a.md')
+    expect(current(PANE)).toBe('a.md')
+
+    expect(canForward(PANE, exists)).toBe(true)
+    expect(forward(PANE, exists)).toBe('c.md')
+  })
+
+  it('refuses to step when every entry that way is gone', () => {
+    push(PANE, 'a.md')
+    push(PANE, 'b.md')
+    const exists = (path: string): boolean => path !== 'a.md'
+
+    expect(canBack(PANE, exists)).toBe(false)
+    expect(back(PANE, exists)).toBeNull()
+    // The cursor stayed put rather than landing on a note that is not there.
+    expect(current(PANE)).toBe('b.md')
+  })
+
   it('reset(paneId) clears only that pane', () => {
     push(PANE, 'a.md')
     push(PANE, 'b.md')
@@ -186,6 +212,26 @@ describe('paneHistory — closed tabs', () => {
     expect(popped).toHaveLength(20)
     expect(popped[0]).toBe('note-24.md')
     expect(popped[19]).toBe('note-5.md')
+  })
+
+  it('discards closed tabs the caller can no longer reopen', () => {
+    pushClosed(tab('t1', 'a.md'))
+    pushClosed(tab('t2', 'deleted.md'))
+    pushClosed(tab('t3', 'gone.md'))
+    const reopenable = (candidate: Tab): boolean => candidate.path === 'a.md'
+
+    expect(canReopen(reopenable)).toBe(true)
+    expect(popClosed(reopenable)?.path).toBe('a.md')
+    // The two unreopenable entries went with it rather than piling up.
+    expect(canReopen()).toBe(false)
+  })
+
+  it('reports nothing to reopen when no closed tab passes the test', () => {
+    pushClosed(tab('t1', 'deleted.md'))
+
+    expect(canReopen()).toBe(true)
+    expect(canReopen((candidate) => candidate.path !== 'deleted.md')).toBe(false)
+    expect(popClosed((candidate) => candidate.path !== 'deleted.md')).toBeNull()
   })
 
   it('reset() with no pane clears closed tabs as well', () => {

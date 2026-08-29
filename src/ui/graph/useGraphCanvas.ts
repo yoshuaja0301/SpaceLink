@@ -44,11 +44,18 @@ const SETTLED_ALPHA = 0.005
 /** Simulation steps per animation frame — >1 makes big graphs settle sooner. */
 const TICKS_PER_FRAME = 2
 /**
- * Steps used to settle the graph in one synchronous batch under
+ * Upper bound on the steps spent settling the graph under
  * `prefers-reduced-motion`. `0.985 ** 400 ≈ 0.0024`, i.e. comfortably past
  * `SETTLED_ALPHA` even from a full reheat.
  */
 const SETTLE_STEPS = 400
+/**
+ * How long one slice of that settle may hold the main thread before handing it
+ * back. Reduced motion means "no visible animation", not "freeze the tab until
+ * the layout converges": a big vault settles over as many frames as it needs,
+ * none of them longer than this, and only the settled result is painted.
+ */
+const SETTLE_SLICE_MS = 8
 /** Weak pull toward the origin, so detached clusters stay on screen. */
 const CENTER_STRENGTH = 0.06
 /** Extra click/hover slack around a node, in screen pixels. */
@@ -303,6 +310,11 @@ function cancelFrame(handle: number): void {
   else clearTimeout(handle)
 }
 
+/** Elapsed-time source for the settle budget; `performance` is not universal. */
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+}
+
 /**
  * Everything imperative, built once per mount. Returns the handful of commands
  * the React layer needs; all other state stays sealed in this closure.
@@ -336,6 +348,8 @@ function createEngine(context: EngineContext): Engine {
   // user has taken the view into their own hands.
   let autoFitPending = false
   let userAdjusted = false
+  /** Steps still owed to the reduced-motion settle in flight; 0 when none is. */
+  let settleRemaining = 0
 
   const nodeIndex = new Map<string, GraphNode>()
   const neighbours = new Map<string, Set<string>>()
@@ -391,19 +405,37 @@ function createEngine(context: EngineContext): Engine {
   const pump = (): void => {
     frame = null
     if (sim) {
+      // Has the graph stopped moving for good? Under reduced motion a settle
+      // that ran out of step budget counts too, so the re-frame below still
+      // happens on a graph that refuses to cool.
+      let settled = sim.alpha <= SETTLED_ALPHA
       if (reducedMotion) {
-        // No animation: settle the whole thing in one synchronous batch and
-        // paint the result exactly once.
-        if (sim.alpha > SETTLED_ALPHA) {
-          sim.tick(SETTLE_STEPS)
+        if (!settled) {
+          // No animation, but no frozen tab either: advance the simulation in
+          // slices no longer than a frame, and paint only the settled result.
+          if (settleRemaining === 0) settleRemaining = SETTLE_STEPS
+          const deadline = nowMs() + SETTLE_SLICE_MS
+          do {
+            sim.tick(1)
+            settleRemaining -= 1
+          } while (settleRemaining > 0 && sim.alpha > SETTLED_ALPHA && nowMs() < deadline)
+          if (settleRemaining > 0 && sim.alpha > SETTLED_ALPHA) {
+            // Still moving: carry on next frame rather than blocking this one
+            // any further or painting a half-settled graph.
+            frame = requestFrame(pump)
+            return
+          }
+          settleRemaining = 0
+          settled = true
           dirty = true
         }
-      } else if (sim.alpha > SETTLED_ALPHA) {
+      } else if (!settled) {
         sim.tick(TICKS_PER_FRAME)
         dirty = true
         frame = requestFrame(pump)
+        settled = sim.alpha <= SETTLED_ALPHA
       }
-      if (autoFitPending && !userAdjusted && sim.alpha <= SETTLED_ALPHA) {
+      if (autoFitPending && !userAdjusted && settled) {
         autoFitPending = false
         fit()
       }
@@ -595,6 +627,9 @@ function createEngine(context: EngineContext): Engine {
     } else {
       sim.setData(data)
     }
+    // New data reheats the simulation, so the next reduced-motion settle gets
+    // its full budget rather than whatever the last one left over.
+    settleRemaining = 0
     // Re-fitting on every keystroke would fight the user's pan/zoom, so only
     // frame the graph when there was nothing to frame before.
     if (wasEmpty || !hasFitted) fit()
@@ -603,6 +638,8 @@ function createEngine(context: EngineContext): Engine {
 
   const setForces = (linkDistance: number, charge: number): void => {
     sim?.setOptions({ linkDistance, charge })
+    // Changed forces reheat too — same fresh budget as new data.
+    settleRemaining = 0
     kick()
   }
 
@@ -756,6 +793,7 @@ function createEngine(context: EngineContext): Engine {
 
   const onMotionChange = (): void => {
     reducedMotion = prefersReducedMotion()
+    settleRemaining = 0
     kick()
   }
 

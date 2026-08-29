@@ -62,6 +62,21 @@ function idSelector(slug: string): string {
   return `[id="${slug.replace(/["\\]/g, '\\$&')}"]`
 }
 
+/** `CustomEvent.detail` narrowed to the loose record the window event contract describes. */
+function detailOf(event: Event): Record<string, unknown> | null {
+  const detail = (event as CustomEvent<unknown>).detail
+  return detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null
+}
+
+/** Anchored headings, in document order. Only these can be reported to the outline. */
+const HEADING_SELECTOR = 'h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'
+
+/** Renderer-emitted elements that name the note their content came from. */
+const OWNER_SELECTOR = '.task-checkbox[data-src],.embed[data-src]'
+
+/** A heading this close to the top of the scroller counts as the one being read. */
+const HEADING_TOP_SLACK = 4
+
 function nextFrame(callback: () => void): () => void {
   if (typeof requestAnimationFrame === 'function') {
     const handle = requestAnimationFrame(callback)
@@ -110,6 +125,8 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
   const cardRef = useRef<HTMLDivElement | null>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hoveredLink = useRef<Element | null>(null)
+  /** Last slug reported to the outline, so an unchanged position stays quiet. */
+  const reportedSlug = useRef<string | null>(null)
 
   const [hover, setHover] = useState<HoverCard | null>(null)
   const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null)
@@ -118,9 +135,10 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
 
   /* ---- rendering --------------------------------------------------- */
 
-  // `ctx` is memoised on the vault index, the note bodies and the asset cache
-  // generation, so this recomputes exactly when the output could change: the
-  // note's own text, a vault-wide refresh, or a link/asset resolving differently.
+  // `ctx` is memoised on the vault index, the text of the notes this one
+  // transcludes and the asset cache generation, so this recomputes exactly when
+  // the output could change: the note's own text, an edit to something it
+  // embeds, a vault-wide refresh, or a link/asset resolving differently.
   const html = useMemo(() => {
     if (!note) return ''
     try {
@@ -130,6 +148,14 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       return `<p class="preview-error">This note could not be rendered: ${escapeHtml(message)}</p>`
     }
   }, [note, content, revision, ctx])
+
+  // React 19 compares the `dangerouslySetInnerHTML` prop by object identity, and
+  // then assigns `innerHTML` unconditionally. A fresh `{ __html }` literal on
+  // every render therefore rebuilds the whole rendered note — which replaces the
+  // element under the pointer (restarting the hover-card timer forever), drops
+  // scroll anchoring, and throws away a 16 KB DOM tree for nothing. Memoising
+  // the wrapper on `html` lets React skip the write when the markup is unchanged.
+  const innerHtml = useMemo(() => ({ __html: html }), [html])
 
   // The renderer emits `disabled` checkboxes (a preview is not a form), and
   // browsers do not dispatch mouse events on disabled controls. Re-enable them
@@ -143,6 +169,51 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       if (box.disabled) box.disabled = false
     })
   }, [html])
+
+  /**
+   * The note a piece of rendered markup came from. Inside a `![[Note]]`
+   * transclusion that is the *embedded* note, not the one on screen: its tasks
+   * live in its own file and its wiki links resolved from its own folder, so a
+   * click has to act on it rather than on the host.
+   *
+   * The renderer stamps `data-src` wherever it already knows the answer (task
+   * checkboxes; see the contract in core/markdown/render.ts). For everything
+   * else the embed chain is walked outermost-first and re-resolved exactly the
+   * way `renderNoteEmbed` resolved it, each level relative to the one above.
+   * Only the renderer's own elements are trusted to carry `data-src`: a note may
+   * contain raw HTML, and `data-*` attributes survive sanitization.
+   */
+  const ownerOf = useCallback(
+    (element: Element | null): NotePath => {
+      if (!element) return path
+      const stamped = element.closest<HTMLElement>(OWNER_SELECTOR)?.dataset.src
+      if (stamped) return stamped
+
+      const chain: HTMLElement[] = []
+      for (
+        let embed = element.closest<HTMLElement>('.embed');
+        embed;
+        embed = embed.parentElement?.closest<HTMLElement>('.embed') ?? null
+      ) {
+        chain.unshift(embed)
+      }
+
+      let owner = path
+      for (const embed of chain) {
+        const href = embed.dataset.href ?? ''
+        if (!href) continue
+        let next: NotePath | null = null
+        try {
+          next = ctx.resolveLink(href, owner)
+        } catch {
+          next = null
+        }
+        if (next) owner = next
+      }
+      return owner
+    },
+    [ctx, path],
+  )
 
   /* ---- hover preview ------------------------------------------------ */
 
@@ -217,13 +288,17 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
 
       const href = (link as HTMLElement).dataset.href ?? ''
       if (!href) return
+      // Resolve from the note the link was written in, which inside an embed is
+      // not the note on screen — otherwise the card previews a different file
+      // from the one the click will open.
+      const from = ownerOf(link)
       const x = event.clientX
       const y = event.clientY
       hoverTimer.current = setTimeout(() => {
         hoverTimer.current = null
         let target: NotePath | null = null
         try {
-          target = ctx.resolveLink(href, path)
+          target = ctx.resolveLink(href, from)
         } catch {
           target = null
         }
@@ -238,7 +313,7 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
         })
       }, HOVER_DELAY_MS)
     },
-    [cancelHoverTimer, ctx, hideHover, path],
+    [cancelHoverTimer, ctx, hideHover, ownerOf],
   )
 
   const handleMouseOut = useCallback(
@@ -256,36 +331,54 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
 
   const key = scrollKey(paneId, path)
 
-  // Restore on mount / when the note changes, and stash the offset on the way
-  // out. The extra frame covers late layout shifts (images, KaTeX, fonts).
+  // Restore on mount / when the note changes. The extra frame covers late
+  // layout shifts (images, KaTeX, fonts). Nothing is written on the way out:
+  // React swaps the next note's markup in *before* this cleanup runs, so by
+  // then the browser has already clamped `scrollTop` against the new, possibly
+  // much shorter content — writing that back would destroy the offset
+  // `handleScroll` correctly recorded while the old note was on screen.
   useLayoutEffect(() => {
     const host = hostRef.current
     if (!host) return
+    // A note that has just appeared has not reported a reading position yet.
+    reportedSlug.current = null
     const saved = scrollPositions.get(key) ?? 0
     if (saved > 0) host.scrollTop = saved
-    const cancel = nextFrame(() => {
+    return nextFrame(() => {
       if (saved > 0 && host.scrollTop !== saved) host.scrollTop = saved
     })
-    return () => {
-      cancel()
-      scrollPositions.set(key, host.scrollTop)
-    }
   }, [key])
+
+  /** Tell the outline which heading the reader has reached, once per change. */
+  const reportHeading = useCallback(() => {
+    const host = hostRef.current
+    if (!host) return
+    if (typeof window === 'undefined' || typeof window.CustomEvent !== 'function') return
+    const top = host.getBoundingClientRect().top
+    let slug = ''
+    for (const heading of host.querySelectorAll<HTMLElement>(HEADING_SELECTOR)) {
+      // Headings of a transcluded note belong to that note, not to this one.
+      if (heading.closest('.embed')) continue
+      if (heading.getBoundingClientRect().top - top > HEADING_TOP_SLACK) break
+      slug = heading.id
+    }
+    if (slug === reportedSlug.current) return
+    reportedSlug.current = slug
+    window.dispatchEvent(new CustomEvent('spacefore:preview-scroll', { detail: { path, slug } }))
+  }, [path])
 
   const handleScroll = useCallback(() => {
     const host = hostRef.current
     if (host) scrollPositions.set(key, host.scrollTop)
-  }, [key])
+    reportHeading()
+  }, [key, reportHeading])
 
   // Split view: mirror the editor's scroll ratio, ignoring other panes.
   useEffect(() => {
     if (!scrollSync) return
     const onEditorScroll = (event: Event): void => {
-      const detail = (event as CustomEvent<unknown>).detail as
-        | { paneId?: unknown; ratio?: unknown }
-        | null
-        | undefined
-      if (!detail || typeof detail !== 'object') return
+      const detail = detailOf(event)
+      if (!detail) return
       if (detail.paneId !== paneId) return
       const ratio = detail.ratio
       if (typeof ratio !== 'number' || !Number.isFinite(ratio)) return
@@ -316,16 +409,66 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
     if (!find()) nextFrame(() => void find())
   }, [])
 
+  /**
+   * Reveal a source line. The reading view has no per-line anchors, so the
+   * nearest thing to that line is the heading that owns it; a line above the
+   * first heading reveals the top of the note.
+   */
+  const scrollToLine = useCallback(
+    (line: number) => {
+      const host = hostRef.current
+      if (!host) return
+      const headings = useAppStore.getState().notes.get(path)?.parsed.headings ?? []
+      let slug = ''
+      for (const heading of headings) {
+        if (heading.line - 1 > line) break // `heading.line` is 1-based, the event is not
+        slug = heading.slug
+      }
+      if (slug) scrollToHeading(slug)
+      else host.scrollTop = 0
+    },
+    [path, scrollToHeading],
+  )
+
+  // Search hits, backlink context lines and the outline all point the reading
+  // view at a place in a note. Events naming another note belong to another
+  // Preview, so they are ignored here.
+  useEffect(() => {
+    const onRevealLine = (event: Event): void => {
+      const detail = detailOf(event)
+      if (!detail || detail.path !== path) return
+      const line = detail.line
+      if (typeof line !== 'number' || !Number.isFinite(line)) return
+      scrollToLine(line)
+    }
+    const onRevealHeading = (event: Event): void => {
+      const detail = detailOf(event)
+      if (!detail || detail.path !== path) return
+      const slug = detail.slug
+      if (typeof slug === 'string' && slug) scrollToHeading(slug)
+      else if (typeof detail.line === 'number') scrollToLine(detail.line)
+    }
+    window.addEventListener('spacefore:reveal-line', onRevealLine)
+    window.addEventListener('spacefore:reveal-heading', onRevealHeading)
+    return () => {
+      window.removeEventListener('spacefore:reveal-line', onRevealLine)
+      window.removeEventListener('spacefore:reveal-heading', onRevealHeading)
+    }
+  }, [path, scrollToHeading, scrollToLine])
+
   /* ---- interaction -------------------------------------------------- */
 
   /** Flip `[ ]` <-> `[x]` on exactly the source line the checkbox came from. */
   const toggleTask = useCallback(
     (checkbox: HTMLInputElement) => {
       const store = useAppStore.getState()
-      const current = store.notes.get(path)
+      // A checkbox inside a `![[Note]]` embed belongs to the embedded note:
+      // toggling it has to rewrite that file, not the one being displayed.
+      const owner = ownerOf(checkbox)
+      const current = store.notes.get(owner)
       if (!current) return
-      // `data-line` is a 0-based index into the ORIGINAL source, frontmatter
-      // included, so no offset maths is needed here.
+      // `data-line` is a 0-based index into the ORIGINAL source of `owner`,
+      // frontmatter included, so no offset maths is needed here.
       const line = Number(checkbox.dataset.line)
       if (!Number.isInteger(line) || line < 0) return
 
@@ -339,9 +482,9 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       )
       if (rewritten === source) return // not a task line after all — leave it alone
       lines[line] = rewritten
-      store.setNoteContent(path, lines.join('\n'))
+      store.setNoteContent(owner, lines.join('\n'))
     },
-    [path],
+    [ownerOf],
   )
 
   const handleClick = useCallback(
@@ -380,7 +523,10 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
         const href = anchor.dataset.href ?? ''
         if (!href) return
         const heading = anchor.dataset.heading ?? ''
-        const opened = store.openLink(href, path, { newTab })
+        // Navigate from the note the link was written in — the same origin the
+        // renderer resolved it against — so a homonym cannot open one note in
+        // the embed and a different one on click.
+        const opened = store.openLink(href, ownerOf(anchor), { newTab })
         if (heading) {
           void Promise.resolve(opened).then(() => scrollToHeading(slugifyHeading(heading)))
         } else {
@@ -392,8 +538,11 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       const embedTitle = target.closest('.embed-title')
       if (embedTitle) {
         event.preventDefault()
-        const href = (embedTitle.closest('.embed') as HTMLElement | null)?.dataset.href ?? ''
-        if (href) void store.openLink(href, path, { newTab })
+        const embed = embedTitle.closest('.embed') as HTMLElement | null
+        const href = embed?.dataset.href ?? ''
+        // The `![[…]]` was written in whatever note *contains* this embed, so
+        // the origin is the owner of its parent, not of the embed itself.
+        if (href) void store.openLink(href, ownerOf(embed?.parentElement ?? null), { newTab })
         return
       }
 
@@ -419,7 +568,7 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
         }
       }
     },
-    [hideHover, paneId, path, scrollToHeading, toggleTask],
+    [hideHover, ownerOf, paneId, scrollToHeading, toggleTask],
   )
 
   /* ---- output ------------------------------------------------------- */
@@ -457,7 +606,7 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       onMouseOut={handleMouseOut}
       onMouseLeave={hideHover}
     >
-      <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="markdown-preview" dangerouslySetInnerHTML={innerHtml} />
       {hover ? (
         <div
           className="hover-preview"

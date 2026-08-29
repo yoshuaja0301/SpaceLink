@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
 import type { AppState } from '../state/store'
@@ -463,5 +463,157 @@ describe('BacklinksPanel — collapse', () => {
   it('survives unreadable storage', () => {
     localStorage.setItem('spacefore.backlinksCollapsed', 'not json')
     expect(loadCollapse()).toEqual({ linked: false, unlinked: false })
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Rescan cost
+ *
+ * The scan reads the whole vault, so what matters is how often it runs and
+ * how much of it re-does work it already did. Both are counted through the
+ * note fields the scan reads, rather than timed.
+ * ------------------------------------------------------------------ */
+
+interface Reads {
+  /** Times this note was handed to the scan. */
+  scans: number
+  /** Times its prose had to be masked — the expensive half of a scan. */
+  masks: number
+}
+
+/** A note that counts the reads the unlinked scan makes, so they can be asserted. */
+function watched(note: Note, reads: Reads): Note {
+  const parsed = { ...note.parsed }
+  Object.defineProperty(parsed, 'bodyOffset', {
+    get: () => {
+      reads.scans += 1
+      return note.parsed.bodyOffset
+    },
+  })
+  Object.defineProperty(parsed, 'body', {
+    get: () => {
+      reads.masks += 1
+      return note.parsed.body
+    },
+  })
+  return { ...note, parsed }
+}
+
+/** Seed the store with `VAULT`, counting every scan of one source note. */
+function seedWatched(reads: Reads, source: NotePath = 'Index.md'): void {
+  const notes = notesOf(VAULT)
+  notes.set(source, watched(notes.get(source)!, reads))
+  useAppStore.setState({ notes, index: buildIndex(notes) })
+  reads.scans = 0
+  reads.masks = 0
+}
+
+/** Replace one note the way `setNoteContent` does: a fresh map, a fresh note. */
+function type(path: NotePath, content: string): void {
+  const notes = new Map(useAppStore.getState().notes)
+  notes.set(path, makeNote(path, content, 1))
+  useAppStore.setState({ notes })
+}
+
+const UNLINKED = ['Index', 'Journal', 'Slipbox']
+
+describe('BacklinksPanel — rescan cost', () => {
+  it('masks each note once however often the scan runs', () => {
+    const reads: Reads = { scans: 0, masks: 0 }
+    const notes = notesOf(VAULT)
+    notes.set('Index.md', watched(notes.get('Index.md')!, reads))
+
+    findUnlinkedMentions('Zettelkasten.md', notes, new Set())
+    findUnlinkedMentions('Zettelkasten.md', notes, new Set())
+
+    expect(reads.scans).toBe(2)
+    expect(reads.masks).toBe(1)
+  })
+
+  it('rescans once after a typing burst, not once per keystroke', () => {
+    vi.useFakeTimers()
+    try {
+      const reads: Reads = { scans: 0, masks: 0 }
+      seedWatched(reads)
+      const { container } = render(<BacklinksPanel path="Zettelkasten.md" />)
+      expect(groups(section(container, 'Unlinked mentions')).map(([title]) => title)).toEqual(UNLINKED)
+
+      reads.scans = 0
+      reads.masks = 0
+      act(() => {
+        for (let n = 1; n <= 5; n += 1) type('Journal.md', `${VAULT['Journal.md']!}Word ${n}.\n`)
+      })
+      expect(reads.scans).toBe(0)
+
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+      expect(reads.scans).toBe(1)
+      // The untouched note was cached by the first scan, so the rescan is only
+      // the cheap sweep.
+      expect(reads.masks).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not rescan at all while the described note is the one being typed in', () => {
+    vi.useFakeTimers()
+    try {
+      const reads: Reads = { scans: 0, masks: 0 }
+      seedWatched(reads)
+      render(<BacklinksPanel path="Zettelkasten.md" />)
+
+      reads.scans = 0
+      act(() => {
+        for (let n = 1; n <= 5; n += 1) type('Zettelkasten.md', `${VAULT['Zettelkasten.md']!}Line ${n}.\n`)
+      })
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+      expect(reads.scans).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does rescan when the described note is renamed under the reader', () => {
+    vi.useFakeTimers()
+    try {
+      const reads: Reads = { scans: 0, masks: 0 }
+      seedWatched(reads)
+      const { container } = render(<BacklinksPanel path="Zettelkasten.md" />)
+
+      reads.scans = 0
+      act(() => {
+        type('Zettelkasten.md', ['---', 'aliases: [Slip-box, Recipes]', '---', '# Zettelkasten', ''].join('\n'))
+      })
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+
+      expect(reads.scans).toBe(1)
+      expect(groups(section(container, 'Unlinked mentions')).map(([title]) => title)).toEqual([
+        'Index',
+        'Journal',
+        'Recipes',
+        'Slipbox',
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips the scan entirely while the panel is off screen', () => {
+    const reads: Reads = { scans: 0, masks: 0 }
+    seedWatched(reads)
+    const view = render(<BacklinksPanel path="Zettelkasten.md" visible={false} />)
+
+    expect(reads.scans).toBe(0)
+    expect(groups(section(view.container, 'Unlinked mentions'))).toEqual([])
+
+    view.rerender(<BacklinksPanel path="Zettelkasten.md" visible />)
+    expect(reads.scans).toBe(1)
+    expect(groups(section(view.container, 'Unlinked mentions')).map(([title]) => title)).toEqual(UNLINKED)
   })
 })

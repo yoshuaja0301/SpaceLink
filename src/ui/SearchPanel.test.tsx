@@ -14,6 +14,19 @@ import {
   noteNameFromQuery,
 } from './SearchPanel'
 
+/** How often the vault was actually scanned — the cost this panel has to ration. */
+const searches = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../core/search/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/search/engine')>()
+  return {
+    ...actual,
+    searchNotes: (...args: Parameters<typeof actual.searchNotes>) => {
+      searches.count += 1
+      return actual.searchNotes(...args)
+    },
+  }
+})
+
 /** The store as it was at import time — actions included, so spies are undone. */
 const PRISTINE = useAppStore.getState()
 
@@ -56,6 +69,7 @@ function selectedRow(container: HTMLElement): HTMLElement | null {
 
 beforeEach(() => {
   localStorage.clear()
+  searches.count = 0
   useAppStore.setState(
     {
       ...PRISTINE,
@@ -224,6 +238,58 @@ describe('SearchPanel results', () => {
     })
     expect(titleRows(container)).toHaveLength(2)
   })
+
+  it('searches once for a burst of edits elsewhere, not once per keystroke', () => {
+    vi.useFakeTimers()
+    seed(VAULT, { searchQuery: 'zettel' })
+    const { container } = render(<SearchPanel />)
+    expect(titleRows(container)).toHaveLength(2)
+
+    const before = searches.count
+    // Typing in the editor replaces the note map on every character. The
+    // results memo used to key on it directly, so each one re-scanned the vault.
+    for (let i = 0; i < 5; i += 1) {
+      act(() => {
+        useAppStore.setState({ notes: new Map(useAppStore.getState().notes) })
+        vi.advanceTimersByTime(DEBOUNCE_MS - 1)
+      })
+    }
+    expect(searches.count).toBe(before)
+
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS)
+    })
+    expect(searches.count).toBe(before + 1)
+  })
+
+  it('picks up a note added to the vault once the debounce settles', () => {
+    vi.useFakeTimers()
+    seed(VAULT, { searchQuery: 'zettel' })
+    const { container } = render(<SearchPanel />)
+    expect(titleRows(container)).toHaveLength(2)
+
+    act(() => {
+      const notes = new Map(useAppStore.getState().notes)
+      notes.set('Later.md', makeNote('Later.md', '# Later\n\nAnother zettel note.\n', 1))
+      useAppStore.setState({ notes })
+    })
+    // The new map only reaches the search once the debounce that re-armed on it
+    // has run out.
+    expect(titleRows(container)).toHaveLength(2)
+
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS)
+    })
+    expect(titleRows(container)).toHaveLength(3)
+  })
+
+  it('does not search while it is not the panel the sidebar is showing', () => {
+    seed(VAULT, { searchQuery: 'zettel', sidebarPanel: 'files' })
+    const { container } = render(<SearchPanel variant="sidebar" />)
+
+    expect(searches.count).toBe(0)
+    expect(titleRows(container)).toHaveLength(0)
+  })
 })
 
 /* ------------------------------------------------------------------ *
@@ -263,7 +329,8 @@ describe('SearchPanel opening', () => {
     }
     window.addEventListener('spacefore:reveal-line', listen)
     try {
-      // Line 1 is the `# Zettelkasten` heading; line 3 is the first body hit.
+      // Source line 1 is the `# Zettelkasten` heading, line 3 the first body
+      // hit; the event contract counts from 0, so they go out as 0 and 2.
       fireEvent.click(matchRows(container)[0]!)
       fireEvent.click(matchRows(container)[1]!)
     } finally {
@@ -271,8 +338,8 @@ describe('SearchPanel opening', () => {
     }
 
     expect(openPath).toHaveBeenCalledWith('Zettelkasten.md', { newTab: false })
-    expect(seen[0]).toEqual({ path: 'Zettelkasten.md', line: 1 })
-    expect(seen.some((detail) => detail.line === 3)).toBe(true)
+    expect(seen[0]).toEqual({ path: 'Zettelkasten.md', line: 0 })
+    expect(seen.some((detail) => detail.line === 2)).toBe(true)
   })
 
   it('does not reveal a line when the note row itself is clicked', () => {
@@ -311,7 +378,8 @@ describe('SearchPanel keyboard', () => {
     // The first note row starts selected.
     expect(selectedRow(container)?.classList.contains('search-result-title')).toBe(true)
 
-    // Two rows down is the note's second match — line 3, past the heading.
+    // Two rows down is the note's second match — source line 3, past the
+    // heading, which the 0-based event reports as line 2.
     fireEvent.keyDown(input(), { key: 'ArrowDown' })
     expect(selectedRow(container)?.classList.contains('search-match')).toBe(true)
     fireEvent.keyDown(input(), { key: 'ArrowDown' })
@@ -328,7 +396,7 @@ describe('SearchPanel keyboard', () => {
     }
 
     expect(openPath).toHaveBeenCalledWith('Zettelkasten.md', { newTab: false })
-    expect(seen[0]?.line).toBe(3)
+    expect(seen[0]?.line).toBe(2)
   })
 
   it('clamps the selection at both ends of the list', () => {

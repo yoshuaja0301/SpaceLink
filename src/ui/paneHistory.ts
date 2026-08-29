@@ -80,32 +80,50 @@ export function push(paneId: string, path: NotePath): void {
   bump()
 }
 
-/** Step back one entry and return it, or null when there is nothing behind. */
-export function back(paneId: string): NotePath | null {
+/**
+ * Nearest entry in `direction` that still passes `exists`, or null when the
+ * stack runs out. Callers hand in the "does this note still exist" test so the
+ * module stays free of the store: a deleted note is stepped over rather than
+ * reopened as a blank tab.
+ */
+function findStep(history: PaneHistory, direction: -1 | 1, exists?: (path: NotePath) => boolean): number | null {
+  for (let at = history.index + direction; at >= 0 && at < history.entries.length; at += direction) {
+    const path = history.entries[at]
+    if (path !== undefined && (!exists || exists(path))) return at
+  }
+  return null
+}
+
+/** Step back to the nearest live entry and return it, or null when there is none. */
+export function back(paneId: string, exists?: (path: NotePath) => boolean): NotePath | null {
   const history = histories.get(paneId)
-  if (!history || history.index <= 0) return null
-  history.index -= 1
+  if (!history) return null
+  const at = findStep(history, -1, exists)
+  if (at === null) return null
+  history.index = at
   bump()
-  return history.entries[history.index] ?? null
+  return history.entries[at] ?? null
 }
 
-/** Step forward one entry and return it, or null when there is nothing ahead. */
-export function forward(paneId: string): NotePath | null {
+/** Step forward to the nearest live entry and return it, or null when there is none. */
+export function forward(paneId: string, exists?: (path: NotePath) => boolean): NotePath | null {
   const history = histories.get(paneId)
-  if (!history || history.index >= history.entries.length - 1) return null
-  history.index += 1
+  if (!history) return null
+  const at = findStep(history, 1, exists)
+  if (at === null) return null
+  history.index = at
   bump()
-  return history.entries[history.index] ?? null
+  return history.entries[at] ?? null
 }
 
-export function canBack(paneId: string): boolean {
+export function canBack(paneId: string, exists?: (path: NotePath) => boolean): boolean {
   const history = histories.get(paneId)
-  return history !== undefined && history.index > 0
+  return history !== undefined && findStep(history, -1, exists) !== null
 }
 
-export function canForward(paneId: string): boolean {
+export function canForward(paneId: string, exists?: (path: NotePath) => boolean): boolean {
   const history = histories.get(paneId)
-  return history !== undefined && history.index >= 0 && history.index < history.entries.length - 1
+  return history !== undefined && findStep(history, 1, exists) !== null
 }
 
 /** The entry currently on screen for this pane, or null when it has no history. */
@@ -142,14 +160,22 @@ export function pushClosed(tab: Tab): void {
   bump()
 }
 
-/** Take the most recently closed tab off the stack, or null when empty. */
-export function popClosed(): Tab | null {
-  const tab = closed.pop()
-  if (!tab) return null
-  bump()
-  return tab
+/**
+ * Take the most recently closed tab off the stack, or null when empty.
+ *
+ * Entries that no longer pass `reopenable` — a tab whose note has since been
+ * deleted — are discarded on the way rather than handed back, so reopening can
+ * never resurrect a note that is gone.
+ */
+export function popClosed(reopenable?: (tab: Tab) => boolean): Tab | null {
+  let popped: Tab | undefined
+  while ((popped = closed.pop()) !== undefined) {
+    bump()
+    if (!reopenable || reopenable(popped)) return popped
+  }
+  return null
 }
 
-export function canReopen(): boolean {
-  return closed.length > 0
+export function canReopen(reopenable?: (tab: Tab) => boolean): boolean {
+  return reopenable ? closed.some(reopenable) : closed.length > 0
 }

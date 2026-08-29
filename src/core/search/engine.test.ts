@@ -290,6 +290,22 @@ describe('searchNotes', () => {
     expect(hits[1].score).toBeGreaterThan(hits[2].score)
   })
 
+  it('weights title, heading, path and body exactly as documented', () => {
+    const body = makeNote('body.md', 'term\n')
+    const heading = makeNote('head.md', '## term\n')
+    const title = makeNote('title.md', '# term\n')
+    const inPath = makeNote('term/path.md', 'term\n')
+    const scores = new Map(
+      searchNotes('term', vault(body, heading, title, inPath)).map((hit) => [hit.path, hit.score]),
+    )
+    // Every note matches once on line 1, so the top-of-note bonus is the same 1.
+    expect(scores.get('body.md')).toBe(1 + 1)
+    expect(scores.get('head.md')).toBe(4 + 1)
+    expect(scores.get('term/path.md')).toBe(2 + 1 + 1)
+    // The H1 is both the title and a heading line.
+    expect(scores.get('title.md')).toBe(8 + 4 + 1)
+  })
+
   it('ranks more matches higher, and breaks ties on the shorter path', () => {
     const few = makeNote('a/few.md', 'term\n')
     const many = makeNote('b/many.md', 'term\nterm\nterm\n')
@@ -347,6 +363,38 @@ describe('searchNotes', () => {
     const note = makeNote('Odd.md', 'contains /[/ literally\n')
     expect(searchNotes('/[/', vault(note)).map((hit) => hit.path)).toEqual(['Odd.md'])
     expect(searchNotes('/[/', basic)).toEqual([])
+  })
+
+  it('honours the flags a regex was written with', () => {
+    const upper = makeNote('Todo.md', 'TODO write the thing\n')
+    const lower = makeNote('Done.md', 'todo lowercase mention\n')
+    const notes = vault(upper, lower)
+    const found = (query: string): string[] =>
+      searchNotes(query, notes)
+        .map((hit) => hit.path)
+        .sort()
+
+    // A bare pattern carries no flags of its own, so the option decides.
+    expect(parseQuery('/TODO/').regex!.flags).toBe('')
+    expect(found('/TODO/')).toEqual(['Done.md', 'Todo.md'])
+
+    // Once the user writes flags the pattern means exactly what it says, and
+    // nothing folds it behind their back.
+    expect(found('/TODO/m')).toEqual(['Todo.md'])
+    expect(found('/[A-Z]{4}/m')).toEqual(['Todo.md'])
+
+    // ...including when the flag they wrote *is* `i`.
+    expect(found('/TODO/i')).toEqual(['Done.md', 'Todo.md'])
+  })
+
+  it('collects every occurrence of a regex written with g or y', () => {
+    const note = makeNote('Rep.md', 'foo one\nfoo two\nfoo three\n')
+    for (const query of ['/foo/', '/foo/g', '/foo/y', '/foo/gy']) {
+      const hits = searchNotes(query, vault(note))
+      expect(hits).toHaveLength(1)
+      expect(hits[0].total).toBe(3)
+      expect(hits[0].matches.map((match) => match.line)).toEqual([1, 2, 3])
+    }
   })
 
   it('matches on the path even when the text does not contain the term', () => {

@@ -4,6 +4,7 @@
  * A small, dependency-free simulation. One tick applies, in order:
  *
  *   1. pairwise repulsion  — O(n²) for small graphs, uniform grid above 400 nodes
+ *                            (density-sized cells, so the cost stays linear)
  *   2. spring attraction   — pulls linked nodes toward `linkDistance`
  *   3. centering           — a weak pull toward the origin
  *   4. velocity damping    — 0.85
@@ -53,11 +54,15 @@ const REHEAT_ALPHA = 0.5
 /** Squared distance under which two nodes count as coincident. */
 const EPSILON_SQ = 1e-9
 
+/** Nodes one grid cell aims to hold — the knob that bounds the repulsion cost. */
+const GRID_TARGET_PER_CELL = 9
+/** Partners one node takes from any single cell, so a crowded cell stays linear. */
+const CELL_PARTNER_LIMIT = 16
+
 /**
- * Cells of the uniform grid are one interaction cutoff wide, so a 3×3
- * neighbourhood covers every pair that can possibly interact. These four
- * offsets visit each unordered pair of adjacent cells exactly once (the
- * mirrored offsets are covered when the other cell takes its turn).
+ * A node only ever compares against the 3×3 neighbourhood of its own cell.
+ * These four offsets visit each unordered pair of adjacent cells exactly once
+ * (the mirrored offsets are covered when the other cell takes its turn).
  */
 const NEIGHBOUR_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [1, -1],
@@ -422,13 +427,43 @@ export class ForceLayout {
   }
 
   /**
-   * Bucket the nodes into a uniform grid one cutoff wide and only compare
-   * within the 3×3 cell neighbourhood — pairs further apart than the cutoff
-   * contribute nothing anyway, so the result matches the O(n²) sweep while
-   * the cost stays roughly linear in the node count for spread-out graphs.
+   * Grid pitch for one repulsion pass. Cells one cutoff wide only bound the
+   * cost while the graph is thinner than one node per cutoff: a settled vault
+   * is far denser than that, the cell then holds a constant fraction of the
+   * whole graph and the sweep degenerates to O(n²) again. Sizing the pitch
+   * from the *density* of the current layout keeps a handful of nodes per cell
+   * whatever the graph looks like. The pitch never drops below `linkDistance`
+   * (a spring sitting at its rest length must still feel its own repulsion)
+   * and never exceeds the cutoff (pairs further apart contribute nothing).
+   */
+  private gridCell(nodes: GraphNode[], cutoff: number): number {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const node of nodes) {
+      if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue
+      if (node.x < minX) minX = node.x
+      if (node.x > maxX) maxX = node.x
+      if (node.y < minY) minY = node.y
+      if (node.y > maxY) maxY = node.y
+    }
+    const area = maxX > minX && maxY > minY ? (maxX - minX) * (maxY - minY) : 0
+    const ideal = area > 0 ? Math.sqrt((area * GRID_TARGET_PER_CELL) / nodes.length) : 0
+    return Math.max(1, Math.min(cutoff, Math.max(this.opts.linkDistance, finiteOr(ideal, 0))))
+  }
+
+  /**
+   * Bucket the nodes into a uniform grid and only compare within the 3×3 cell
+   * neighbourhood. Cells are sized so a handful of nodes land in each, which
+   * caps the pairs one node is compared against — and `CELL_PARTNER_LIMIT`
+   * caps it again for the pathological case (a thousand nodes piled into one
+   * cell because a single outlier stretched the bounding box). Repulsion
+   * beyond a couple of cells is dropped rather than paid for: a crowded graph
+   * loses a little of the long-range field instead of losing its frame rate.
    */
   private repelViaGrid(nodes: GraphNode[], cutoff: number, cutoffSq: number): void {
-    const cell = Math.max(1, cutoff)
+    const cell = this.gridCell(nodes, cutoff)
     const byKey = new Map<string, Bucket>()
     const buckets: Bucket[] = []
     for (let i = 0; i < nodes.length; i += 1) {
@@ -448,15 +483,24 @@ export class ForceLayout {
     for (const bucket of buckets) {
       const items = bucket.items
       for (let a = 0; a < items.length; a += 1) {
-        for (let b = a + 1; b < items.length; b += 1) {
+        const last = Math.min(items.length, a + 1 + CELL_PARTNER_LIMIT)
+        for (let b = a + 1; b < last; b += 1) {
           this.repel(nodes, items[a]!, items[b]!, cutoffSq)
         }
       }
       for (const [ox, oy] of NEIGHBOUR_OFFSETS) {
         const other = byKey.get(`${bucket.ix + ox},${bucket.iy + oy}`)
         if (!other) continue
-        for (const a of items) {
-          for (const b of other.items) this.repel(nodes, a, b, cutoffSq)
+        const partners = other.items
+        const take = Math.min(partners.length, CELL_PARTNER_LIMIT)
+        for (let a = 0; a < items.length; a += 1) {
+          // Below the cap this walks the whole neighbouring cell; above it the
+          // window rotates with `a`, so the sampling stays spread over that
+          // cell instead of hammering its first few nodes. Index-driven, so
+          // still deterministic.
+          for (let k = 0; k < take; k += 1) {
+            this.repel(nodes, items[a]!, partners[(a + k) % partners.length]!, cutoffSq)
+          }
         }
       }
     }

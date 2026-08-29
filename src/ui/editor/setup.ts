@@ -28,7 +28,7 @@ import {
 
 import type { NotePath } from '../../types'
 import { editorAppearance, editorHighlighting, editorTheme } from './editorTheme'
-import { markdownDecorations } from './markdownDecorations'
+import { flashLineHighlight, markdownDecorations } from './markdownDecorations'
 import { wikilinkCompletion } from './wikilinkComplete'
 
 /** Wraps the gutter extensions, toggled by the `showLineNumbers` setting. */
@@ -59,6 +59,11 @@ export interface EditorSetupOptions {
   onChange: (doc: string) => void
   /** Called when the editor takes DOM focus — used to activate the owning pane. */
   onFocus?: () => void
+  /**
+   * Called whenever the scroller moves, with the view that moved. Fires once
+   * per scroll event, so the caller is responsible for throttling.
+   */
+  onScroll?: (view: EditorView) => void
 }
 
 /** Gutter extensions for the `showLineNumbers` setting. */
@@ -103,6 +108,7 @@ export function createEditorExtensions(opts: EditorSetupOptions): Extension[] {
     EditorState.allowMultipleSelections.of(true),
     EditorState.tabSize.of(2),
     markdownDecorations({ resolve: opts.resolveLink, hideSyntax: opts.liveSyntaxHiding }),
+    flashLineHighlight,
     editorTheme,
     editorHighlighting,
     appearanceCompartment.of(editorAppearance({ fontSize: opts.fontSize, fontFamily: opts.editorFont })),
@@ -113,6 +119,12 @@ export function createEditorExtensions(opts: EditorSetupOptions): Extension[] {
     EditorView.domEventHandlers({
       focus: () => {
         opts.onFocus?.()
+        return false
+      },
+      // Registered on the scroller (CodeMirror routes `scroll` there rather
+      // than to the content element), and torn down with the view.
+      scroll: (_event, view) => {
+        opts.onScroll?.(view)
         return false
       },
     }),

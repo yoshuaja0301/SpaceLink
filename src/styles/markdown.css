@@ -108,7 +108,7 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
   white-space: nowrap;
   cursor: pointer;
 }
-.tag:hover { background: var(--accent-soft); color: var(--accent); }
+.tag:hover { background: var(--accent-soft); color: var(--accent-text); }
 
 /* ---- code ------------------------------------------------------------- */
 
@@ -222,7 +222,7 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
  * `class="callout" data-callout="warning"`. */
 
 .callout {
-  --callout-color: var(--accent);
+  --callout-color: var(--accent-text);
   margin: 0 0 1.2em;
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
@@ -231,11 +231,13 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
   background: color-mix(in srgb, var(--callout-color) 9%, transparent);
 }
 .callout > :last-child { margin-bottom: 0; }
+/* The title is painted in --callout-color on the 9% wash of that same colour,
+ * so every --callout-color has to clear 4.5:1 against its own tint. */
 .callout-title { margin: 0 0 var(--space-2); color: var(--callout-color); font-weight: 650; }
-.callout-note, .callout[data-callout='note'] { --callout-color: var(--accent); }
-.callout-info, .callout[data-callout='info'] { --callout-color: #3d8bd4; }
+.callout-note, .callout[data-callout='note'] { --callout-color: var(--accent-text); }
+.callout-info, .callout[data-callout='info'] { --callout-color: var(--callout-info); }
 .callout-tip, .callout[data-callout='tip'], .callout[data-callout='success'] { --callout-color: var(--text-success); }
-.callout-warning, .callout[data-callout='warning'], .callout[data-callout='caution'] { --callout-color: #d08a1f; }
+.callout-warning, .callout[data-callout='warning'], .callout[data-callout='caution'] { --callout-color: var(--callout-warning); }
 .callout-danger, .callout[data-callout='danger'], .callout[data-callout='error'] { --callout-color: var(--text-error); }
 
 /* ---- embeds (`![[Note]]`) ----------------------------------------------- */
@@ -336,7 +338,7 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
 }
 
 .markdown-preview .heading-anchor:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 @media (prefers-reduced-motion: reduce) {

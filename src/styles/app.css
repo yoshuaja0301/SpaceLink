@@ -295,6 +295,56 @@ ul, ol { margin: 0; padding: 0; }
 .nav-item.is-active .icon { color: var(--accent); }
 .nav-item-title, .nav-file-title, .nav-folder-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
+/* Drag feedback. `FileExplorer` and `StarredPanel` mark the row being dragged
+ * and the row under the pointer; without these the drop state is computed on
+ * every dragover and shown nowhere. The inset ring is a shape cue, so the drop
+ * target does not rest on the tint alone. */
+.nav-item.is-dragging { opacity: 0.45; }
+.nav-item.is-drop-target {
+  background: var(--accent-soft);
+  color: var(--text-normal);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* Dropping on the vault root: the whole file list is the target. */
+.nav-files-container.is-drop-target { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* Delete confirmation — `FileExplorer` renders this strip
+ * (`role="alertdialog"`) directly under the row it is about, indented to the
+ * same depth by the same `--depth` the rows use. The buttons opt into
+ * `.btn-danger` / `.btn-ghost` for their palette, so only the compact geometry
+ * belongs here: `Delete` is the one filled control in the strip, in
+ * --text-error. */
+.nav-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  margin: 2px 0;
+  padding: 3px var(--space-2);
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 13px);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--text-error);
+}
+.nav-confirm-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-confirm-yes, .nav-confirm-no {
+  flex: none;
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* Collapse arrow: rotated in place, so only one chevron icon ever ships. */
 .nav-folder-collapse {
   display: flex;
@@ -448,6 +498,22 @@ ul, ol { margin: 0; padding: 0; }
 .tab-dirty-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .tab:hover .tab-dirty-dot { display: none; }
 
+/* Reorder feedback: the dragged tab dims and a 2px accent bar marks the edge
+ * the drop would land on. `.tab` is already `position: relative`. */
+.tab.is-dragging { opacity: 0.45; }
+.tab.is-drop-before::before,
+.tab.is-drop-after::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 2px;
+  background: var(--accent);
+}
+.tab.is-drop-before::before { left: 0; }
+.tab.is-drop-after::after { right: 0; }
+
 .tab-actions {
   position: sticky;
   right: 0;
@@ -471,7 +537,16 @@ ul, ol { margin: 0; padding: 0; }
   transition: color 0.12s ease, background 0.12s ease;
 }
 .tab-actions button:hover { background: var(--bg-hover); color: var(--text-normal); }
-.tab-actions button.is-active { background: var(--accent-soft); color: var(--accent); }
+/* The active view mode is not signalled by hue alone: it is lifted onto the
+ * canvas colour the way `.tab.is-active` is, and underlined. The accent-soft
+ * fill it used before sat 1% off --bg-tertiary and carried the glyph at 3.7:1
+ * light / 2.7:1 dark; on --bg-primary the text-safe accent is 6.7:1 / 5.6:1,
+ * and the 2px rule reads at 5.7:1 / 5.1:1 against the surrounding bar. */
+.tab-actions button.is-active {
+  background: var(--bg-primary);
+  color: var(--accent-text);
+  box-shadow: inset 0 -2px 0 var(--accent-text);
+}
 
 /* ---- split view (edit + preview side by side) -------------------------- */
 
@@ -530,6 +605,11 @@ ul, ol { margin: 0; padding: 0; }
 .editor-host .cm-panels { border-color: var(--border); background: var(--bg-secondary); color: var(--text-normal); }
 .editor-host .cm-searchMatch { border-radius: 2px; background: var(--highlight); }
 .editor-host .cm-searchMatch-selected { background: var(--accent-soft); outline: 1px solid var(--accent); }
+/* A search hit, backlink or outline heading that scrolls a line into view
+ * flashes it, so the eye has somewhere to land after the jump. The fade runs
+ * for the same 1.2s `Editor` holds the decoration before clearing it. */
+.editor-host .cm-flash-line { background-color: var(--accent-soft); animation: flash-line 1.2s ease-out forwards; }
+@keyframes flash-line { from { background-color: var(--accent-soft); } to { background-color: transparent; } }
 .editor-host .cm-tooltip {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -541,7 +621,7 @@ ul, ol { margin: 0; padding: 0; }
 }
 .editor-host .cm-tooltip-autocomplete > ul > li { padding: var(--space-1) var(--space-3); font-family: var(--font-ui); }
 .editor-host .cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--accent-soft); color: var(--text-normal); }
-.editor-host .cm-completionMatchedText { color: var(--accent); font-weight: 700; text-decoration: none; }
+.editor-host .cm-completionMatchedText { color: var(--accent-text); font-weight: 700; text-decoration: none; }
 .editor-host .cm-completionDetail { color: var(--text-faint); font-style: normal; }
 
 /* ---- markdown decorations inside the editor ---------------------------- */
@@ -593,6 +673,34 @@ ul, ol { margin: 0; padding: 0; }
   overflow: auto;
   padding: var(--space-6) var(--space-6) 40vh;
   background: var(--bg-primary);
+}
+
+/* ---- wiki-link hover card ---------------------------------------------- *
+ * `Preview` renders this next to the pointer and owns its geometry inline
+ * (`position: fixed`, left/top/max-width), so only the surface lives here.
+ * It floats above the panes and the mobile sidebars (50) and the ribbon
+ * tooltips (60), but below the command palette (100) and everything above it.
+ * `pointer-events: none` keeps the card from stealing the hover that is
+ * keeping it open. */
+.hover-preview {
+  z-index: 90;
+  width: max-content;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  line-height: 1.55;
+  pointer-events: none;
+}
+.hover-preview-title { font-weight: 650; }
+.hover-preview-excerpt {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 /* ======================================================================= *
@@ -900,7 +1008,9 @@ ul, ol { margin: 0; padding: 0; }
 button.statusbar-item { padding: 0 var(--space-1); }
 button.statusbar-item:hover { background: var(--bg-hover); color: var(--text-normal); }
 .statusbar-spacer { flex: 1 1 auto; }
-.statusbar-item.is-dirty { color: var(--accent); }
+/* --accent is only 3.8:1 on --bg-secondary in dark, and this 11px readout is
+ * the only sign the file is not written yet; --accent-text is 5.9:1. */
+.statusbar-item.is-dirty { color: var(--accent-text); }
 .statusbar-item.is-error { color: var(--text-error); }
 
 /* ======================================================================= *
@@ -1246,4 +1356,8 @@ kbd {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+  /* The rule above would end the flash before it is seen, and the flash is the
+   * only cue that the jump landed. Drop the fade, keep the highlight: `Editor`
+   * clears the decoration itself after 1.2s. */
+  .editor-host .cm-flash-line { animation: none; background-color: var(--accent-soft); }
 }

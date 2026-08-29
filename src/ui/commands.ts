@@ -14,14 +14,29 @@
  * - **`enabled` is the single gate.** The palette hides disabled commands and
  *   the hotkey layer skips them, so a command never has to defend itself.
  *
- * Pane history and closed tabs are not in the store (nothing else needs them),
- * so this module keeps them by watching the store for pane changes.
+ * Pane history and closed tabs are not in the store (nothing else needs them):
+ * they live in `paneHistory`, the same module the tab strip's arrows and its
+ * "Reopen closed tab" entry drive, so a keyboard step and a button step move
+ * one stack rather than two that fight each other. All this module adds is a
+ * store subscription that records where each pane currently is.
  */
 import { useEffect, useMemo } from 'react'
 
-import type { Command, NotePath, ThemeName, ViewMode } from '../types'
+import type { Command, NotePath, ThemeName } from '../types'
 import type { AppState } from '../state/store'
 import { basename, dirname, joinPath, sanitizeFileName, useAppStore } from '../state/store'
+import { openRightSidebarTab } from './RightSidebar'
+import { isReopenable, reopenClosedTab } from './TabBar'
+import {
+  back,
+  canBack,
+  canForward,
+  canReopen,
+  forward,
+  push as pushHistory,
+  pushClosed,
+  reset as resetHistory,
+} from './paneHistory'
 import { formatShortcut } from './useHotkeys'
 import {
   cycleHeading,
@@ -47,8 +62,6 @@ export const SECTIONS = ['File', 'Navigation', 'Editor', 'View'] as const
 
 const FONT_SIZE_MIN = 10
 const FONT_SIZE_MAX = 28
-const HISTORY_LIMIT = 100
-const CLOSED_TAB_LIMIT = 20
 
 const store = (): AppState => useAppStore.getState()
 
@@ -64,82 +77,35 @@ export function selectActivePath(state: AppState): NotePath | null {
  * Pane history + closed tabs
  * ------------------------------------------------------------------ */
 
-interface PaneHistory {
-  entries: NotePath[]
-  /** Index of the entry currently on screen; -1 before anything is recorded. */
-  cursor: number
-}
+/** Panes seen in the last snapshot, so a closed pane's history can be dropped. */
+let knownPanes: string[] = []
 
-interface ClosedTab {
-  paneId: string
-  path: NotePath
-  mode: ViewMode
-}
-
-const histories = new Map<string, PaneHistory>()
-const closedTabs: ClosedTab[] = []
-let knownTabs = new Map<string, ClosedTab>()
-
-function pushHistory(paneId: string, path: NotePath): void {
-  const history = histories.get(paneId) ?? { entries: [], cursor: -1 }
-  histories.set(paneId, history)
-  // Re-recording where we already are (which is what Back/Forward do) must not
-  // truncate the forward stack.
-  if (history.entries[history.cursor] === path) return
-  history.entries = history.entries.slice(0, history.cursor + 1)
-  history.entries.push(path)
-  if (history.entries.length > HISTORY_LIMIT) history.entries.shift()
-  history.cursor = history.entries.length - 1
-}
-
-/** Fold one store snapshot into the history + closed-tab bookkeeping. */
+/** Record where every pane currently is. `push` ignores a repeat of the entry
+ * already on screen, which is what makes a Back step a no-op here rather than
+ * an entry that truncates the forward stack. */
 function recordState(state: AppState): void {
-  const livePanes = new Set<string>()
-  const tabs = new Map<string, ClosedTab>()
-
+  const live: string[] = []
   for (const pane of state.panes) {
-    livePanes.add(pane.id)
-    for (const tab of pane.tabs) {
-      if (tab.kind === 'note' && tab.path) tabs.set(tab.id, { paneId: pane.id, path: tab.path, mode: tab.mode })
-    }
+    live.push(pane.id)
     const active = pane.tabs.find((t) => t.id === pane.activeTabId)
     if (active && active.kind === 'note' && active.path) pushHistory(pane.id, active.path)
   }
-
-  for (const [id, info] of knownTabs) {
-    if (tabs.has(id)) continue
-    closedTabs.push(info)
-    if (closedTabs.length > CLOSED_TAB_LIMIT) closedTabs.shift()
+  for (const paneId of knownPanes) {
+    if (!live.includes(paneId)) resetHistory(paneId)
   }
-  knownTabs = tabs
-
-  for (const paneId of [...histories.keys()]) {
-    if (!livePanes.has(paneId)) histories.delete(paneId)
-  }
+  knownPanes = live
 }
 
-/**
- * Walk the pane's history. Entries whose note has since been deleted are
- * skipped rather than reopening a blank tab.
- */
-function findStep(paneId: string, direction: -1 | 1): number | null {
-  const history = histories.get(paneId)
-  if (!history) return null
-  const { notes } = store()
-  for (let cursor = history.cursor + direction; cursor >= 0 && cursor < history.entries.length; cursor += direction) {
-    if (notes.has(history.entries[cursor]!)) return cursor
-  }
-  return null
+/** A history entry is only worth stepping to while its note still exists. */
+function noteExists(path: NotePath): boolean {
+  return store().notes.has(path)
 }
 
 function stepHistory(direction: -1 | 1): void {
   const state = store()
   const paneId = state.activePaneId
-  const cursor = findStep(paneId, direction)
-  if (cursor === null) return
-  const history = histories.get(paneId)!
-  history.cursor = cursor
-  state.openPath(history.entries[cursor]!, { paneId })
+  const path = direction === -1 ? back(paneId, noteExists) : forward(paneId, noteExists)
+  if (path) state.openPath(path, { paneId })
 }
 
 let trackerRefs = 0
@@ -163,9 +129,8 @@ function attachNavigationTracking(): () => void {
 
 /** Test seam: drop every recorded pane history and closed tab. */
 export function resetNavigationHistory(): void {
-  histories.clear()
-  closedTabs.length = 0
-  knownTabs = new Map()
+  resetHistory()
+  knownPanes = []
 }
 
 /* ------------------------------------------------------------------ *
@@ -239,9 +204,9 @@ function confirmed(question: string): boolean {
 }
 
 /** App.tsx owns the settings modal and vault picker and listens for these. */
-function emit(type: 'spacefore:open-settings' | 'spacefore:open-vault-picker' | 'spacefore:open-local-graph', detail?: unknown): void {
+function emit(type: 'spacefore:open-settings' | 'spacefore:open-vault-picker'): void {
   if (typeof window === 'undefined') return
-  window.dispatchEvent(new CustomEvent(type, { detail }))
+  window.dispatchEvent(new CustomEvent(type))
 }
 
 /* ------------------------------------------------------------------ *
@@ -505,12 +470,9 @@ export function buildCommands(context: CommandContext): Command[] {
       section: 'Navigation',
       enabled: () => selectActivePath(store()) !== null,
       run: () => {
-        const state = store()
-        const path = selectActivePath(state)
-        if (!path) return
-        // The local graph lives in the right sidebar, next to backlinks.
-        state.toggleRightSidebar(true)
-        emit('spacefore:open-local-graph', { path })
+        // The local graph lives in the right sidebar, next to backlinks; it
+        // follows the active pane, so it needs no path of its own.
+        if (selectActivePath(store()) !== null) openRightSidebarTab('graph')
       },
     },
     {
@@ -518,7 +480,7 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Back',
       section: 'Navigation',
       shortcut: 'Alt+Left',
-      enabled: () => findStep(store().activePaneId, -1) !== null,
+      enabled: () => canBack(store().activePaneId, noteExists),
       run: () => stepHistory(-1),
     },
     {
@@ -526,7 +488,7 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Forward',
       section: 'Navigation',
       shortcut: 'Alt+Right',
-      enabled: () => findStep(store().activePaneId, 1) !== null,
+      enabled: () => canForward(store().activePaneId, noteExists),
       run: () => stepHistory(1),
     },
     {
@@ -553,7 +515,13 @@ export function buildCommands(context: CommandContext): Command[] {
       run: () => {
         const state = store()
         const pane = state.activePane()
-        if (pane.activeTabId) state.closeTab(pane.id, pane.activeTabId)
+        const tab = pane.tabs.find((t) => t.id === pane.activeTabId)
+        if (!tab) return
+        // Closures are recorded where they happen, never inferred from a diff:
+        // `deleteNote` blanks a tab's path without closing it, and a diff reads
+        // that as a closed tab and offers to reopen a note that is gone.
+        pushClosed(tab)
+        state.closeTab(pane.id, tab.id)
       },
     },
     {
@@ -561,14 +529,8 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Reopen closed tab',
       section: 'Navigation',
       shortcut: 'Mod+Shift+T',
-      enabled: () => closedTabs.length > 0,
-      run: () => {
-        const closed = closedTabs.pop()
-        if (!closed) return
-        const state = store()
-        const paneId = state.panes.some((p) => p.id === closed.paneId) ? closed.paneId : state.activePaneId
-        state.openPath(closed.path, { newTab: true, paneId, mode: closed.mode })
-      },
+      enabled: () => canReopen((tab) => isReopenable(tab, store().notes)),
+      run: () => reopenClosedTab(store().activePaneId),
     },
     {
       id: 'nav:focus-next-pane',

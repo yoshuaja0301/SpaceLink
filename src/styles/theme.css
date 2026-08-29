@@ -12,10 +12,18 @@
  *
  * The two dark blocks are deliberate duplicates; keep them in sync.
  *
- * Contrast: --text-normal / --text-muted / --text-faint / --link /
- * --link-unresolved / --text-error / --text-success all clear WCAG AA
- * (>= 4.5:1) on --bg-primary in both themes, and --text-on-accent clears it
- * on --accent. Ratios are noted next to the light values.
+ * Contrast: every ratio noted below is measured against --bg-primary unless
+ * the comment names another surface. --text-normal / --text-muted / --link /
+ * --link-unresolved / --text-error / --text-success / --accent-text all clear
+ * WCAG AA (>= 4.5:1) there in both themes, and --text-on-accent clears it on
+ * --accent. --accent itself does not (3.8:1 in dark), which is why anything
+ * that paints the accent as text or as a glyph reaches for --accent-text.
+ *
+ * --text-faint is the exception worth stating: it is painted on all four
+ * surfaces (inactive tab titles on --bg-tertiary, count badges and kbd chips
+ * on --bg-tertiary, palette sections and settings descriptions on --bg-modal),
+ * so it is sized against the worst of --bg-primary / --bg-secondary /
+ * --bg-tertiary / --bg-modal — which is --bg-tertiary in both themes.
  */
 
 :root {
@@ -33,7 +41,7 @@
   /* text */
   --text-normal: #22212a;      /* 15.9:1 */
   --text-muted: #5d5a6b;       /*  6.7:1 */
-  --text-faint: #6f6c81;       /*  5.1:1 */
+  --text-faint: #67647a;       /*  5.7:1 — 4.8:1 on --bg-tertiary, its worst surface */
   --text-on-accent: #ffffff;   /*  5.2:1 on --accent */
   --text-error: #c3352b;       /*  5.4:1 */
   --text-success: #1f7a4d;     /*  5.3:1 */
@@ -41,6 +49,7 @@
   /* accent + lines */
   --accent: #6c4ff5;
   --accent-hover: #5a3ee0;
+  --accent-text: #5b3fd6;      /*  6.7:1 — the accent where it has to read as text */
   --accent-soft: rgba(108, 79, 245, 0.12);
   --border: #e3e1ea;
   --border-strong: #c9c6d6;
@@ -51,6 +60,8 @@
   --link-unresolved: #6d5f9c;  /*  5.6:1 */
   --tag-bg: rgba(108, 79, 245, 0.1);
   --tag-text: #5b3fd6;
+  --callout-info: #1f5f96;     /*  5.9:1 on its own 9% wash over --bg-primary */
+  --callout-warning: #8a5a00;  /*  5.2:1 on its own 9% wash over --bg-primary */
   --code-bg: #f2f0f7;
   --code-text: #7a3bd0;        /*  5.4:1 on --code-bg */
   --highlight: rgba(255, 205, 70, 0.5);
@@ -101,12 +112,13 @@
     --bg-overlay: rgba(9, 9, 14, 0.62);
     --text-normal: #e6e4ee;      /* 13.2:1 */
     --text-muted: #a5a2b5;       /*  6.7:1 */
-    --text-faint: #8b8799;       /*  4.8:1 */
+    --text-faint: #928ea1;       /*  5.2:1 — 4.7:1 on --bg-tertiary and --bg-modal */
     --text-on-accent: #ffffff;   /*  4.6:1 on --accent */
     --text-error: #ff7b72;       /*  6.6:1 */
     --text-success: #6ddba0;     /*  9.7:1 */
     --accent: #7458ff;
     --accent-hover: #6544ee;
+    --accent-text: #9b83ff;      /*  5.6:1 */
     --accent-soft: rgba(116, 88, 255, 0.18);
     --border: #2f2f38;
     --border-strong: #3f3f4b;
@@ -115,6 +127,8 @@
     --link-unresolved: #8f7ec0;  /*  4.7:1 */
     --tag-bg: rgba(116, 88, 255, 0.2);
     --tag-text: #b9a6ff;
+    --callout-info: #5aa9e6;     /*  5.6:1 on its own 9% wash over --bg-primary */
+    --callout-warning: #d08a1f;  /*  5.1:1 on its own 9% wash over --bg-primary */
     --code-bg: #26262f;
     --code-text: #d7b3ff;        /*  8.4:1 on --code-bg */
     --highlight: rgba(255, 205, 100, 0.26);
@@ -137,12 +151,13 @@
   --bg-overlay: rgba(9, 9, 14, 0.62);
   --text-normal: #e6e4ee;
   --text-muted: #a5a2b5;
-  --text-faint: #8b8799;
+  --text-faint: #928ea1;
   --text-on-accent: #ffffff;
   --text-error: #ff7b72;
   --text-success: #6ddba0;
   --accent: #7458ff;
   --accent-hover: #6544ee;
+  --accent-text: #9b83ff;
   --accent-soft: rgba(116, 88, 255, 0.18);
   --border: #2f2f38;
   --border-strong: #3f3f4b;
@@ -151,6 +166,8 @@
   --link-unresolved: #8f7ec0;
   --tag-bg: rgba(116, 88, 255, 0.2);
   --tag-text: #b9a6ff;
+  --callout-info: #5aa9e6;
+  --callout-warning: #d08a1f;
   --code-bg: #26262f;
   --code-text: #d7b3ff;
   --highlight: rgba(255, 205, 100, 0.26);

@@ -204,11 +204,32 @@ describe('resolveLinkTarget', () => {
     expect(resolveLinkTarget('Note', 'y/Other.md', index)).toBe('y/Note.md')
   })
 
-  it('prefers a note whose whole path is the target over any basename match', () => {
-    // `[[Note]]` reads as the path `Note.md` before it reads as a bare name, so
-    // the vault-root note wins even next door to another `Note.md`.
+  it('prefers the note next door to a vault-root homonym', () => {
+    // `[[Note]]` is a bare name, not the path `Note.md`, so the same-folder
+    // rule outranks the root note whose path happens to spell the same thing.
     const index = buildIndex(vault(fixture('x/Note.md'), fixture('Note.md')))
-    expect(resolveLinkTarget('Note', 'x/Source.md', index)).toBe('Note.md')
+    expect(resolveLinkTarget('Note', 'x/Source.md', index)).toBe('x/Note.md')
+    // From the root the root note *is* the neighbour, so it wins there.
+    expect(resolveLinkTarget('Note', 'Source.md', index)).toBe('Note.md')
+  })
+
+  it('keeps a same-folder homonym from being outranked by a root-level one', () => {
+    const notes = vault(fixture('Foo.md'), fixture('Bar/Foo.md'), fixture('Bar/Baz.md', 'see [[Foo]]'))
+    const index = buildIndex(notes)
+    expect(resolveLinkTarget('Foo', 'Bar/Baz.md', index)).toBe('Bar/Foo.md')
+    // The backlink and the graph edge follow the same answer.
+    expect((index.incoming.get('Bar/Foo.md') ?? []).map((edge) => edge.from)).toEqual(['Bar/Baz.md'])
+    expect(index.incoming.has('Foo.md')).toBe(false)
+
+    // Resolution must not depend on where the *other* homonym happens to sit:
+    // moving it out of the root leaves the same target.
+    const moved = buildIndex(vault(fixture('Root/Foo.md'), fixture('Bar/Foo.md'), fixture('Bar/Baz.md', '[[Foo]]')))
+    expect(resolveLinkTarget('Foo', 'Bar/Baz.md', moved)).toBe('Bar/Foo.md')
+  })
+
+  it('never lets a same-folder alias outrank a note that carries the name', () => {
+    const index = buildIndex(vault(fixture('x/Holder.md', '', { aliases: ['Note'] }), fixture('y/Note.md')))
+    expect(resolveLinkTarget('Note', 'x/Source.md', index)).toBe('y/Note.md')
   })
 
   it('breaks homonyms on the shortest path, then deterministically', () => {
@@ -318,6 +339,69 @@ describe('buildIndex — edges', () => {
     const index = buildIndex(vault(fixture('Lonely.md', 'no links here')))
     expect(index.outgoing.has('Lonely.md')).toBe(false)
     expect(index.incoming.has('Lonely.md')).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Attachment embeds
+ * ------------------------------------------------------------------ */
+
+describe('buildIndex — attachment embeds', () => {
+  it('leaves an image embed out of the link index instead of calling it unresolved', () => {
+    const notes = vault(fixture('Note.md', '![[diagram.png]]\n![[photos/trip.jpg|400]]'))
+    const index = buildIndex(notes)
+
+    expect(getUnresolvedLinks(index)).toEqual([])
+    expect(index.outgoing.has('Note.md')).toBe(false)
+    // …so the graph draws no phantom "missing note" placeholder for a picture.
+    const graph = buildGraphData(notes, index, { showUnresolved: true, showTags: false })
+    expect(graph.nodes.map((node) => node.id)).toEqual(['Note.md'])
+  })
+
+  it('still records an embed of a note that does not exist', () => {
+    const index = buildIndex(vault(fixture('Note.md', '![[Missing Note]]\n![[gone.md]]')))
+    expect(getUnresolvedLinks(index)).toEqual([
+      { target: 'gone.md', count: 1 },
+      { target: 'missing note', count: 1 },
+    ])
+  })
+
+  it('keeps an embed whose target really is a note with a dot in its name', () => {
+    const notes = vault(fixture('Note.md', '![[Version 1.2]]'), fixture('Version 1.2.md'))
+    expect(buildIndex(notes).incoming.get('Version 1.2.md')).toHaveLength(1)
+  })
+
+  it('only skips embeds, not plain links, to an attachment name', () => {
+    const index = buildIndex(vault(fixture('Note.md', '[[diagram.png]]')))
+    expect(getUnresolvedLinks(index)).toEqual([{ target: 'diagram.png', count: 1 }])
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Tag case
+ * ------------------------------------------------------------------ */
+
+describe('buildIndex — tag case', () => {
+  it('groups tags case-insensitively, keeping the first casing for display', () => {
+    const notes = vault(fixture('A.md', 'text #Project'), fixture('B.md', 'text #project'))
+    const index = buildIndex(notes)
+
+    expect([...index.tags.keys()]).toEqual(['Project'])
+    expect(index.tags.get('Project')).toEqual(['A.md', 'B.md'])
+    expect(getTagTree(index).map((node) => [node.fullTag, node.count, node.totalCount])).toEqual([['Project', 2, 2]])
+
+    const graph = buildGraphData(notes, index, { showUnresolved: false, showTags: true })
+    expect(graph.nodes.filter((node) => node.id.startsWith('#')).map((node) => node.id)).toEqual(['#Project'])
+  })
+
+  it('nests differently cased branches of one tag under a single parent', () => {
+    const index = buildIndex(vault(fixture('A.md', 'text #Project/alpha'), fixture('B.md', 'text #project/beta')))
+    const tree = getTagTree(index)
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0]!.fullTag).toBe('Project')
+    expect(tree[0]!.totalCount).toBe(2)
+    expect(tree[0]!.children.map((child) => child.fullTag)).toEqual(['Project/alpha', 'Project/beta'])
   })
 })
 

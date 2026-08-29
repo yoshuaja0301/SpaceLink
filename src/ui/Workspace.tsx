@@ -10,7 +10,7 @@
  * `spacefore.paneSizes`, and change on every mouse move during a drag — which
  * is exactly the kind of churn the app store should be kept away from.
  */
-import type { JSX, MouseEvent as ReactMouseEvent } from 'react'
+import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 
 import type { Pane, Tab } from '../types'
@@ -25,6 +25,8 @@ import { push as pushHistory, reset as resetHistory } from './paneHistory'
 export const PANE_SIZES_KEY = 'spacefore.paneSizes'
 /** No pane may be squeezed below this, in px. */
 export const MIN_PANE_WIDTH = 240
+/** How far one arrow-key press moves a splitter, in px. */
+export const PANE_KEY_STEP = 24
 
 /**
  * Move the boundary between pane `index` and the one after it by `delta` px.
@@ -223,11 +225,43 @@ export function Workspace(): JSX.Element {
     savePaneSizes([])
   }
 
+  /**
+   * Move a boundary without a mouse. `delta` is unbounded on purpose:
+   * `resizePanes` clamps to the pair's minimums, so ±Infinity is "as far as
+   * this splitter goes", which is what Home/End mean.
+   */
+  const resizeByKey = (index: number, delta: number): void => {
+    const next = resizePanes(widths ?? measure(), index, delta)
+    setSizes(next)
+    savePaneSizes(next)
+  }
+
+  const onResizerKeyDown = (index: number, event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const delta =
+      event.key === 'ArrowLeft'
+        ? -PANE_KEY_STEP
+        : event.key === 'ArrowRight'
+          ? PANE_KEY_STEP
+          : event.key === 'Home'
+            ? -Infinity
+            : event.key === 'End'
+              ? Infinity
+              : null
+    if (delta === null) return
+    event.preventDefault()
+    resizeByKey(index, delta)
+  }
+
   return (
     <div className="workspace" ref={containerRef}>
       {panes.map((pane: Pane, index: number) => {
         const tab = pane.tabs.find((candidate) => candidate.id === pane.activeTabId) ?? null
         const width = widths?.[index]
+        // Where the boundary sits, as the left pane's share of the pair. A
+        // percentage rather than pixels so the value is defined before anything
+        // has been dragged, when the panes are simply equal shares.
+        const pairTotal = (widths?.[index - 1] ?? 0) + (widths?.[index] ?? 0)
+        const ratio = pairTotal > 0 ? Math.round(((widths?.[index - 1] ?? 0) / pairTotal) * 100) : 50
         return (
           <Fragment key={pane.id}>
             {index > 0 && (
@@ -236,10 +270,16 @@ export function Workspace(): JSX.Element {
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize panes"
+                aria-valuenow={ratio}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuetext={`${ratio}%`}
+                tabIndex={0}
                 // Computed geometry: the stylesheet has no rule for the pane
                 // splitter, and the grab area has to exist for the drag to work.
                 style={{ flex: '0 0 6px', cursor: 'col-resize' }}
                 onMouseDown={(event) => startResize(index - 1, event)}
+                onKeyDown={(event) => onResizerKeyDown(index - 1, event)}
                 onDoubleClick={resetSizes}
               />
             )}
@@ -258,7 +298,13 @@ export function Workspace(): JSX.Element {
               style={width !== undefined ? { flex: `0 1 ${width}px` } : undefined}
             >
               <TabBar pane={pane} />
-              <div className="pane-content">
+              {/* The panel the pane's tab strip controls; see `aria-controls`. */}
+              <div
+                className="pane-content"
+                id={`pane-panel-${pane.id}`}
+                role="tabpanel"
+                aria-labelledby={tab ? `pane-tab-${tab.id}` : undefined}
+              >
                 <TabContent tab={tab} paneId={pane.id} />
               </div>
             </section>

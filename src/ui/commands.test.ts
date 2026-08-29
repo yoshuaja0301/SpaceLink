@@ -11,6 +11,7 @@ import { makeNote, useAppStore } from '../state/store'
 import { registerEditor } from './editor/markdownCommands'
 import { parseShortcut } from './useHotkeys'
 import { SECTIONS, resetNavigationHistory, useCommands } from './commands'
+import { back as historyBack, canForward as historyCanForward, snapshot as historySnapshot } from './paneHistory'
 
 const PRISTINE = useAppStore.getState()
 
@@ -287,6 +288,91 @@ describe('navigation commands', () => {
     expect(useAppStore.getState().activeTab()?.path).toBe('A.md')
   })
 
+  it('steps the same history the tab strip drives, in both directions', () => {
+    // Two stacks used to shadow each other here: a command step looked like a
+    // fresh visit to the strip's stack (so its Back arrow walked *forward*),
+    // and a strip step left the command's Forward disabled.
+    seed({ 'A.md': 'a', 'B.md': 'b', 'C.md': 'c' })
+    const rendered = renderHook(() => useCommands())
+    const paneId = useAppStore.getState().activePaneId
+    const current = (): NotePath | null => useAppStore.getState().activeTab()?.path ?? null
+    const openPath = (path: string): void => act(() => useAppStore.getState().openPath(path))
+
+    openPath('A.md')
+    openPath('B.md')
+    openPath('C.md')
+
+    act(() => find(rendered.result.current, 'nav:back').run())
+    expect(current()).toBe('B.md')
+    // The cursor moved inside the one stack; nothing was appended to it.
+    expect(historySnapshot(paneId)).toEqual({ entries: ['A.md', 'B.md', 'C.md'], index: 1 })
+    // ...so the strip's Forward arrow is lit, as the command's own is.
+    expect(historyCanForward(paneId)).toBe(true)
+    expect(find(rendered.result.current, 'nav:forward').enabled?.()).toBe(true)
+
+    // Now step with the strip's Back arrow instead: the command must see it.
+    act(() => {
+      const path = historyBack(paneId)
+      if (path) useAppStore.getState().openPath(path, { paneId })
+    })
+    expect(current()).toBe('A.md')
+    expect(find(rendered.result.current, 'nav:forward').enabled?.()).toBe(true)
+    act(() => find(rendered.result.current, 'nav:forward').run())
+    expect(current()).toBe('B.md')
+  })
+
+  it('does not offer to reopen a note that was deleted rather than closed', () => {
+    seed({ 'A.md': 'a' })
+    const rendered = renderHook(() => useCommands())
+    const reopen = (): Command => find(rendered.result.current, 'nav:reopen-tab')
+
+    act(() => useAppStore.getState().openPath('A.md'))
+    // `deleteNote` blanks the tab's path instead of closing the tab; inferring
+    // closures from that used to offer the deleted note back.
+    act(() => {
+      void useAppStore.getState().deleteNote('A.md')
+    })
+    expect(useAppStore.getState().notes.has('A.md')).toBe(false)
+
+    expect(reopen().enabled?.()).toBe(false)
+    act(() => reopen().run())
+    expect(useAppStore.getState().activePane().tabs.map((t) => t.path)).toEqual([null])
+  })
+
+  it('drops a closed tab whose note is deleted before it is reopened', () => {
+    seed({ 'A.md': 'a', 'B.md': 'b' })
+    const rendered = renderHook(() => useCommands())
+    const reopen = (): Command => find(rendered.result.current, 'nav:reopen-tab')
+
+    act(() => useAppStore.getState().openPath('A.md'))
+    act(() => useAppStore.getState().openPath('B.md', { newTab: true }))
+    act(() => find(rendered.result.current, 'nav:close-tab').run())
+    expect(reopen().enabled?.()).toBe(true)
+
+    act(() => {
+      void useAppStore.getState().deleteNote('B.md')
+    })
+    expect(reopen().enabled?.()).toBe(false)
+    act(() => reopen().run())
+    expect(useAppStore.getState().activePane().tabs.map((t) => t.path)).toEqual(['A.md'])
+  })
+
+  it('opens the right sidebar on its local graph tab', () => {
+    seed({ 'A.md': 'a' })
+    const rendered = renderHook(() => useCommands())
+    const localGraph = (): Command => find(rendered.result.current, 'nav:local-graph')
+
+    useAppStore.setState({ rightSidebarOpen: false })
+    expect(localGraph().enabled?.()).toBe(false)
+
+    act(() => useAppStore.getState().openPath('A.md'))
+    expect(localGraph().enabled?.()).toBe(true)
+    act(() => localGraph().run())
+
+    expect(useAppStore.getState().rightSidebarOpen).toBe(true)
+    expect(localStorage.getItem('spacefore.rightSidebarTab')).toBe('graph')
+  })
+
   it('reopens the last closed tab', () => {
     seed({ 'A.md': 'a', 'B.md': 'b' })
     const rendered = renderHook(() => useCommands())
@@ -296,9 +382,8 @@ describe('navigation commands', () => {
     act(() => useAppStore.getState().openPath('A.md'))
     act(() => useAppStore.getState().openPath('B.md', { newTab: true }))
 
-    const pane = useAppStore.getState().activePane()
-    const tabB = pane.tabs.find((tab) => tab.path === 'B.md')!
-    act(() => useAppStore.getState().closeTab(pane.id, tabB.id))
+    // Closing goes through the command, which is what records the closure.
+    act(() => find(rendered.result.current, 'nav:close-tab').run())
     expect(useAppStore.getState().activePane().tabs.map((t) => t.path)).toEqual(['A.md'])
 
     expect(reopen().enabled?.()).toBe(true)

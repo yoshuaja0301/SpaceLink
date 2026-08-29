@@ -1,6 +1,6 @@
 import { renderInline, renderMarkdown } from './render'
 import type { RenderContext } from './render'
-import { slugifyHeading } from './parse'
+import { extractHeadings, slugifyHeading } from './parse'
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -36,6 +36,27 @@ const VAULT: Record<string, string> = {
   'Loop1.md': 'one\n\n![[Loop2]]',
   'Loop2.md': 'two\n\n![[Loop1]]',
   'Sections.md': '# One\n\nfirst para\n\n## Two\n\nsecond para\n\n```sh\n# not a heading\n```\n\n# Three\n\nthird para',
+  // Task-ownership fixtures: a host that transcludes, and notes that own tasks.
+  'Daily.md': '- [ ] host A\n- [x] host B\n\n![[Tasks]]\n',
+  'Tasks.md': '- [ ] embedded one\n- [ ] embedded two\n',
+  'Meta.md': '---\ntitle: Meta\ntags: [a]\n---\n\n# Meta\n\n- [ ] after frontmatter\n',
+  'Chapters.md': '# One\n\n- [ ] under one\n\n# Two\n\n- [ ] under two\n- [x] also two\n',
+  'Blocks.md': 'intro\n\n- [ ] pick me ^task1\n\noutro\n',
+  'Chain1.md': '- [ ] chain one\n\n![[Chain2]]\n',
+  'Chain2.md': '- [ ] chain two\n\n![[Chain3]]\n',
+  'Chain3.md': '- [x] chain three\n',
+  'Logs.md': '## Log\n\nembedded log\n',
+}
+
+/**
+ * Replay the reading view's toggle rule on a rendered checkbox: take line
+ * `data-line` of the note named by `data-src`. The text that comes back is the
+ * task the reader actually clicked, or the line their click would corrupt.
+ */
+function sourceLineOf(box: Element): string {
+  const src = box.getAttribute('data-src')
+  const line = Number(box.getAttribute('data-line'))
+  return (VAULT[src ?? ''] ?? '').split('\n')[line] ?? ''
 }
 
 const vaultCtx: Partial<RenderContext> = {
@@ -413,6 +434,101 @@ describe('task lists', () => {
 })
 
 /* ------------------------------------------------------------------ *
+ * Task ownership: which file does a checkbox write to?
+ * ------------------------------------------------------------------ */
+
+describe('task checkbox ownership', () => {
+  it('stamps the host path on the host note checkboxes', () => {
+    const el = render('- [ ] one\n- [x] two', { currentPath: 'Note.md' })
+    const boxes = Array.from(el.querySelectorAll('input.task-checkbox'))
+    expect(boxes.map((b) => b.getAttribute('data-src'))).toEqual(['Note.md', 'Note.md'])
+    expect(boxes.map((b) => b.getAttribute('data-line'))).toEqual(['0', '1'])
+  })
+
+  it('names the embedded note on checkboxes inside a transclusion', () => {
+    const el = render(VAULT['Daily.md']!, { ...vaultCtx, currentPath: 'Daily.md' })
+    const boxes = Array.from(el.querySelectorAll('input.task-checkbox'))
+
+    expect(boxes.map((b) => [b.getAttribute('data-src'), b.getAttribute('data-line')])).toEqual([
+      ['Daily.md', '0'],
+      ['Daily.md', '1'],
+      ['Tasks.md', '0'],
+      ['Tasks.md', '1'],
+    ])
+    // Each pair addresses the task the reader sees, so ticking the first
+    // transcluded box can no longer rewrite "host A" in the note on screen.
+    expect(boxes.map(sourceLineOf)).toEqual([
+      '- [ ] host A',
+      '- [x] host B',
+      '- [ ] embedded one',
+      '- [ ] embedded two',
+    ])
+  })
+
+  it('counts the embedded note frontmatter in data-line', () => {
+    const el = render('![[Meta]]', { ...vaultCtx, currentPath: 'Host.md' })
+    const box = el.querySelector('.embed-body input.task-checkbox')!
+    expect(box.getAttribute('data-src')).toBe('Meta.md')
+    expect(box.getAttribute('data-line')).toBe('7')
+    expect(sourceLineOf(box)).toBe('- [ ] after frontmatter')
+  })
+
+  it('keeps data-line whole-file relative for ![[Note#Heading]]', () => {
+    const el = render('![[Chapters#Two]]', { ...vaultCtx, currentPath: 'Host.md' })
+    const boxes = Array.from(el.querySelectorAll('.embed-body input.task-checkbox'))
+    expect(boxes.map((b) => b.getAttribute('data-src'))).toEqual(['Chapters.md', 'Chapters.md'])
+    // Not '2'/'3': the section starts on line 4 of the embedded file.
+    expect(boxes.map((b) => b.getAttribute('data-line'))).toEqual(['6', '7'])
+    expect(boxes.map(sourceLineOf)).toEqual(['- [ ] under two', '- [x] also two'])
+  })
+
+  it('keeps data-line whole-file relative for ![[Note#^block]]', () => {
+    const el = render('![[Blocks#^task1]]', { ...vaultCtx, currentPath: 'Host.md' })
+    const box = el.querySelector('.embed-body input.task-checkbox')!
+    expect(box.getAttribute('data-src')).toBe('Blocks.md')
+    expect(box.getAttribute('data-line')).toBe('2')
+    expect(sourceLineOf(box)).toBe('- [ ] pick me ^task1')
+  })
+
+  it('names the right file at every level of a nested embed', () => {
+    const el = render(VAULT['Chain1.md']!, { ...vaultCtx, currentPath: 'Chain1.md' })
+    const boxes = Array.from(el.querySelectorAll('input.task-checkbox'))
+    expect(boxes.map((b) => b.getAttribute('data-src'))).toEqual([
+      'Chain1.md',
+      'Chain2.md',
+      'Chain3.md',
+    ])
+    expect(boxes.map((b) => b.getAttribute('data-line'))).toEqual(['0', '0', '0'])
+    expect(boxes.map(sourceLineOf)).toEqual([
+      '- [ ] chain one',
+      '- [ ] chain two',
+      '- [x] chain three',
+    ])
+  })
+
+  it('leaves the host checkboxes alone when the embed target does not exist', () => {
+    const el = render('- [ ] host A\n- [x] host B\n\n![[Ghost]]\n', {
+      ...vaultCtx,
+      currentPath: 'Daily.md',
+    })
+    expect(el.querySelector('div.embed')).toBeNull()
+    expect(el.querySelector('span.embed-missing')?.textContent).toBe('![[Ghost]]')
+    const boxes = Array.from(el.querySelectorAll('input.task-checkbox'))
+    expect(boxes.map((b) => [b.getAttribute('data-src'), b.getAttribute('data-line')])).toEqual([
+      ['Daily.md', '0'],
+      ['Daily.md', '1'],
+    ])
+  })
+
+  it('omits data-src entirely when the context names no note', () => {
+    const el = dom(renderMarkdown('- [ ] orphan', { currentPath: '', resolveLink: () => null }))
+    const box = el.querySelector('input.task-checkbox')!
+    // Omitted rather than empty, so the UI's `dataset.src ?? path` falls back.
+    expect(box.hasAttribute('data-src')).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ *
  * Math
  * ------------------------------------------------------------------ */
 
@@ -619,6 +735,36 @@ describe('headings', () => {
     const el = render('# Notes on [[Known|Topic]] and #meta')
     const h1 = el.querySelector('h1')!
     expect(h1.getAttribute('id')).toBe(slugifyHeading('Notes on Topic and #meta'))
+  })
+
+  it('numbers repeated headings exactly as extractHeadings does', () => {
+    const source = '# Daily\n\n## Log\n\nfirst\n\n## Log\n\nsecond\n\n## Log\n\nthird'
+    const el = render(source)
+    const ids = Array.from(el.querySelectorAll('h1, h2')).map((h) => h.getAttribute('id'))
+
+    expect(ids).toEqual(['daily', 'log', 'log-2', 'log-3'])
+    // The outline panel and the palette look headings up by the parser's slug.
+    expect(ids).toEqual(extractHeadings(source, 0).map((h) => h.slug))
+    // …which only works because the ids are unique: getElementById takes one.
+    expect(new Set(ids).size).toBe(ids.length)
+
+    for (const h of Array.from(el.querySelectorAll('h2'))) {
+      const anchor = h.querySelector('a.heading-anchor')!
+      expect(anchor.getAttribute('href')).toBe(`#${h.getAttribute('id')}`)
+    }
+  })
+
+  it('numbers host headings without counting an embedded note', () => {
+    const source = '## Log\n\n![[Logs]]\n\n## Log\n'
+    const el = render(source, { ...vaultCtx, currentPath: 'Host.md' })
+    const hostIds = Array.from(el.querySelectorAll('h2'))
+      .filter((h) => h.closest('.embed-body') === null)
+      .map((h) => h.getAttribute('id'))
+
+    expect(hostIds).toEqual(extractHeadings(source, 0).map((h) => h.slug))
+    expect(hostIds).toEqual(['log', 'log-2'])
+    // The embed numbers from its own file, so its slugs match its own parse.
+    expect(el.querySelector('.embed-body h2')!.getAttribute('id')).toBe('log')
   })
 })
 

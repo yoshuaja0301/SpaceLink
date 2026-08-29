@@ -10,8 +10,13 @@
  * changes; store *writes* go through `useAppStore.getState()` at call time so a
  * handler never closes over a stale action.
  */
-import type { DragEvent as ReactDragEvent, JSX, MouseEvent as ReactMouseEvent } from 'react'
-import { useState, useSyncExternalStore } from 'react'
+import type {
+  DragEvent as ReactDragEvent,
+  JSX,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from 'react'
+import { useRef, useState, useSyncExternalStore } from 'react'
 
 import type { Note, NotePath, Pane, Tab, ViewMode } from '../types'
 import { basename, useAppStore } from '../state/store'
@@ -79,6 +84,28 @@ export function openBlankTab(paneId: string): void {
   }))
 }
 
+/**
+ * A closed tab can only come back when what it showed still exists — a note
+ * deleted while its tab was closed must not be resurrected as an empty buffer.
+ */
+export function isReopenable(tab: Tab, notes: Map<NotePath, Note>): boolean {
+  return tab.kind !== 'note' || tab.path === null || notes.has(tab.path)
+}
+
+/**
+ * Reopen the most recently closed tab in `paneId`, skipping any whose note has
+ * since been deleted. Both the tab menu and the `nav:reopen-tab` command come
+ * through here, so there is exactly one closed-tab stack.
+ */
+export function reopenClosedTab(paneId: string): void {
+  const store = useAppStore.getState()
+  const tab = popClosed((candidate) => isReopenable(candidate, store.notes))
+  if (!tab) return
+  if (tab.kind !== 'note') store.openView(tab.kind, { paneId })
+  else if (tab.path) store.openPath(tab.path, { paneId, newTab: true, mode: tab.mode })
+  else openBlankTab(paneId)
+}
+
 const MODES: { mode: ViewMode; icon: 'edit' | 'columns' | 'eye'; label: string }[] = [
   { mode: 'edit', icon: 'edit', label: 'Edit' },
   { mode: 'split', icon: 'columns', label: 'Split' },
@@ -108,6 +135,7 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
   const { menu, open, close } = useContextMenu()
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
+  const tabsRef = useRef<HTMLDivElement | null>(null)
 
   // Navigation history is module state, so React has to be told when it moves.
   useSyncExternalStore(subscribe, getVersion)
@@ -115,6 +143,9 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
   const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId) ?? null
 
   /* ---- navigation ---------------------------------------------------- */
+
+  /** History entries pointing at a deleted note are stepped over, not opened. */
+  const exists = (path: NotePath): boolean => notes.has(path)
 
   const navigate = (path: NotePath | null): void => {
     if (path) useAppStore.getState().openPath(path, { paneId: pane.id })
@@ -141,14 +172,7 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
     }
   }
 
-  const reopenClosed = (): void => {
-    const tab = popClosed()
-    if (!tab) return
-    const store = useAppStore.getState()
-    if (tab.kind !== 'note') store.openView(tab.kind, { paneId: pane.id })
-    else if (tab.path) store.openPath(tab.path, { paneId: pane.id, newTab: true, mode: tab.mode })
-    else openBlankTab(pane.id)
-  }
+  const reopenClosed = (): void => reopenClosedTab(pane.id)
 
   /* ---- pane / view actions ------------------------------------------- */
 
@@ -277,7 +301,7 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
       id: 'reopen',
       label: 'Reopen closed tab',
       icon: 'arrow-left',
-      disabled: !canReopen(),
+      disabled: !canReopen((tab) => isReopenable(tab, notes)),
       onSelect: reopenClosed,
     },
     { id: 'sep-more', label: '', separator: true },
@@ -303,6 +327,45 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
     },
   ]
 
+  /* ---- keyboard -------------------------------------------------------- */
+
+  /** Selection and focus move together, so only one tab is ever a tab stop. */
+  const selectAndFocus = (index: number): void => {
+    const tab = pane.tabs[index]
+    if (!tab) return
+    useAppStore.getState().setActiveTab(pane.id, tab.id)
+    tabsRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus()
+  }
+
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, tab: Tab, index: number): void => {
+    const count = pane.tabs.length
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      useAppStore.getState().setActiveTab(pane.id, tab.id)
+      return
+    }
+    // The close button is out of the tab order, so the tab itself carries the
+    // shortcut that reaches it.
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault()
+      closeOne(tab)
+      return
+    }
+    const next =
+      event.key === 'ArrowRight'
+        ? (index + 1) % count
+        : event.key === 'ArrowLeft'
+          ? (index - 1 + count) % count
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? count - 1
+              : null
+    if (next === null) return
+    event.preventDefault()
+    selectAndFocus(next)
+  }
+
   const openMoreMenu = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     const rect = event.currentTarget.getBoundingClientRect()
     open({ clientX: rect.left, clientY: rect.bottom, preventDefault: () => event.preventDefault() }, moreMenuItems())
@@ -318,8 +381,8 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
           type="button"
           aria-label="Navigate back"
           data-tooltip="Back"
-          disabled={!canBack(pane.id)}
-          onClick={() => navigate(back(pane.id))}
+          disabled={!canBack(pane.id, exists)}
+          onClick={() => navigate(back(pane.id, exists))}
         >
           <Icon name="arrow-left" size={15} />
         </button>
@@ -327,8 +390,8 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
           type="button"
           aria-label="Navigate forward"
           data-tooltip="Forward"
-          disabled={!canForward(pane.id)}
-          onClick={() => navigate(forward(pane.id))}
+          disabled={!canForward(pane.id, exists)}
+          onClick={() => navigate(forward(pane.id, exists))}
         >
           <Icon name="arrow-right" size={15} />
         </button>
@@ -338,6 +401,7 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
         className="tabs"
         role="tablist"
         aria-label="Open tabs"
+        ref={tabsRef}
         onDoubleClick={(event) => {
           // Only the strip itself — a double-click on a tab must not spawn one.
           if (event.target === event.currentTarget) openBlankTab(pane.id)
@@ -375,19 +439,16 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
               key={tab.id}
               className={className}
               role="tab"
+              id={`pane-tab-${tab.id}`}
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
+              aria-controls={`pane-panel-${pane.id}`}
               data-tab-id={tab.id}
               data-path={tab.path ?? ''}
               title={tab.path ?? title}
               draggable
               onClick={() => useAppStore.getState().setActiveTab(pane.id, tab.id)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  useAppStore.getState().setActiveTab(pane.id, tab.id)
-                }
-              }}
+              onKeyDown={(event) => onTabKeyDown(event, tab, index)}
               onMouseDown={(event) => {
                 // Suppress the middle-click autoscroll cursor; the close itself
                 // happens on `auxclick`, after the button is released.
@@ -418,6 +479,9 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
                 type="button"
                 className="tab-close"
                 aria-label={`Close ${title}`}
+                // Reached from the tab itself (Delete/Backspace) rather than by
+                // Tab, which would otherwise stop on every tab's close button.
+                tabIndex={-1}
                 onClick={(event) => {
                   event.stopPropagation()
                   closeOne(tab)

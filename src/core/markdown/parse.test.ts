@@ -258,6 +258,33 @@ describe('extractWikiLinks', () => {
     expect(link!.line).toBe(2)
   })
 
+  it('only lets an unterminated comment run to the end of the note when it opens a block', () => {
+    // markdown-it renders a mid-paragraph `<!--` with no `-->` as ordinary
+    // text, so masking to the end here would drop every link, tag and heading
+    // below it from the index while the reading view still showed them.
+    const inline = 'text <!-- unterminated\n\n# Heading\n\n[[Link]] #tag2'
+    expect(extractWikiLinks(inline, 0).map((l) => l.target)).toEqual(['Link'])
+    expect(extractTags(inline, 0).map((t) => t.tag)).toEqual(['tag2'])
+    expect(extractHeadings(inline, 0).map((h) => h.slug)).toEqual(['heading'])
+
+    // At block start markdown-it's html_block does swallow the rest, so we do.
+    const block = '<!-- unterminated\n\n# Heading\n\n[[Link]] #tag2'
+    expect(extractWikiLinks(block, 0)).toEqual([])
+    expect(extractTags(block, 0)).toEqual([])
+    expect(extractHeadings(block, 0)).toEqual([])
+  })
+
+  it('masks a fence indented into a list item', () => {
+    const body = ['- Steps:', '', '    ~~~', "    grep '#secrettag' *.md", '    [[Secret Note]]', '    ~~~', '', '[[Live]] #live'].join('\n')
+    expect(extractWikiLinks(body, 0).map((l) => l.target)).toEqual(['Live'])
+    expect(extractTags(body, 0).map((t) => t.tag)).toEqual(['live'])
+  })
+
+  it('still closes a column-zero fence with a closer indented up to three spaces', () => {
+    const body = '```\n[[Fenced]]\n   ```\n[[After]]'
+    expect(extractWikiLinks(body, 0).map((l) => l.target)).toEqual(['After'])
+  })
+
   it('handles an unclosed code fence by masking to the end of the note', () => {
     expect(extractWikiLinks('[[Before]]\n```\n[[After]]\n', 0).map((l) => l.target)).toEqual(['Before'])
   })
@@ -336,6 +363,20 @@ describe('extractTags', () => {
     expect(extractTags('#start of line', 0).map((t) => t.tag)).toEqual(['start'])
     expect(extractTags('text #middle', 0).map((t) => t.tag)).toEqual(['middle'])
     expect(extractTags('(#paren) [#bracket] {#brace}', 0).map((t) => t.tag)).toEqual(['paren', 'bracket', 'brace'])
+  })
+
+  it('matches inside emphasis, inline html and table cells, exactly as the renderer does', () => {
+    // Mirrors render.test.ts's `still matches after emphasis markers and
+    // brackets`: the reading view emits a chip for each of these, so the index
+    // has to record them or the chip searches for a tag nothing carries.
+    const body = '**#important** matters, *#idea*, ~~#done~~, _#tag_, see <b>#html</b>\n|#a|#b|'
+    const tags = extractTags(body, 0)
+    expect(tags.map((t) => t.tag)).toEqual(['important', 'idea', 'done', 'tag', 'html', 'a', 'b'])
+    for (const tag of tags) expect(body.slice(tag.start, tag.end)).toBe(`#${tag.tag}`)
+  })
+
+  it('drops a dangling trailing dash or underscore, as the renderer does', () => {
+    expect(extractTags('#done- #snake_ #work/ x', 0).map((t) => t.tag)).toEqual(['done', 'snake', 'work'])
   })
 
   it('rejects a tag that is all digits', () => {
@@ -435,6 +476,12 @@ describe('extractHeadings', () => {
   it('dedupes repeated slugs with -2, -3 suffixes', () => {
     const headings = extractHeadings('# Notes\n## Notes\n### Notes\n## Other\n#### notes\n', 0)
     expect(headings.map((h) => h.slug)).toEqual(['notes', 'notes-2', 'notes-3', 'other', 'notes-4'])
+  })
+
+  it('leaves a heading with no slug out of the -2 numbering', () => {
+    // The renderer emits no id at all for these, so numbering them would hand
+    // the outline an anchor the reading view never carries.
+    expect(extractHeadings('# \u{1F389}\n\n# \u{1F389}', 0).map((h) => h.slug)).toEqual(['', ''])
   })
 
   it('supports setext headings', () => {
@@ -652,6 +699,23 @@ describe('parseNote', () => {
     const hostile = ['---', 'a: [[[[', '---', '[[[[[[', '```', '`'.repeat(200), '[x](((((', '#'.repeat(50), '<!--', '$$'].join('\n')
     expect(() => parseNote(hostile, 'Hostile.md')).not.toThrow()
   })
+
+  it('stays linear on a note full of unmatched brackets', () => {
+    // A pasted array or LaTeX fragment: every scan that restarted at each `[`
+    // and ran to the end of the line made this quadratic — 100 KB took ~50 s
+    // on the main thread, at vault load and again on every keystroke. The
+    // timeout is the assertion; the work itself is now milliseconds.
+    const brackets = parseNote('['.repeat(100_000), 'Brackets.md')
+    expect(brackets.links).toEqual([])
+    expect(brackets.markdownLinks).toEqual([])
+
+    const openers = parseNote('[]('.repeat(33_000), 'Openers.md')
+    expect(openers.markdownLinks).toEqual([])
+
+    const images = parseNote('!['.repeat(50_000), 'Images.md')
+    expect(images.markdownLinks).toEqual([])
+    expect(toPlainText('!['.repeat(50_000))).toContain('![')
+  }, 2000)
 
   it('parses a large synthetic note correctly and quickly', () => {
     const block = [

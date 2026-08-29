@@ -116,6 +116,19 @@ function normalizeTarget(target: string): string {
 }
 
 /**
+ * True when an embed names a file rather than a note: any target carrying an
+ * extension that is not `.md`. `![[diagram.png]]` and `![[photos/trip.jpg|400]]`
+ * are attachments the renderer resolves through `resolveAsset`;
+ * `![[Concepts/Atomic Notes]]` is a note.
+ */
+function isAttachmentTarget(target: string): boolean {
+  const clean = cleanTarget(target)
+  const dot = clean.lastIndexOf('.')
+  if (dot <= clean.lastIndexOf('/') + 1) return false
+  return clean.slice(dot + 1).toLowerCase() !== 'md'
+}
+
+/**
  * Keys to try for one link, most specific first: the target itself, the target
  * without `.md`, and — when the target is a path — its last segment, so
  * `[[folder/Note]]` still finds a `Note` that lives somewhere else.
@@ -135,27 +148,56 @@ function lookupKeys(key: string): string[] {
   return keys
 }
 
+/** A candidate that only got into the bucket through a frontmatter alias. */
+const ALIAS_TIER = 3
+
 /**
- * Total order over homonyms: a note in the same folder as the linking note
- * wins, then the shortest path, then lexicographic order. The last clause is
- * what keeps resolution independent of vault iteration order.
+ * How directly a candidate answers to one lookup key, judged from its own
+ * shape: the whole path, the path plus `.md`, the basename, or — anything else
+ * is in the bucket because of an alias — a frontmatter alias.
  */
-function compareCandidates(a: NotePath, b: NotePath, dir: string): number {
+function tierOf(candidate: NotePath, key: string): number {
+  const lower = candidate.toLowerCase()
+  if (lower === key) return 0
+  if (lower === `${key}.md`) return 1
+  if (basenameOf(candidate).toLowerCase() === key) return 2
+  return ALIAS_TIER
+}
+
+/**
+ * Total order over the homonyms of one lookup key. An alias never outranks a
+ * note carrying the key as a name of its own. Among the rest, a bare `[[Note]]`
+ * means the note next door before it means the one at the vault root, so the
+ * same-folder test leads and the tier follows; a written path
+ * (`[[folder/Note]]`) is matched exactly first, so there the tier leads. Then
+ * the shortest path, then lexicographic order — that last clause is what keeps
+ * resolution independent of vault iteration order.
+ */
+function compareCandidates(a: NotePath, b: NotePath, dir: string, key: string, bare: boolean): number {
+  const aTier = tierOf(a, key)
+  const bTier = tierOf(b, key)
+  const aAlias = aTier === ALIAS_TIER ? 1 : 0
+  const bAlias = bTier === ALIAS_TIER ? 1 : 0
+  if (aAlias !== bAlias) return aAlias - bAlias
   const aLocal = dirnameOf(a) === dir ? 0 : 1
   const bLocal = dirnameOf(b) === dir ? 0 : 1
+  if (bare && aLocal !== bLocal) return aLocal - bLocal
+  if (aTier !== bTier) return aTier - bTier
   if (aLocal !== bLocal) return aLocal - bLocal
   if (a.length !== b.length) return a.length - b.length
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-/** Best candidate under `compareCandidates`, or null when the list is empty. */
-function pickCandidate(candidates: NotePath[], fromPath: NotePath): NotePath | null {
+/** Best candidate for `key` under `compareCandidates`, or null when there is none. */
+function pickCandidate(candidates: NotePath[], fromPath: NotePath, key: string): NotePath | null {
   if (candidates.length === 0) return null
   const dir = dirnameOf(fromPath)
+  // A key without a slash was written as a bare name, not as a path.
+  const bare = !key.includes('/')
   let best = candidates[0]!
   for (let i = 1; i < candidates.length; i += 1) {
     const candidate = candidates[i]!
-    if (compareCandidates(candidate, best, dir) < 0) best = candidate
+    if (compareCandidates(candidate, best, dir, key, bare) < 0) best = candidate
   }
   return best
 }
@@ -182,6 +224,9 @@ export function emptyIndex(): VaultIndex {
  */
 export function buildIndex(notes: Map<NotePath, Note>): VaultIndex {
   const index = emptyIndex()
+  // `#Project` and `#project` are one tag; the first casing the vault shows is
+  // the one the tag panel and the graph display it under.
+  const tagCasing = new Map<string, string>()
 
   /* Pass 1 — names and tags. ---------------------------------------- */
   for (const [path, note] of notes) {
@@ -207,9 +252,16 @@ export function buildIndex(notes: Map<NotePath, Note>): VaultIndex {
 
     const tagged = new Set<string>()
     for (const tag of note.parsed.allTags) {
-      if (!tag || tagged.has(tag)) continue
-      tagged.add(tag)
-      push(index.tags, tag, path)
+      if (!tag) continue
+      const key = tag.toLowerCase()
+      if (tagged.has(key)) continue
+      tagged.add(key)
+      let display = tagCasing.get(key)
+      if (display === undefined) {
+        display = tag
+        tagCasing.set(key, display)
+      }
+      push(index.tags, display, path)
     }
   }
 
@@ -222,6 +274,10 @@ export function buildIndex(notes: Map<NotePath, Note>): VaultIndex {
 
     for (const link of links) {
       const to = resolveLinkTarget(link.target, path, index)
+      // An embed of a file the vault has no note for is an attachment, not a
+      // missing note: recording it would draw a phantom node in the graph and
+      // count against the unresolved links of the note holding the picture.
+      if (to === null && link.embed && isAttachmentTarget(link.target)) continue
       const source = lines[link.line - 1] ?? ''
       const edge: LinkEdge = {
         from: path,
@@ -252,10 +308,13 @@ export function buildIndex(notes: Map<NotePath, Note>): VaultIndex {
  * a link that is *only* a fragment (`[[#Heading]]`) points inside the note it
  * was written in, so it resolves to `fromPath`.
  *
- * A candidate is classified by its own shape — a path whose basename equals the
- * lookup key got into that bucket as a basename, anything else got there
- * through an alias — so basenames always beat aliases regardless of the order
- * `byName` happens to hold them in.
+ * Homonyms are ranked, not bucketed: a candidate is classified by its own shape
+ * — a path whose basename equals the lookup key got into that bucket as a
+ * basename, anything else got there through an alias — so basenames always beat
+ * aliases regardless of the order `byName` happens to hold them in, and for a
+ * bare name the note in the same folder as `fromPath` beats a homonym sitting
+ * at the vault root (whose path *is* the bare name plus `.md`). A written path
+ * still matches exactly first.
  */
 export function resolveLinkTarget(target: string, fromPath: NotePath, index: VaultIndex): NotePath | null {
   const key = normalizeTarget(target)
@@ -264,24 +323,7 @@ export function resolveLinkTarget(target: string, fromPath: NotePath, index: Vau
   for (const candidateKey of lookupKeys(key)) {
     const candidates = index.byName.get(candidateKey)
     if (!candidates || candidates.length === 0) continue
-
-    const exact: NotePath[] = []
-    const withExtension: NotePath[] = []
-    const byBasename: NotePath[] = []
-    const byAlias: NotePath[] = []
-    for (const candidate of candidates) {
-      const lower = candidate.toLowerCase()
-      if (lower === candidateKey) exact.push(candidate)
-      else if (lower === `${candidateKey}.md`) withExtension.push(candidate)
-      else if (basenameOf(candidate).toLowerCase() === candidateKey) byBasename.push(candidate)
-      else byAlias.push(candidate)
-    }
-
-    const resolved =
-      pickCandidate(exact, fromPath) ??
-      pickCandidate(withExtension, fromPath) ??
-      pickCandidate(byBasename, fromPath) ??
-      pickCandidate(byAlias, fromPath)
+    const resolved = pickCandidate(candidates, fromPath, candidateKey)
     if (resolved !== null) return resolved
   }
 
@@ -403,11 +445,16 @@ export function getTagTree(index: VaultIndex): TagTreeNode[] {
     let fullTag = ''
     let node: TagBuildNode | undefined
     for (const segment of segments) {
-      fullTag = fullTag ? `${fullTag}/${segment}` : segment
-      node = level.get(segment)
-      if (!node) {
+      // Levels are keyed case-insensitively so `#Project/alpha` and
+      // `#project/beta` share a parent; the first casing seen is displayed.
+      const key = segment.toLowerCase()
+      node = level.get(key)
+      if (node) {
+        fullTag = node.fullTag
+      } else {
+        fullTag = fullTag ? `${fullTag}/${segment}` : segment
         node = { name: segment, fullTag, count: 0, notes: new Set(), children: new Map() }
-        level.set(segment, node)
+        level.set(key, node)
       }
       // Every ancestor carries these notes too — that is what `totalCount` is.
       for (const path of paths) node.notes.add(path)

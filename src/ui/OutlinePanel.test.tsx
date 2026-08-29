@@ -250,6 +250,14 @@ describe('OutlinePanel — current heading', () => {
     view.rerender(<OutlinePanel path="Guide.md" />)
     expect(view.container.querySelector('.outline-item.is-active')).toBeNull()
   })
+
+  it('stops listening when it unmounts', () => {
+    seed()
+    const remove = vi.spyOn(window, 'removeEventListener')
+    render(<OutlinePanel path="Guide.md" />).unmount()
+
+    expect(remove.mock.calls.some(([type]) => type === 'spacefore:preview-scroll')).toBe(true)
+  })
 })
 
 /* ------------------------------------------------------------------ *

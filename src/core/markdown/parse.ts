@@ -30,7 +30,8 @@
  * (shared by all five extractors through a one-entry cache), one line-index
  * build, and one scan per extractor. None of the regexes below contain nested
  * quantifiers over the same character set, so none of them can backtrack
- * catastrophically.
+ * catastrophically — and none of them may restart a scan from every `[`
+ * either, which is the cheaper-looking way to end up quadratic.
  */
 import type {
   HeadingRef,
@@ -86,21 +87,63 @@ function containsBlankLine(chars: string[], start: number, end: number): boolean
   return false
 }
 
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/
-const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
+const FENCE_OPEN = /^([ \t]*)(`{3,}|~{3,})(.*)$/
+const FENCE_CLOSE = /^([ \t]*)(`{3,}|~{3,})[ \t]*$/
+
+interface Fence {
+  marker: string
+  len: number
+  indent: number
+}
+
+/**
+ * The fence `line` opens, or null.
+ *
+ * Indentation is deliberately *not* capped at three columns: markdown-it
+ * measures a fence's indent relative to the enclosing block, so a `~~~` inside
+ * a list item opens a real code block even though it starts in column four.
+ */
+function openFence(line: string): Fence | null {
+  const m = FENCE_OPEN.exec(line)
+  const marker = m?.[2]
+  // A backtick fence's info string may not itself contain a backtick,
+  // which is what keeps `` `a` `` from opening a fence.
+  if (!m || !marker || (marker[0] === '`' && m[3]!.includes('`'))) return null
+  return { marker: marker[0]!, len: marker.length, indent: m[1]!.length }
+}
+
+/** Does `line` close `fence`? A closer may not be indented past its opener. */
+function closesFence(line: string, fence: Fence): boolean {
+  const m = FENCE_CLOSE.exec(line)
+  const marker = m?.[2]
+  if (!m || !marker) return false
+  if (marker[0] !== fence.marker || marker.length < fence.len) return false
+  return m[1]!.length <= Math.max(fence.indent, 3)
+}
 
 /** Drop a trailing `\r` so CRLF files behave like LF files. */
 function chomp(line: string): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line
 }
 
+/** True when nothing but up to three spaces precedes `offset` on its line. */
+function atBlockStart(text: string, offset: number): boolean {
+  let i = offset - 1
+  let indent = 0
+  while (i >= 0 && text[i] === ' ') {
+    indent += 1
+    i -= 1
+  }
+  return indent <= 3 && (i < 0 || text[i] === '\n')
+}
+
 /**
  * Build the inert-region mask for `body`.
  *
- * Pass 1 walks lines and blanks fenced code blocks (``` and ~~~, indented up
- * to three spaces, with or without an info string; an unclosed fence runs to
- * the end of the note). Pass 2 walks what survives and blanks inline code
- * spans, HTML comments and `$$…$$` math blocks.
+ * Pass 1 walks lines and blanks fenced code blocks (``` and ~~~, with or
+ * without an info string; an unclosed fence runs to the end of the note).
+ * Pass 2 walks what survives and blanks inline code spans, HTML comments and
+ * `$$…$$` math blocks.
  */
 function buildMask(body: string): string {
   const n = body.length
@@ -108,27 +151,20 @@ function buildMask(body: string): string {
 
   /* ---- pass 1: fenced code blocks ---------------------------------- */
   let lineStart = 0
-  let fence: { marker: string; len: number; start: number } | null = null
+  let fence: (Fence & { start: number }) | null = null
   while (lineStart <= n) {
     let lineEnd = body.indexOf('\n', lineStart)
     if (lineEnd === -1) lineEnd = n
     const line = chomp(body.slice(lineStart, lineEnd))
 
     if (fence) {
-      const close = FENCE_CLOSE.exec(line)
-      const marker = close?.[1]
-      if (marker && marker[0] === fence.marker && marker.length >= fence.len) {
+      if (closesFence(line, fence)) {
         blank(out, fence.start, lineEnd)
         fence = null
       }
     } else {
-      const open = FENCE_OPEN.exec(line)
-      const marker = open?.[1]
-      // A backtick fence's info string may not itself contain a backtick,
-      // which is what keeps `` `a` `` from opening a fence.
-      if (open && marker && !(marker[0] === '`' && open[2]!.includes('`'))) {
-        fence = { marker: marker[0]!, len: marker.length, start: lineStart }
-      }
+      const open = openFence(line)
+      if (open) fence = { ...open, start: lineStart }
     }
 
     if (lineEnd === n) break
@@ -137,6 +173,7 @@ function buildMask(body: string): string {
   if (fence) blank(out, fence.start, n)
 
   /* ---- pass 2: inline code, comments, block math -------------------- */
+  let moreComments = true
   let i = 0
   while (i < n) {
     const c = out[i]
@@ -166,10 +203,25 @@ function buildMask(body: string): string {
         i += run
       }
     } else if (c === '<' && out[i + 1] === '!' && out[i + 2] === '-' && out[i + 3] === '-') {
-      const idx = indexOfSeq(out, '-->', i + 4)
-      const end = idx === -1 ? n : idx + 3
-      blank(out, i, end)
-      i = end
+      // Once no `-->` follows, none follows any later `<!--` either: every
+      // region we blank is behind us, so the tail can only lose delimiters.
+      const idx = moreComments ? indexOfSeq(out, '-->', i + 4) : -1
+      if (idx !== -1) {
+        blank(out, i, idx + 3)
+        i = idx + 3
+      } else {
+        moreComments = false
+        // markdown-it only lets an unterminated comment swallow the rest of the
+        // note when it opens a block; mid-line it is ordinary text. Masking to
+        // the end there would hide every link, tag and heading below a stray
+        // `<!--` from the index while the reading view still shows them.
+        if (atBlockStart(body, i)) {
+          blank(out, i, n)
+          i = n
+        } else {
+          i += 4
+        }
+      }
     } else if (c === '$' && out[i + 1] === '$') {
       const idx = indexOfSeq(out, '$$', i + 2)
       if (idx === -1) {
@@ -300,6 +352,33 @@ function isInternalUrl(url: string): boolean {
 }
 
 /**
+ * For every `[` in `mask`, the `]` that closes it, or -1.
+ *
+ * One stack pass rather than a bracket walk from each `[`: a `]` pairs with the
+ * most recent unclosed `[`, which is exactly where a walk's depth counter would
+ * reach zero. Walking from every `[` cost one scan *per* bracket, so a line of
+ * stray `[` — a pasted array or LaTeX fragment — made parsing quadratic.
+ */
+function matchBrackets(mask: string): Int32Array {
+  const close = new Int32Array(mask.length).fill(-1)
+  const open: number[] = []
+  for (let i = 0; i < mask.length; i += 1) {
+    const c = mask[i]
+    if (c === '\\') {
+      i += 1
+    } else if (c === '\n') {
+      open.length = 0 // link text never spans a line break
+    } else if (c === '[') {
+      open.push(i)
+    } else if (c === ']') {
+      const from = open.pop()
+      if (from !== undefined) close[from] = i
+    }
+  }
+  return close
+}
+
+/**
  * `[text](url)`, `[text](<url with spaces>)` and `[text](url "title")`.
  *
  * Image syntax (`![alt](src)`) and wiki links are deliberately skipped —
@@ -311,9 +390,13 @@ export function extractMarkdownLinks(body: string, bodyOffset: number): Markdown
   const n = mask.length
   const out: MarkdownLink[] = []
   const wikiAt = /\[\[[^[\]\n]*\]\]/y
+  const closeOf = matchBrackets(mask)
+  // Every link ends in `)`, so once the last one is behind us there is nothing
+  // left to find — and no reason to re-scan the tail from every `[`.
+  const lastParen = mask.lastIndexOf(')')
 
   let i = 0
-  while (i < n) {
+  while (i <= lastParen) {
     if (mask[i] !== '[') {
       i += 1
       continue
@@ -334,24 +417,7 @@ export function extractMarkdownLinks(body: string, bodyOffset: number): Markdown
     }
 
     // --- link text, tracking nested brackets, single line only ---------
-    let depth = 0
-    let textEnd = -1
-    for (let j = i; j < n; j += 1) {
-      const c = mask[j]
-      if (c === '\n') break
-      if (c === '\\') {
-        j += 1
-        continue
-      }
-      if (c === '[') depth += 1
-      else if (c === ']') {
-        depth -= 1
-        if (depth === 0) {
-          textEnd = j
-          break
-        }
-      }
-    }
+    const textEnd = closeOf[i]!
     if (textEnd === -1 || mask[textEnd + 1] !== '(') {
       i += 1
       continue
@@ -445,13 +511,19 @@ export function extractMarkdownLinks(body: string, bodyOffset: number): Markdown
  * ------------------------------------------------------------------ */
 
 /**
- * `#tag`, preceded by start-of-line, whitespace or an opening bracket. The
- * character class excludes `.,):;!?` so trailing punctuation naturally falls
- * outside the tag.
+ * `#tag`. The name class excludes `.,):;!?` so trailing punctuation naturally
+ * falls outside the tag.
  */
 function tagRegex(): RegExp {
-  return /(^|[\s\(\[\{])#([\p{L}\p{N}_/-]+)/gmu
+  return /#[\p{L}\p{N}_/-]+/gu
 }
+
+/**
+ * A `#` opens a tag unless it is glued to the end of a word or a url — the
+ * same admission rule as `TAG_BLOCKED_PREFIX` in render.ts, which is what lets
+ * `**#tag**` be a tag in the reading view *and* in the index.
+ */
+const TAG_BLOCKED_PREFIX = /[\p{L}\p{N}/\\.\-&=?%#]/u
 
 const ALL_DIGITS = /^\p{N}+$/u
 
@@ -477,11 +549,12 @@ export function extractTags(body: string, bodyOffset: number): TagRef[] {
   let m: RegExpExecArray | null
 
   while ((m = re.exec(mask)) !== null) {
-    const prefix = m[1]!
-    const hash = m.index + prefix.length
+    const hash = m.index
+    const prefix = hash === 0 ? '' : mask[hash - 1]!
+    if (prefix !== '' && TAG_BLOCKED_PREFIX.test(prefix)) continue
 
-    // A dangling `/` cannot end a tag: `#work/` is the tag `work`.
-    const tag = m[2]!.replace(/\/+$/, '')
+    // A dangling separator cannot end a tag: `#work/` is the tag `work`.
+    const tag = m[0]!.slice(1).replace(/[-/_]+$/, '')
     if (!tag) continue
     // `#1` is a number, not a tag.
     if (ALL_DIGITS.test(tag)) continue
@@ -510,8 +583,8 @@ const LIST_MARKER = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/
 
 export function slugifyHeading(text: string): string {
   return text
-    .replace(/!?\[\[([^\]\n]*)\]\]/g, (_m, inner: string) => wikiDisplay(inner))
-    .replace(/!?\[([^\]]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/!?\[\[([^[\]\n]*)\]\]/g, (_m, inner: string) => wikiDisplay(inner))
+    .replace(/!?\[([^[\]\n]*)\]\([^[)\n]*\)/g, '$1')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s_-]+/gu, '')
     .trim()
@@ -540,8 +613,10 @@ export function extractHeadings(body: string, bodyOffset: number): HeadingRef[] 
   const push = (level: number, rawText: string, start: number, line: number): void => {
     const text = rawText.trim()
     const base = slugifyHeading(text)
-    const seen = slugCounts.get(base) ?? 0
-    slugCounts.set(base, seen + 1)
+    // A heading with no slug gets no id from the renderer, so it stays out of
+    // the `-2`/`-3` numbering too.
+    const seen = base === '' ? 0 : (slugCounts.get(base) ?? 0)
+    if (base !== '') slugCounts.set(base, seen + 1)
     out.push({
       level,
       text,
@@ -1038,19 +1113,16 @@ const TABLE_DIVIDER = /^[\s|:-]+$/
 function stripToProse(text: string): string {
   /* ---- drop fenced code blocks -------------------------------------- */
   const kept: string[] = []
-  let fence: { marker: string; len: number } | null = null
+  let fence: Fence | null = null
   for (const source of text.split('\n')) {
     const line = chomp(source)
     if (fence) {
-      const close = FENCE_CLOSE.exec(line)
-      const marker = close?.[1]
-      if (marker && marker[0] === fence.marker && marker.length >= fence.len) fence = null
+      if (closesFence(line, fence)) fence = null
       continue
     }
-    const open = FENCE_OPEN.exec(line)
-    const marker = open?.[1]
-    if (open && marker && !(marker[0] === '`' && open[2]!.includes('`'))) {
-      fence = { marker: marker[0]!, len: marker.length }
+    const open = openFence(line)
+    if (open) {
+      fence = open
       continue
     }
     kept.push(line)
@@ -1094,12 +1166,16 @@ function stripToProse(text: string): string {
   /* ---- inline syntax -------------------------------------------------- */
   out = out.replace(/<!--[\s\S]*?-->/g, '')
   out = out.replace(/\$\$[\s\S]*?\$\$/g, ' ')
-  out = out.replace(/!\[\[[^\]\n]*\]\]/g, '') // image / note embeds
-  out = out.replace(/!\[[^\]]*\]\([^)\n]*\)/g, '') // markdown images
-  out = out.replace(/\[\[([^\]\n]+)\]\]/g, (_m, inner: string) => wikiDisplay(inner))
+  // Every class below excludes `[` as well as `]`: with `[` allowed, each stray
+  // `[` restarted a scan that ran to the end of the note, which is what made
+  // `toPlainText` quadratic on a line of unmatched brackets. Link text and
+  // destinations that do contain a `[` never matched these patterns anyway.
+  out = out.replace(/!\[\[[^[\]\n]*\]\]/g, '') // image / note embeds
+  out = out.replace(/!\[[^[\]\n]*\]\([^[)\n]*\)/g, '') // markdown images
+  out = out.replace(/\[\[([^[\]\n]+)\]\]/g, (_m, inner: string) => wikiDisplay(inner))
   out = out.replace(/\[\^[^\]\s]+\]/g, '') // footnote references
-  out = out.replace(/\[([^\]]*)\]\([^)\n]*\)/g, '$1')
-  out = out.replace(/\[([^\]]*)\]\[[^\]\n]*\]/g, '$1') // reference links
+  out = out.replace(/\[([^[\]\n]*)\]\([^[)\n]*\)/g, '$1')
+  out = out.replace(/\[([^[\]\n]*)\]\[[^[\]\n]*\]/g, '$1') // reference links
   out = out.replace(/<((?:[a-z][a-z0-9+.-]*:|www\.)[^>\s]*)>/gi, '$1') // autolinks
   out = out.replace(/<\/?[a-z][^>\n]*>/gi, '') // html tags
   out = out.replace(/`+/g, '')

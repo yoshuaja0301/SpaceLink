@@ -1,9 +1,9 @@
 /**
  * SpaceFore — the right sidebar shell.
  *
- * Three views of the note the workspace is currently showing — its backlinks,
- * its outline, its properties — behind one tab strip, plus the drag handle that
- * sets the sidebar width and the button that folds it away.
+ * Four views of the note the workspace is currently showing — its backlinks,
+ * its outline, its local graph, its properties — behind one tab strip, plus the
+ * drag handle that sets the sidebar width and the button that folds it away.
  *
  * The shell follows the *active* pane rather than taking a path prop: the user
  * moves between panes constantly and the sidebar should always describe what
@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '../state/store'
 import { BacklinksPanel } from './BacklinksPanel'
+import { GraphView } from './GraphView'
 import { Icon } from './Icon'
 import { NoteInfo } from './NoteInfo'
 import { OutlinePanel } from './OutlinePanel'
@@ -31,11 +32,12 @@ const KEY_STEP = 16
 
 const TAB_KEY = 'spacefore.rightSidebarTab'
 
-export type RightSidebarTab = 'backlinks' | 'outline' | 'info'
+export type RightSidebarTab = 'backlinks' | 'outline' | 'info' | 'graph'
 
 const TABS: readonly { id: RightSidebarTab; label: string }[] = [
   { id: 'backlinks', label: 'Backlinks' },
   { id: 'outline', label: 'Outline' },
+  { id: 'graph', label: 'Local graph' },
   { id: 'info', label: 'Info' },
 ]
 
@@ -57,6 +59,23 @@ function saveRightSidebarTab(tab: RightSidebarTab): void {
   }
 }
 
+/** Mounted sidebars, so a tab can be selected from outside React. */
+const tabListeners = new Set<(tab: RightSidebarTab) => void>()
+
+/**
+ * Show one of the sidebar's tabs, unfolding the sidebar when it is closed.
+ * `nav:local-graph` is the caller.
+ *
+ * The choice is persisted *before* the sidebar is opened, so the instance
+ * `toggleRightSidebar` is about to mount reads the right tab out of storage;
+ * a sidebar that is already on screen is told directly.
+ */
+export function openRightSidebarTab(next: RightSidebarTab): void {
+  saveRightSidebarTab(next)
+  useAppStore.getState().toggleRightSidebar(true)
+  for (const listener of [...tabListeners]) listener(next)
+}
+
 interface Drag {
   startX: number
   startWidth: number
@@ -71,6 +90,15 @@ export function RightSidebar(): JSX.Element {
   const [tab, setTab] = useState<RightSidebarTab>(loadRightSidebarTab)
   const [dragging, setDragging] = useState(false)
   const dragRef = useRef<Drag | null>(null)
+  const tablistRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const listener = (next: RightSidebarTab): void => setTab(next)
+    tabListeners.add(listener)
+    return () => {
+      tabListeners.delete(listener)
+    }
+  }, [])
 
   // The listeners live on the window so the pointer may leave the thin handle
   // (it always does) without the drag stopping.
@@ -123,13 +151,26 @@ export function RightSidebar(): JSX.Element {
     saveRightSidebarTab(next)
   }, [])
 
-  /** Left/Right arrows move between tabs, as a tablist is expected to. */
+  /**
+   * The APG tablist pattern: arrows and Home/End move selection *and* focus
+   * together. Only the selected tab is a tab stop, so leaving focus behind
+   * would strand it on a button that no longer answers the next arrow.
+   */
   const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, position: number): void => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const next =
+      event.key === 'ArrowRight'
+        ? (position + 1) % TABS.length
+        : event.key === 'ArrowLeft'
+          ? (position - 1 + TABS.length) % TABS.length
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? TABS.length - 1
+              : null
+    if (next === null) return
     event.preventDefault()
-    const step = event.key === 'ArrowRight' ? 1 : -1
-    const next = TABS[(position + step + TABS.length) % TABS.length]!
-    selectTab(next.id)
+    selectTab(TABS[next]!.id)
+    tablistRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus()
   }
 
   const pane = panes.find((candidate) => candidate.id === activePaneId) ?? panes[0]
@@ -140,7 +181,7 @@ export function RightSidebar(): JSX.Element {
   return (
     <>
       <div className="sidebar-header right-sidebar-header">
-        <div className="right-sidebar-tabs" role="tablist" aria-label="Note panels">
+        <div className="right-sidebar-tabs" role="tablist" aria-label="Note panels" ref={tablistRef}>
           {TABS.map((entry, position) => (
             <button
               type="button"
@@ -172,12 +213,14 @@ export function RightSidebar(): JSX.Element {
         {path === null ? (
           <div className="empty-state">
             <p>No note open.</p>
-            <p>Open a note to see its backlinks, outline and properties.</p>
+            <p>Open a note to see its backlinks, outline, local graph and properties.</p>
           </div>
         ) : tab === 'backlinks' ? (
           <BacklinksPanel path={path} />
         ) : tab === 'outline' ? (
           <OutlinePanel path={path} />
+        ) : tab === 'graph' ? (
+          <GraphView local focusPath={path} compact />
         ) : (
           <NoteInfo path={path} />
         )}

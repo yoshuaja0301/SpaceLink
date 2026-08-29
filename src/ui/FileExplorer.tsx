@@ -8,12 +8,29 @@
  * navigation — the two always agree because collapsed folders render no
  * children at all rather than being hidden with CSS.
  *
+ * Past `WINDOW_THRESHOLD` rows that same flat list *is* the render: only the
+ * slice around the scrollport reaches the DOM, with a spacer above and below
+ * standing in for the rest, and each row carrying the `aria-posinset` /
+ * `aria-setsize` the missing siblings would otherwise have conveyed.
+ *
+ * The subscription is deliberately narrow: the explorer watches note *paths*
+ * (see `noteKeys`) and the dirty set, never the note map, so a keystroke — which
+ * replaces the map — neither rebuilds the tree nor re-renders a single row.
+ *
  * Folders are implicit: they exist because a file lives inside them. A folder
  * the user creates by hand is therefore held in component state until it gets
  * its first note (nothing else in the app can represent an empty directory).
  */
-import type { CSSProperties, DragEvent as ReactDragEvent, JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  JSX,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  UIEvent as ReactUIEvent,
+} from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 
 import type { Note, NotePath } from '../types'
 import type { AppState } from '../state/store'
@@ -57,6 +74,20 @@ export type ExplorerNode = ExplorerFileNode | ExplorerFolderNode
 
 const OPEN_STORAGE_KEY = 'spacefore.explorer.open'
 const SORT_STORAGE_KEY = 'spacefore.explorer.sort'
+
+/**
+ * Above this many visible rows the tree renders as a window over the flat row
+ * list instead of the full nested markup: a 5,000-note vault is 5,000 DOM rows
+ * otherwise. Below it the nested markup costs nothing and keeps the indent
+ * guides the stylesheet draws from `.nav-folder-children`.
+ */
+const WINDOW_THRESHOLD = 200
+/** Row height used until a rendered row can be measured (jsdom has no layout). */
+const DEFAULT_ROW_HEIGHT = 26
+/** Rows kept rendered above and below the scrollport. */
+const OVERSCAN = 8
+/** Scrollport height used before the container has been measured. */
+const FALLBACK_VIEWPORT = 640
 
 /** Case-insensitive, deterministic name order (no locale data involved). */
 function compareNames(a: string, b: string): number {
@@ -131,16 +162,21 @@ export function buildFileTree(
 interface ExplorerRow {
   node: ExplorerNode
   depth: number
+  /** 1-based position among its siblings, and how many siblings there are.
+   *  A windowed tree holds only a slice of the rows, so the browser cannot
+   *  count them from the DOM — the row has to say. */
+  posinset: number
+  setsize: number
 }
 
 /** Depth-first list of the rows that are actually on screen. */
 function flattenTree(root: ExplorerFolderNode, openFolders: ReadonlySet<string>): ExplorerRow[] {
   const rows: ExplorerRow[] = []
   const walk = (nodes: readonly ExplorerNode[], depth: number): void => {
-    for (const node of nodes) {
-      rows.push({ node, depth })
+    nodes.forEach((node, index) => {
+      rows.push({ node, depth, posinset: index + 1, setsize: nodes.length })
       if (node.kind === 'folder' && openFolders.has(node.path)) walk(node.children, depth + 1)
-    }
+    })
   }
   walk(root.children, 0)
   return rows
@@ -230,6 +266,27 @@ function createdTime(note: Note): number {
   return note.mtime
 }
 
+/**
+ * The notes, encoded as one string per note, so the explorer can subscribe to
+ * them without subscribing to their content: every keystroke replaces the notes
+ * map, but only a path (or, under a time sort, a timestamp) can change what the
+ * tree looks like. Compared shallowly, this array is stable while typing.
+ */
+function noteKeys(notes: Map<NotePath, Note>, sort: ExplorerSort): string[] {
+  const keys: string[] = []
+  for (const note of notes.values()) {
+    keys.push(`${sort === 'created' ? createdTime(note) : note.mtime}\u0000${note.path}`)
+  }
+  return keys
+}
+
+function decodeNoteKey(key: string): ExplorerEntry {
+  const cut = key.indexOf('\u0000')
+  const path = key.slice(cut + 1)
+  // `makeNote` names a note after its path, so the name needs no subscription.
+  return { path, name: basename(path), isMarkdown: true, time: Number(key.slice(0, cut)) }
+}
+
 /** The note tab the workspace is currently showing, if any. */
 function selectActivePath(state: AppState): NotePath | null {
   const pane = state.panes.find((p) => p.id === state.activePaneId)
@@ -266,7 +323,6 @@ interface CreateFolderState {
  * ------------------------------------------------------------------ */
 
 export function FileExplorer(): JSX.Element {
-  const notes = useAppStore((s) => s.notes)
   const attachments = useAppStore((s) => s.attachments)
   const vaultName = useAppStore((s) => s.vaultName)
   const starred = useAppStore((s) => s.starred)
@@ -296,6 +352,13 @@ export function FileExplorer(): JSX.Element {
   const [dragPath, setDragPath] = useState<string | null>(null)
   /** Folder currently under the pointer during a drag; `''` is the vault root. */
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(0)
+  const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_HEIGHT)
+
+  // Subscribed *after* `sort`, which the encoding depends on. Shallow-compared,
+  // so typing in a note — which replaces the notes map — is not a re-render.
+  const noteRows = useAppStore(useShallow((s: AppState) => noteKeys(s.notes, sort)))
 
   const { menu, open: openMenu, close: closeMenu } = useContextMenu()
 
@@ -303,24 +366,28 @@ export function FileExplorer(): JSX.Element {
   const rowCallbacks = useRef(new Map<string, (element: HTMLDivElement | null) => void>())
   /** Set when a keyboard move should also pull DOM focus after the render. */
   const focusWanted = useRef<string | null>(null)
+  /** The scrolling element the window is measured against. */
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+  const confirmRef = useRef<HTMLDivElement | null>(null)
 
   /* -- derived tree ------------------------------------------------- */
 
   const entries = useMemo<ExplorerEntry[]>(() => {
-    const out: ExplorerEntry[] = []
-    for (const note of notes.values()) {
-      out.push({
-        path: note.path,
-        name: note.name,
-        isMarkdown: true,
-        time: sort === 'created' ? createdTime(note) : note.mtime,
-      })
-    }
+    const out = noteRows.map(decodeNoteKey)
     for (const file of attachments) {
       out.push({ path: file.path, name: file.name, isMarkdown: false, time: file.mtime })
     }
     return out
-  }, [notes, attachments, sort])
+  }, [noteRows, attachments])
+
+  /** Note paths on their own: everything below only asks whether one exists. */
+  const notePaths = useMemo(() => {
+    const set = new Set<string>()
+    for (const entry of entries) {
+      if (entry.isMarkdown) set.add(entry.path)
+    }
+    return set
+  }, [entries])
 
   const tree = useMemo(() => buildFileTree(entries, sort, pendingFolders), [entries, sort, pendingFolders])
 
@@ -338,11 +405,35 @@ export function FileExplorer(): JSX.Element {
   }, [tree])
 
   const rows = useMemo(() => flattenTree(tree, openFolders), [tree, openFolders])
-  /** Roving tab index: one row is always reachable with Tab. */
-  const tabbablePath = focused ?? rows[0]?.node.path ?? null
+  const rowIndex = useMemo(() => {
+    const map = new Map<string, number>()
+    rows.forEach((row, index) => map.set(row.node.path, index))
+    return map
+  }, [rows])
 
   const isEmpty = entries.length === 0 && pendingFolders.length === 0
   const starredSet = useMemo(() => new Set(starred), [starred])
+
+  /* -- windowing ----------------------------------------------------- */
+
+  const windowed = rows.length > WINDOW_THRESHOLD
+  const perScreen = Math.ceil((viewportHeight || FALLBACK_VIEWPORT) / rowHeight)
+  const start = windowed ? Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN) : 0
+  const end = windowed ? Math.min(rows.length, start + perScreen + OVERSCAN * 2) : rows.length
+  const visibleRows = windowed ? rows.slice(start, end) : rows
+
+  /** Roving tab index: one *rendered* row is always reachable with Tab. */
+  const tabbablePath =
+    focused !== null && visibleRows.some((row) => row.node.path === focused)
+      ? focused
+      : visibleRows[0]?.node.path ?? null
+
+  /** Row the keyboard or an inline editor points at: it has to stay rendered. */
+  const anchorPath = renaming?.path ?? creating?.parent ?? confirming ?? focused ?? null
+
+  const handleScroll = useCallback((event: ReactUIEvent<HTMLDivElement>): void => {
+    setScrollTop(event.currentTarget.scrollTop)
+  }, [])
 
   /* -- persistence + reveal ----------------------------------------- */
 
@@ -366,22 +457,78 @@ export function FileExplorer(): JSX.Element {
     })
   }, [activePath])
 
+  /** Scroll the windowed viewport until row `index` is inside the scrollport. */
+  const scrollRowIntoView = useCallback(
+    (index: number): void => {
+      const viewport = viewportRef.current
+      const height = viewport?.clientHeight || FALLBACK_VIEWPORT
+      const current = viewport?.scrollTop ?? 0
+      const top = index * rowHeight
+      const next = top < current ? top : top + rowHeight > current + height ? top + rowHeight - height : current
+      if (next === current) return
+      // The state drives the window; the DOM has to follow it, and in jsdom
+      // (no layout, no scroll events) it is the only thing that does.
+      if (viewport) viewport.scrollTop = next
+      setScrollTop(next)
+    },
+    [rowHeight],
+  )
+
+  useEffect(() => {
+    if (!windowed) return undefined
+    const measure = (): void => setViewportHeight(viewportRef.current?.clientHeight ?? 0)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [windowed])
+
+  // How tall a row is, is a stylesheet decision — the spacers have to measure
+  // it rather than assume it, or the scrollbar lies about the vault's size.
+  useEffect(() => {
+    if (!windowed) return
+    const measured = viewportRef.current?.querySelector<HTMLElement>('.nav-item')?.offsetHeight ?? 0
+    if (measured > 0 && measured !== rowHeight) setRowHeight(measured)
+  }, [windowed, rowHeight, rows.length])
+
   useEffect(() => {
     if (!activePath) return
     const element = rowRefs.current.get(activePath)
     // jsdom has no layout and therefore no `scrollIntoView`.
     if (element && typeof element.scrollIntoView === 'function') {
       element.scrollIntoView({ block: 'nearest' })
+      return
     }
-  }, [activePath, rows])
+    // Windowed: the row may not be in the DOM at all, so move the window to it.
+    const index = rowIndex.get(activePath)
+    if (windowed && index !== undefined) scrollRowIntoView(index)
+  }, [activePath, rows, rowIndex, windowed, scrollRowIntoView])
 
-  // Roving tab index: focus follows the keyboard selection, once the row exists.
+  // A row an inline editor or the keyboard points at must be in the rendered
+  // slice; otherwise the editor never mounts and the focus request never lands.
+  useEffect(() => {
+    if (!windowed || anchorPath === null) return
+    const index = anchorPath === '' ? 0 : rowIndex.get(anchorPath)
+    if (index !== undefined) scrollRowIntoView(index)
+  }, [windowed, anchorPath, rowIndex, scrollRowIntoView])
+
+  // Roving tab index: focus follows the keyboard selection, once the row
+  // exists. It can be a render or two away — an async rename creates it, a
+  // windowed tree has to scroll to it — so the request is kept until it lands.
   useEffect(() => {
     const wanted = focusWanted.current
     if (!wanted) return
+    const element = rowRefs.current.get(wanted)
+    if (!element) return
     focusWanted.current = null
-    rowRefs.current.get(wanted)?.focus?.()
+    element.focus?.()
   })
+
+  // An alertdialog is only announced when it takes focus, and Escape/Enter can
+  // only reach it once it has.
+  useEffect(() => {
+    if (confirming === null) return
+    confirmRef.current?.focus?.()
+  }, [confirming])
 
   // One stable callback per path: a fresh closure every render would make
   // React detach and reattach every row's ref on every keystroke.
@@ -479,7 +626,7 @@ export function FileExplorer(): JSX.Element {
       if (name === '.' || name === '..') return 'That name is not allowed'
       if (kind === 'file') {
         const target = joinPath(parent, `${name}.md`).toLowerCase()
-        for (const existing of notes.keys()) {
+        for (const existing of notePaths) {
           if (existing !== selfPath && existing.toLowerCase() === target) return 'A note with that name already exists'
         }
       } else {
@@ -492,7 +639,7 @@ export function FileExplorer(): JSX.Element {
       }
       return null
     },
-    [notes, folderIndex],
+    [notePaths, folderIndex],
   )
 
   const beginRename = useCallback((node: ExplorerNode): void => {
@@ -506,7 +653,7 @@ export function FileExplorer(): JSX.Element {
   /** Rename a folder by renaming every note beneath it, one at a time. */
   const renameFolder = useCallback(
     async (from: string, to: string): Promise<void> => {
-      const moving = [...notes.keys()].filter((path) => isInside(path, from)).sort()
+      const moving = [...notePaths].filter((path) => isInside(path, from)).sort()
       const strandedAttachments = attachments.filter((file) => isInside(file.path, from)).length
       for (const path of moving) {
         await renameNote(path, to + path.slice(from.length))
@@ -520,7 +667,7 @@ export function FileExplorer(): JSX.Element {
         )
       }
     },
-    [notes, attachments, renameNote, pushToast],
+    [notePaths, attachments, renameNote, pushToast],
   )
 
   const commitRename = useCallback((): void => {
@@ -532,14 +679,21 @@ export function FileExplorer(): JSX.Element {
     }
     const name = renaming.value.trim()
     setRenaming(null)
-    if (name === renaming.original) return
-    const parent = dirname(renaming.path)
-    if (renaming.kind === 'file') {
-      void renameNote(renaming.path, joinPath(parent, `${name}.md`))
-    } else {
-      void renameFolder(renaming.path, joinPath(parent, name))
+    if (name === renaming.original) {
+      focusRow(renaming.path)
+      return
     }
-  }, [renaming, validateName, renameNote, renameFolder])
+    const parent = dirname(renaming.path)
+    const target = renaming.kind === 'file' ? joinPath(parent, `${name}.md`) : joinPath(parent, name)
+    // The renamed row only exists once the store has caught up; the focus
+    // request waits for it rather than leaving focus on `document.body`.
+    focusRow(target)
+    if (renaming.kind === 'file') {
+      void renameNote(renaming.path, target)
+    } else {
+      void renameFolder(renaming.path, target)
+    }
+  }, [renaming, validateName, renameNote, renameFolder, focusRow])
 
   /* -- create ------------------------------------------------------- */
 
@@ -593,7 +747,7 @@ export function FileExplorer(): JSX.Element {
         await deleteNote(node.path)
         return
       }
-      const doomed = [...notes.keys()].filter((path) => isInside(path, node.path)).sort()
+      const doomed = [...notePaths].filter((path) => isInside(path, node.path)).sort()
       for (const path of doomed) await deleteNote(path)
       setPendingFolders((prev) => prev.filter((folder) => folder !== node.path && !isInside(folder, node.path)))
       setOpenFolders((prev) => {
@@ -601,7 +755,7 @@ export function FileExplorer(): JSX.Element {
         return next.size === prev.size ? prev : next
       })
     },
-    [deleteNote, notes],
+    [deleteNote, notePaths],
   )
 
   /* -- drag and drop ------------------------------------------------- */
@@ -632,30 +786,37 @@ export function FileExplorer(): JSX.Element {
         await renameFolder(source, target)
         return
       }
-      if (!notes.has(source)) {
+      if (!notePaths.has(source)) {
         pushToast('Attachments cannot be moved', 'error')
         return
       }
       const target = joinPath(targetFolder, `${basename(source)}.md`)
-      if (notes.has(target)) {
+      if (notePaths.has(target)) {
         pushToast(`A note named ${target.slice(target.lastIndexOf('/') + 1)} already exists there`, 'error')
         return
       }
       await renameNote(source, target)
     },
-    [canDrop, folderIndex, notes, renameNote, renameFolder, pushToast],
+    [canDrop, folderIndex, notePaths, renameNote, renameFolder, pushToast],
   )
-
-  const handleDragStart = useCallback((event: ReactDragEvent<HTMLDivElement>, path: string): void => {
-    event.dataTransfer?.setData('text/plain', path)
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
-    setDragPath(path)
-  }, [])
 
   const handleDragEnd = useCallback((): void => {
     setDragPath(null)
     setDropTarget(null)
   }, [])
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>, path: string): void => {
+      event.dataTransfer?.setData('text/plain', path)
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+      setDragPath(path)
+      // Scrolling during a drag can unmount the source row in a windowed tree,
+      // and a row that is gone never fires `dragend` — the window always does,
+      // so the drag styling cannot be left switched on.
+      window.addEventListener('dragend', handleDragEnd, { once: true })
+    },
+    [handleDragEnd],
+  )
 
   /**
    * `bubble: false` is used by every row: a row that refuses the drop must not
@@ -745,7 +906,7 @@ export function FileExplorer(): JSX.Element {
       // Inline inputs handle their own keys and stop propagation; this is a
       // belt-and-braces guard for anything that slips through.
       if (renaming || creating) return
-      const index = rows.findIndex((row) => row.node.path === focused)
+      const index = focused === null ? -1 : rowIndex.get(focused) ?? -1
       const row = index === -1 ? undefined : rows[index]
       switch (event.key) {
         case 'ArrowDown': {
@@ -809,11 +970,30 @@ export function FileExplorer(): JSX.Element {
           setConfirming(row.node.path)
           break
         }
+        case 'Escape': {
+          if (confirming === null) break
+          event.preventDefault()
+          setConfirming(null)
+          break
+        }
         default:
           break
       }
     },
-    [rows, focused, renaming, creating, openFolders, setFolderOpen, focusRow, toggleFolder, openFile, beginRename],
+    [
+      rows,
+      rowIndex,
+      focused,
+      renaming,
+      creating,
+      confirming,
+      openFolders,
+      setFolderOpen,
+      focusRow,
+      toggleFolder,
+      openFile,
+      beginRename,
+    ],
   )
 
   /* -- inline editors ------------------------------------------------ */
@@ -846,10 +1026,12 @@ export function FileExplorer(): JSX.Element {
             } else if (event.key === 'Escape') {
               event.preventDefault()
               setRenaming(null)
+              focusRow(renaming.path)
             }
           }}
           // Clicking away abandons the edit rather than committing a
-          // half-typed name; Enter is the only way to commit.
+          // half-typed name; Enter is the only way to commit. Focus is left
+          // where the click put it, so no `focusRow` here.
           onBlur={() => setRenaming(null)}
         />
         {renaming.error ? (
@@ -908,24 +1090,53 @@ export function FileExplorer(): JSX.Element {
     )
   }
 
-  const confirmBar = (node: ExplorerNode, depth: number): JSX.Element => (
-    <div className="nav-confirm" role="alertdialog" aria-label={`Delete ${node.name}?`} style={depthStyle(depth)}>
-      <span className="nav-confirm-text">
-        Delete {node.kind === 'folder' ? 'folder ' : ''}
-        {node.name}?
-      </span>
-      <button type="button" className="nav-confirm-yes" onClick={() => void confirmDelete(node)}>
-        Delete
-      </button>
-      <button type="button" className="nav-confirm-no" onClick={() => setConfirming(null)}>
-        Cancel
-      </button>
-    </div>
-  )
+  const confirmBar = (node: ExplorerNode, depth: number): JSX.Element => {
+    const what = `${node.kind === 'folder' ? 'folder ' : ''}${node.name}`
+    const cancel = (): void => {
+      setConfirming(null)
+      focusRow(node.path)
+    }
+    return (
+      <div
+        ref={confirmRef}
+        className="nav-confirm"
+        role="alertdialog"
+        aria-label={`Delete ${node.name}?`}
+        // Focused when it opens, so it is announced and can be answered from
+        // the keyboard; it is never in the tab order itself.
+        tabIndex={-1}
+        style={depthStyle(depth)}
+        onKeyDown={(event) => {
+          event.stopPropagation()
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            cancel()
+          } else if (event.key === 'Enter' && event.target === event.currentTarget) {
+            // A focused button answers Enter itself; only the dialog needs this.
+            event.preventDefault()
+            void confirmDelete(node)
+          }
+        }}
+      >
+        <span className="nav-confirm-text">Delete {what}?</span>
+        <button
+          type="button"
+          className="nav-confirm-yes btn-danger"
+          aria-label={`Delete ${what}`}
+          onClick={() => void confirmDelete(node)}
+        >
+          Delete
+        </button>
+        <button type="button" className="nav-confirm-no btn-ghost" onClick={cancel}>
+          Cancel
+        </button>
+      </div>
+    )
+  }
 
   /* -- rows ---------------------------------------------------------- */
 
-  const renderFile = (node: ExplorerFileNode, depth: number): JSX.Element => {
+  const renderFile = (node: ExplorerFileNode, depth: number, posinset: number, setsize: number): JSX.Element => {
     const isRenaming = renaming?.path === node.path
     const isActive = activePath === node.path
     return (
@@ -939,9 +1150,12 @@ export function FileExplorer(): JSX.Element {
             hoveredPath === node.path && 'is-hovered',
             dirty.has(node.path) && 'is-dirty',
             !node.isMarkdown && 'is-attachment',
+            dragPath === node.path && 'is-dragging',
           )}
           role="treeitem"
           aria-level={depth + 1}
+          aria-posinset={posinset}
+          aria-setsize={setsize}
           aria-selected={focused === node.path}
           aria-current={isActive ? 'true' : undefined}
           tabIndex={tabbablePath === node.path ? 0 : -1}
@@ -968,6 +1182,7 @@ export function FileExplorer(): JSX.Element {
                   openFile(node, true)
                 }
           }
+          onFocus={() => setFocused(node.path)}
           onContextMenu={(event) => {
             setFocused(node.path)
             openMenu(event, fileMenuItems(node))
@@ -1001,7 +1216,13 @@ export function FileExplorer(): JSX.Element {
     )
   }
 
-  const renderFolder = (node: ExplorerFolderNode, depth: number): JSX.Element => {
+  const renderFolder = (
+    node: ExplorerFolderNode,
+    depth: number,
+    posinset: number,
+    setsize: number,
+    nested: boolean,
+  ): JSX.Element => {
     const isOpen = openFolders.has(node.path)
     const isRenaming = renaming?.path === node.path
     const isDropTarget = dropTarget === node.path
@@ -1020,10 +1241,13 @@ export function FileExplorer(): JSX.Element {
             focused === node.path && 'is-focused',
             hoveredPath === node.path && 'is-hovered',
             isDropTarget && 'is-drop-target',
+            dragPath === node.path && 'is-dragging',
           )}
           role="treeitem"
           aria-expanded={isOpen}
           aria-level={depth + 1}
+          aria-posinset={posinset}
+          aria-setsize={setsize}
           aria-selected={focused === node.path}
           tabIndex={tabbablePath === node.path ? 0 : -1}
           data-path={node.path}
@@ -1039,6 +1263,7 @@ export function FileExplorer(): JSX.Element {
                   toggleFolder(node.path, event.altKey)
                 }
           }
+          onFocus={() => setFocused(node.path)}
           onContextMenu={(event) => {
             setFocused(node.path)
             openMenu(event, folderMenuItems(node))
@@ -1058,18 +1283,28 @@ export function FileExplorer(): JSX.Element {
           {isRenaming ? renameInput() : <span className="nav-folder-title">{node.name}</span>}
         </div>
         {confirming === node.path ? confirmBar(node, depth) : null}
-        {isOpen ? (
+        {nested && isOpen ? (
           <div className="nav-folder-children" role="group" style={depthStyle(depth)}>
             {creating?.parent === node.path ? createFolderInput(depth + 1) : null}
-            {node.children.map((child) => renderNode(child, depth + 1))}
+            {node.children.map((child, index) =>
+              renderNode(child, depth + 1, index + 1, node.children.length, true),
+            )}
           </div>
         ) : null}
       </div>
     )
   }
 
-  const renderNode = (node: ExplorerNode, depth: number): JSX.Element =>
-    node.kind === 'folder' ? renderFolder(node, depth) : renderFile(node, depth)
+  const renderNode = (
+    node: ExplorerNode,
+    depth: number,
+    posinset: number,
+    setsize: number,
+    nested: boolean,
+  ): JSX.Element =>
+    node.kind === 'folder'
+      ? renderFolder(node, depth, posinset, setsize, nested)
+      : renderFile(node, depth, posinset, setsize)
 
   /* -- chrome -------------------------------------------------------- */
 
@@ -1103,7 +1338,9 @@ export function FileExplorer(): JSX.Element {
       </div>
 
       <div
+        ref={viewportRef}
         className={classes('sidebar-body', 'nav-files-container', dropTarget === '' && 'is-drop-target')}
+        onScroll={windowed ? handleScroll : undefined}
         onDragOver={(event) => handleDragOver(event, '', true)}
         onDragLeave={(event) => handleDragLeave(event, '', true)}
         onDrop={(event) => handleDrop(event, '')}
@@ -1124,7 +1361,32 @@ export function FileExplorer(): JSX.Element {
             onKeyDown={handleTreeKeyDown}
           >
             {creating?.parent === '' ? createFolderInput(0) : null}
-            {tree.children.map((child) => renderNode(child, 0))}
+            {windowed ? (
+              <>
+                {/* Spacers stand in for the rows outside the window so the
+                    scrollbar still measures the whole vault. */}
+                <div className="nav-window-spacer" style={{ height: start * rowHeight }} aria-hidden="true" />
+                {visibleRows.map((row) => {
+                  const element = renderNode(row.node, row.depth, row.posinset, row.setsize, false)
+                  if (!creating || creating.parent !== row.node.path) return element
+                  return (
+                    <Fragment key={`new-folder:${row.node.path}`}>
+                      {element}
+                      {createFolderInput(row.depth + 1)}
+                    </Fragment>
+                  )
+                })}
+                <div
+                  className="nav-window-spacer"
+                  style={{ height: (rows.length - end) * rowHeight }}
+                  aria-hidden="true"
+                />
+              </>
+            ) : (
+              tree.children.map((child, index) =>
+                renderNode(child, 0, index + 1, tree.children.length, true),
+              )
+            )}
           </div>
         )}
       </div>

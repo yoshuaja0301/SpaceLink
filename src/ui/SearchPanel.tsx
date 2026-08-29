@@ -6,11 +6,14 @@
  * `tag:project` and flips the sidebar over here, and the same query is shared
  * by the compact sidebar panel and the wide full-tab view.
  *
- * Typing is debounced by {@link DEBOUNCE_MS}; the search itself runs inside a
- * `useMemo`, so a re-render that changes neither the settled query nor the note
- * map costs nothing. Results are a flat, keyboard-navigable list of rows — one
- * per note plus one per shown line match — which keeps ArrowUp/ArrowDown honest
- * about what is actually on screen (a collapsed note contributes no match rows).
+ * Both inputs to the search are debounced by {@link DEBOUNCE_MS} — the query
+ * *and* the note map, which the store replaces on every keystroke anywhere in
+ * the app. Debouncing only the query would leave a full-vault re-scan on the
+ * editor's input path for as long as the panel holds a query. The search itself
+ * runs inside a `useMemo`, and not at all while the panel is not the visible
+ * one. Results are a flat, keyboard-navigable list of rows — one per note plus
+ * one per shown line match — which keeps ArrowUp/ArrowDown honest about what is
+ * actually on screen (a collapsed note contributes no match rows).
  *
  * Opening a line match fires a `spacefore:reveal-line` CustomEvent that the
  * editor listens for; see {@link useReveal} for why it is fired twice.
@@ -18,7 +21,7 @@
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { NotePath, SearchHit, SearchLineMatch } from '../types'
+import type { Note, NotePath, SearchHit, SearchLineMatch } from '../types'
 import { useAppStore } from '../state/store'
 import { searchNotes } from '../core/search/engine'
 import { highlight } from '../core/search/fuzzy'
@@ -170,7 +173,8 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
 }
 
 /**
- * Ask the editor to scroll a note to a line.
+ * Ask the editor to scroll a note to a line. `line` is 0-based, as the window
+ * event contract requires — search matches count from 1, so callers subtract.
  *
  * The event goes out twice on purpose. The immediate one reaches an editor that
  * is already showing the note; the deferred one reaches the editor React mounts
@@ -219,8 +223,11 @@ export function SearchPanel({ variant = 'sidebar' }: SearchPanelProps): JSX.Elem
   const openPath = useAppStore((s) => s.openPath)
   const createNoteFromTitle = useAppStore((s) => s.createNoteFromTitle)
 
-  /** The query the visible results were produced from — the debounced one. */
-  const [applied, setApplied] = useState<string>(() => searchQuery)
+  /** The query *and* note map the visible results were produced from. */
+  const [applied, setApplied] = useState<{ query: string; notes: Map<NotePath, Note> }>(() => ({
+    query: searchQuery,
+    notes,
+  }))
   const [collapsed, setCollapsed] = useState<Set<NotePath>>(() => new Set())
   const [selected, setSelected] = useState(0)
   const [recent, setRecent] = useState<string[]>(loadRecentSearches)
@@ -231,21 +238,28 @@ export function SearchPanel({ variant = 'sidebar' }: SearchPanelProps): JSX.Elem
   const caretToEnd = useRef(false)
   const reveal = useReveal()
 
+  /** The sidebar keeps this panel mounted only while it is the chosen one. */
+  const visible = variant === 'tab' || sidebarPanel === 'search'
+
   /* -- debounce ------------------------------------------------------ */
 
+  // Both inputs settle together: an edit somewhere in the vault re-arms the
+  // timer exactly as typing in the box does, so a burst of either produces one
+  // search rather than one per keystroke.
   useEffect(() => {
-    const timer = setTimeout(() => setApplied(searchQuery), DEBOUNCE_MS)
+    if (!visible) return undefined
+    const timer = setTimeout(() => setApplied({ query: searchQuery, notes }), DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [searchQuery])
+  }, [visible, searchQuery, notes])
 
   /* -- search -------------------------------------------------------- */
 
   const { results, elapsed } = useMemo(() => {
-    if (!applied.trim()) return { results: [] as SearchHit[], elapsed: 0 }
+    if (!visible || !applied.query.trim()) return { results: [] as SearchHit[], elapsed: 0 }
     const started = now()
-    const hits = searchNotes(applied, notes, { limit: RESULT_LIMIT })
+    const hits = searchNotes(applied.query, applied.notes, { limit: RESULT_LIMIT })
     return { results: hits, elapsed: now() - started }
-  }, [applied, notes])
+  }, [visible, applied])
 
   const rows = useMemo(() => buildRows(results, collapsed), [results, collapsed])
   const totalMatches = useMemo(() => results.reduce((sum, hit) => sum + hit.total, 0), [results])
@@ -326,9 +340,10 @@ export function SearchPanel({ variant = 'sidebar' }: SearchPanelProps): JSX.Elem
 
   const openRow = useCallback(
     (row: ResultRow, newTab: boolean): void => {
-      remember(applied)
+      remember(applied.query)
       openPath(row.hit.path, { newTab })
-      if (row.match) reveal(row.hit.path, row.match.line)
+      // `SearchLineMatch.line` counts from 1; the event contract is 0-based.
+      if (row.match) reveal(row.hit.path, row.match.line - 1)
     },
     [applied, openPath, remember, reveal],
   )
@@ -385,8 +400,8 @@ export function SearchPanel({ variant = 'sidebar' }: SearchPanelProps): JSX.Elem
   /* -- render -------------------------------------------------------- */
 
   const trimmed = searchQuery.trim()
-  const searching = applied.trim().length > 0
-  const createName = noteNameFromQuery(applied)
+  const searching = applied.query.trim().length > 0
+  const createName = noteNameFromQuery(applied.query)
 
   const summary = searching
     ? `${plural(results.length, 'note')}${results.length >= RESULT_LIMIT ? ` (first ${RESULT_LIMIT})` : ''} · ${plural(totalMatches, 'match', 'matches')} · ${elapsed.toFixed(1)} ms`

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { act } from 'react'
+import { Profiler, act } from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
 import type { JSX } from 'react'
@@ -265,6 +265,117 @@ describe('FileExplorer — rendering', () => {
 })
 
 /* ================================================================== *
+ * Big vaults: subscriptions and windowing
+ * ================================================================== */
+
+describe('FileExplorer — large vaults', () => {
+  function seedMany(count: number): void {
+    const files: Record<NotePath, string> = {}
+    for (let i = 0; i < count; i += 1) files[`note-${String(i).padStart(4, '0')}.md`] = `# ${i}`
+    seed(files)
+  }
+
+  function items(): HTMLElement[] {
+    return [...document.querySelectorAll('[role="treeitem"]')] as HTMLElement[]
+  }
+
+  it('does not re-render when a note it already lists is edited', () => {
+    seed({ 'A.md': '# A', 'B.md': '# B' })
+    let commits = 0
+    render(
+      <Profiler
+        id="explorer"
+        onRender={() => {
+          commits += 1
+        }}
+      >
+        <FileExplorer />
+      </Profiler>,
+    )
+
+    // The dirty dot lives in a row, so the edit that first marks a note dirty
+    // legitimately commits. Every keystroke after it must not.
+    act(() => {
+      useAppStore.setState({ dirty: new Set<NotePath>(['A.md']) })
+    })
+    const settled = commits
+
+    act(() => {
+      const notes = new Map(useAppStore.getState().notes)
+      notes.set('A.md', makeNote('A.md', '# A, still typing', 1))
+      useAppStore.setState({ notes })
+    })
+    expect(commits).toBe(settled)
+
+    // A path the tree has never seen still gets through.
+    act(() => {
+      const notes = new Map(useAppStore.getState().notes)
+      notes.set('C.md', makeNote('C.md', '# C', 1))
+      useAppStore.setState({ notes })
+    })
+    expect(commits).toBeGreaterThan(settled)
+    expect(paths('file')).toEqual(['A.md', 'B.md', 'C.md'])
+  })
+
+  it('renders a window over a big vault instead of one row per note', () => {
+    seedMany(500)
+    render(<FileExplorer />)
+
+    const rendered = items()
+    expect(rendered.length).toBeGreaterThan(0)
+    expect(rendered.length).toBeLessThan(120)
+    expect(rendered[0]?.getAttribute('data-path')).toBe('note-0000.md')
+    expect(queryRow('note-0499.md')).toBeNull()
+
+    // The rows that are not in the DOM still have to be counted honestly.
+    expect(rendered[0]?.getAttribute('aria-setsize')).toBe('500')
+    expect(rendered[0]?.getAttribute('aria-posinset')).toBe('1')
+    expect(rendered[1]?.getAttribute('aria-posinset')).toBe('2')
+
+    // …and still have to take up room, or the scrollbar lies about the vault.
+    const spacers = [...document.querySelectorAll('.nav-window-spacer')] as HTMLElement[]
+    expect(spacers).toHaveLength(2)
+    expect(Number.parseInt(spacers[0]?.style.height ?? '', 10)).toBe(0)
+    const trailing = Number.parseInt(spacers[1]?.style.height ?? '', 10)
+    expect(trailing).toBeGreaterThan(0)
+    expect(trailing % (500 - rendered.length)).toBe(0)
+  })
+
+  it('keeps the nested markup for a vault small enough not to need windowing', () => {
+    seed({ 'Notes/A.md': '# A', 'Root.md': '# R' })
+    render(<FileExplorer />)
+
+    expect(document.querySelector('.nav-window-spacer')).toBeNull()
+    fireEvent.click(row('Notes'))
+    expect(document.querySelector('.nav-folder-children')).not.toBeNull()
+  })
+
+  it('walks the keyboard into rows the window has not rendered', () => {
+    seedMany(500)
+    render(<FileExplorer />)
+
+    fireEvent.keyDown(tree(), { key: 'End' })
+    expect(document.activeElement?.getAttribute('data-path')).toBe('note-0499.md')
+    expect(row('note-0499.md').getAttribute('aria-posinset')).toBe('500')
+    // Still a window, not the whole vault.
+    expect(items().length).toBeLessThan(120)
+
+    fireEvent.keyDown(tree(), { key: 'Home' })
+    expect(document.activeElement?.getAttribute('data-path')).toBe('note-0000.md')
+    expect(queryRow('note-0499.md')).toBeNull()
+  })
+
+  it('renames a row the window had scrolled past', () => {
+    seedMany(500)
+    render(<FileExplorer />)
+
+    fireEvent.keyDown(tree(), { key: 'End' })
+    fireEvent.keyDown(tree(), { key: 'F2' })
+    expect((screen.getByLabelText('New name') as HTMLInputElement).value).toBe('note-0499')
+  })
+})
+
+/* ================================================================== *
  * Opening notes
  * ================================================================== */
 
@@ -457,6 +568,23 @@ describe('FileExplorer — keyboard navigation', () => {
     expect(openPath.mock.calls).toEqual([['Notes/A.md', {}]])
   })
 
+  it('acts on the row that has DOM focus, however it got there', () => {
+    setup()
+    const first = row('Notes')
+    expect(first.getAttribute('tabindex')).toBe('0')
+
+    // Tab into the tree: the roving tab stop is focused without a key press.
+    act(() => first.focus())
+    expect(first.getAttribute('aria-selected')).toBe('true')
+
+    fireEvent.keyDown(tree(), { key: 'F2' })
+    expect(screen.getByLabelText('New name')).toBeTruthy()
+    fireEvent.keyDown(screen.getByLabelText('New name'), { key: 'Escape' })
+
+    fireEvent.keyDown(tree(), { key: 'Enter' })
+    expect(row('Notes').getAttribute('aria-expanded')).toBe('true')
+  })
+
   it('keeps exactly one row in the tab order', () => {
     setup()
     const tabbable = [...document.querySelectorAll('[role="treeitem"]')].filter(
@@ -571,6 +699,31 @@ describe('FileExplorer — rename', () => {
     expect(row('A.md').textContent).toContain('A')
   })
 
+  it('puts focus back on the row when the rename is abandoned', () => {
+    seed({ 'A.md': '# A' })
+    render(<FileExplorer />)
+
+    const input = startRename('A.md')
+    fireEvent.change(input, { target: { value: 'Nope' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(document.activeElement).toBe(row('A.md'))
+  })
+
+  it('puts focus on the renamed row after committing', async () => {
+    // The real action, so the renamed row actually appears.
+    seed({ 'A.md': '# A' })
+    render(<FileExplorer />)
+
+    const input = startRename('A.md')
+    fireEvent.change(input, { target: { value: 'Renamed' } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+
+    expect(document.activeElement).toBe(row('Renamed.md'))
+  })
+
   it('renames a folder by renaming every note beneath it', async () => {
     seed({ 'Notes/A.md': '# A', 'Notes/Sub/B.md': '# B', 'Other/C.md': '# C' })
     const renameNote = stubAction('renameNote')
@@ -622,7 +775,7 @@ describe('FileExplorer — delete', () => {
     expect(deleteNote).not.toHaveBeenCalled()
 
     await act(async () => {
-      fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Delete A' }))
     })
     expect(deleteNote.mock.calls).toEqual([['A.md']])
   })
@@ -640,6 +793,39 @@ describe('FileExplorer — delete', () => {
     expect(deleteNote).not.toHaveBeenCalled()
   })
 
+  it('focuses the confirmation, names its destructive button and cancels on Escape', () => {
+    seed({ 'A.md': '# A' })
+    const deleteNote = stubAction('deleteNote')
+    render(<FileExplorer />)
+
+    openMenuFor('A.md')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+
+    const confirm = screen.getByRole('alertdialog', { name: 'Delete A?' })
+    // An alertdialog is only announced once it holds focus.
+    expect(document.activeElement).toBe(confirm)
+    expect(within(confirm).getByRole('button', { name: 'Delete A' })).toBeTruthy()
+
+    fireEvent.keyDown(confirm, { key: 'Escape' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(deleteNote).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(row('A.md'))
+  })
+
+  it('confirms with Enter on the dialog itself', async () => {
+    seed({ 'A.md': '# A' })
+    const deleteNote = stubAction('deleteNote')
+    render(<FileExplorer />)
+
+    openMenuFor('A.md')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Enter' })
+    })
+
+    expect(deleteNote.mock.calls).toEqual([['A.md']])
+  })
+
   it('deletes every note under a folder', async () => {
     seed({ 'Notes/A.md': '# A', 'Notes/Sub/B.md': '# B', 'Keep.md': '# K' })
     const deleteNote = stubAction('deleteNote')
@@ -648,7 +834,7 @@ describe('FileExplorer — delete', () => {
     openMenuFor('Notes')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     await act(async () => {
-      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete folder Notes' }))
     })
 
     expect(deleteNote.mock.calls).toEqual([['Notes/A.md'], ['Notes/Sub/B.md']])
@@ -675,6 +861,30 @@ describe('FileExplorer — drag and drop', () => {
     })
     expect(renameNote.mock.calls).toEqual([['A.md', 'Notes/A.md']])
     expect(row('Notes').className).not.toContain('is-drop-target')
+  })
+
+  it('marks the dragged row and the folder under the pointer, and clears both at the end', () => {
+    seed({ 'A.md': '# A', 'Notes/B.md': '# B' })
+    render(<FileExplorer />)
+
+    const transfer = dataTransfer()
+    fireEvent.dragStart(row('A.md'), { dataTransfer: transfer })
+    expect(row('A.md').className).toContain('is-dragging')
+
+    fireEvent.dragOver(row('Notes'), { dataTransfer: transfer })
+    expect(row('Notes').className).toContain('is-drop-target')
+
+    fireEvent.dragLeave(row('Notes'), { dataTransfer: transfer })
+    expect(row('Notes').className).not.toContain('is-drop-target')
+
+    fireEvent.dragEnd(row('A.md'))
+    expect(row('A.md').className).not.toContain('is-dragging')
+
+    // A windowed tree can unmount the source row mid-drag, so the drag also has
+    // to end when `dragend` never reaches the row itself.
+    fireEvent.dragStart(row('A.md'), { dataTransfer: transfer })
+    fireEvent.dragEnd(document.body)
+    expect(row('A.md').className).not.toContain('is-dragging')
   })
 
   it('does not offer a drop on the folder the note already lives in', () => {

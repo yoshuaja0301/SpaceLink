@@ -10,7 +10,7 @@
  * Underneath sits the recently-opened list, which is pure store state and needs
  * no persistence of its own.
  */
-import type { DragEvent as ReactDragEvent, JSX } from 'react'
+import type { DragEvent as ReactDragEvent, JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 
 import type { NotePath } from '../types'
@@ -156,6 +156,31 @@ export function StarredPanel(): JSX.Element {
     [commitOrder, dragPath, ordered],
   )
 
+  /* -- opening ------------------------------------------------------- */
+
+  const open = useCallback(
+    (path: NotePath): void => {
+      if (notes.has(path)) openPath(path)
+    },
+    [notes, openPath],
+  )
+
+  /**
+   * The row is the flex container the whole layout hangs off (`.nav-item`) and
+   * it holds the star toggle, so it carries the button contract itself rather
+   * than wrapping its label in a nested control. Keys pressed on the star
+   * button are its own business and are left alone.
+   */
+  const onRowKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>, path: NotePath): void => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      if (event.target !== event.currentTarget) return
+      event.preventDefault()
+      open(path)
+    },
+    [open],
+  )
+
   /* -- render -------------------------------------------------------- */
 
   const renderStarred = (path: NotePath): JSX.Element => {
@@ -170,12 +195,13 @@ export function StarredPanel(): JSX.Element {
           dragPath === path && 'is-dragging',
           dropTarget === path && 'is-drop-target',
         )}
-        role="listitem"
+        role="button"
+        tabIndex={0}
+        aria-disabled={exists ? undefined : true}
         draggable
         title={exists ? path : `${path} — missing from this vault`}
-        onClick={() => {
-          if (exists) openPath(path)
-        }}
+        onClick={() => open(path)}
+        onKeyDown={(event) => onRowKeyDown(event, path)}
         onMouseEnter={() => setHoveredPath(path)}
         onMouseLeave={() => setHoveredPath(null)}
         onDragStart={(event) => handleDragStart(event, path)}
@@ -207,11 +233,12 @@ export function StarredPanel(): JSX.Element {
       <div
         key={path}
         className={classes('nav-item', 'recent-item', !notes.has(path) && 'is-missing')}
-        role="listitem"
+        role="button"
+        tabIndex={0}
+        aria-disabled={notes.has(path) ? undefined : true}
         title={path}
-        onClick={() => {
-          if (notes.has(path)) openPath(path)
-        }}
+        onClick={() => open(path)}
+        onKeyDown={(event) => onRowKeyDown(event, path)}
         onMouseEnter={() => setHoveredPath(path)}
         onMouseLeave={() => setHoveredPath(null)}
       >
@@ -250,7 +277,7 @@ export function StarredPanel(): JSX.Element {
             </p>
           </div>
         ) : (
-          <div className="starred-list" role="list" aria-label="Starred notes">
+          <div className="starred-list" role="group" aria-label="Starred notes">
             {ordered.map(renderStarred)}
           </div>
         )}
@@ -266,7 +293,7 @@ export function StarredPanel(): JSX.Element {
                 <p>Notes you open show up here.</p>
               </div>
             ) : (
-              <div className="recent-list" role="list" aria-label="Recent files">
+              <div className="recent-list" role="group" aria-label="Recent files">
                 {recentPaths.map(renderRecent)}
               </div>
             )}

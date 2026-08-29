@@ -17,7 +17,9 @@
  * pattern is user code, and folding it would change what it means. Case
  * sensitivity for plain terms is a search option rather than a parse option,
  * so `searchNotes` re-parses through the same tokeniser with folding switched
- * off when `caseSensitive` is set.
+ * off when `caseSensitive` is set. A regex is user code all the way down: the
+ * flags it was written with are honoured as-is, and `i` is only ever supplied
+ * for a bare `/pattern/`.
  *
  * ## How a note is matched
  *
@@ -281,12 +283,18 @@ function literalNeedle(text: string, caseSensitive: boolean): Needle | null {
 
 function regexNeedle(regex: RegExp, caseSensitive: boolean): Needle | null {
   const flags = new Set(regex.flags.split(''))
+  // Whether the user wrote flags of their own, decided before `g`/`y` are
+  // stripped — `/foo/g` is still an authored pattern.
+  const authored = regex.flags.length > 0
   // `g`/`y` are ours to manage; `m` makes `^`/`$` mean line edges, which is what
   // a line-oriented search reads like.
   flags.delete('g')
   flags.delete('y')
   flags.add('m')
-  if (!caseSensitive) flags.add('i')
+  // A pattern is user code, so its casing is the user's to choose: `i` is only
+  // supplied for a bare `/pattern/`. Once any flags are written the pattern
+  // means exactly what it says, and `/TODO/m` no longer matches `todo`.
+  if (!caseSensitive && !authored) flags.add('i')
   const base = [...flags].join('')
   try {
     return { probe: new RegExp(regex.source, base), scan: new RegExp(regex.source, `${base}g`) }

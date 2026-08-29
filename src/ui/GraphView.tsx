@@ -19,7 +19,7 @@ import type { ChangeEvent, JSX } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 
 import type { AppState } from '../state/store'
-import type { NotePath } from '../types'
+import type { Note, NotePath, VaultIndex } from '../types'
 import { buildGraphData } from '../core/graph/index'
 import { useAppStore } from '../state/store'
 import { useGraphCanvas } from './graph/useGraphCanvas'
@@ -62,6 +62,35 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/**
+ * A cheap fingerprint of everything `buildGraphData` turns into a node or an
+ * edge: every note path, every link leaving it (the resolved target, or the
+ * text of one that resolves to nothing) and every tag membership. One linear
+ * pass over the same data the build would read — no per-link vault scans.
+ *
+ * Editing prose replaces both `notes` and `index` on every character but
+ * leaves this string alone, which is the point: an unchanged signature lets
+ * the memo below hand back the very same `GraphData` object, and only a new
+ * object reaches `ForceLayout.setData` — the call that reheats the simulation
+ * and makes a settled graph jump.
+ *
+ * Node labels (a note's title) are deliberately left out: a retitled note
+ * picks its new label up the next time the link structure moves, which is a
+ * better trade than restarting the layout on every keystroke in a heading.
+ * Every part carries a type prefix, so a path can never read as a link target.
+ */
+function graphSignature(notes: Map<NotePath, Note>, index: VaultIndex): string {
+  const parts: string[] = []
+  for (const path of notes.keys()) {
+    parts.push(`.${path}`)
+    for (const edge of index.outgoing.get(path) ?? []) {
+      parts.push(edge.to === null ? `?${edge.targetText}` : `>${edge.to}`)
+    }
+  }
+  for (const [tag, paths] of index.tags) parts.push(`#${tag}:${paths.join(',')}`)
+  return parts.join('\n')
+}
+
 export function GraphView({ focusPath = null, local = false, compact = false }: GraphViewProps): JSX.Element {
   const notes = useAppStore((state) => state.notes)
   const index = useAppStore((state) => state.index)
@@ -84,6 +113,13 @@ export function GraphView({ focusPath = null, local = false, compact = false }: 
   /** The note the graph revolves around: the explicit prop, else the active tab. */
   const centre = focusPath ?? activePath
 
+  /**
+   * `notes` and `index` are new objects after every keystroke anywhere in the
+   * vault, so the model is keyed on the link structure instead of on their
+   * identity. Both are still read from the current render, so the rebuilds
+   * that do happen always see fresh data.
+   */
+  const signature = useMemo(() => graphSignature(notes, index), [notes, index])
   const data = useMemo(
     () =>
       buildGraphData(notes, index, {
@@ -91,7 +127,8 @@ export function GraphView({ focusPath = null, local = false, compact = false }: 
         showTags,
         focus: local && centre ? { path: centre, depth } : null,
       }),
-    [notes, index, showUnresolved, showTags, local, centre, depth],
+    // `signature` deliberately stands in for `notes` and `index` here.
+    [signature, showUnresolved, showTags, local, centre, depth],
   )
 
   /**

@@ -18,7 +18,7 @@
  * screen).
  */
 import type { EditorState, Extension, Range, Text } from '@codemirror/state'
-import { StateEffect } from '@codemirror/state'
+import { StateEffect, StateField } from '@codemirror/state'
 import type { DecorationSet, ViewUpdate } from '@codemirror/view'
 import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view'
 
@@ -459,6 +459,38 @@ function scanLine(
  * neither of which produces a document or selection change of its own.
  */
 export const refreshDecorations = StateEffect.define<null>()
+
+/**
+ * Flash the line containing a document offset, or clear the flash with `null`.
+ * Dispatched by `Editor` when a search hit, a backlink or an outline heading
+ * asks to be revealed — the eye needs somewhere to land after the scroll.
+ */
+export const flashLine = StateEffect.define<number | null>()
+
+const FLASH_LINE = Decoration.line({ class: 'cm-flash-line' })
+
+/**
+ * Holds the flashed line. A `StateField` rather than part of the decoration
+ * plugin because the flash outlives the rebuilds the plugin does on every
+ * keystroke, and it must ride along with edits made while it is up.
+ */
+export const flashLineHighlight: Extension = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    let next = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (!effect.is(flashLine)) continue
+      if (effect.value === null) {
+        next = Decoration.none
+      } else {
+        const pos = Math.max(0, Math.min(tr.state.doc.length, effect.value))
+        next = Decoration.set([FLASH_LINE.range(tr.state.doc.lineAt(pos).from)])
+      }
+    }
+    return next
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
 
 export interface MarkdownDecorationsConfig {
   /** Resolve a wiki-link target to a vault path; null renders it as unresolved. */

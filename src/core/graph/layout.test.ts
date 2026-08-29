@@ -68,6 +68,27 @@ function allFinite(data: GraphData): boolean {
   )
 }
 
+/**
+ * Node-pair comparisons one run performs, counted by wrapping the private
+ * repulsion step. This is the cost the grid exists to bound, measured directly
+ * instead of through a wall clock (which would make the assertion flaky).
+ */
+function countPairComparisons(run: () => void): number {
+  const proto = ForceLayout.prototype as unknown as { repel: (...args: unknown[]) => void }
+  const original = proto.repel
+  let pairs = 0
+  proto.repel = function repelCounted(this: unknown, ...args: unknown[]): void {
+    pairs += 1
+    original.apply(this, args)
+  }
+  try {
+    run()
+  } finally {
+    proto.repel = original
+  }
+  return pairs
+}
+
 /* ------------------------------------------------------------------ *
  * Springs
  * ------------------------------------------------------------------ */
@@ -578,6 +599,56 @@ describe('ForceLayout — large graphs', () => {
     expect(Number.isFinite(box.maxX)).toBe(true)
     // Generous, but an accidental blow-up in cost would sail past it.
     expect(elapsed).toBeLessThan(5000)
+  })
+
+  it('ticks a 2,000-node graph with finite coordinates and far fewer comparisons than a naive sweep', () => {
+    const data = spiralGraph(2000, 3000)
+    const layout = new ForceLayout(data, OPTIONS)
+    layout.tick(20) // let it reach the density a real vault settles at
+
+    const pairs = countPairComparisons(() => layout.tick(1))
+    const naive = (data.nodes.length * (data.nodes.length - 1)) / 2
+
+    expect(allFinite(data)).toBe(true)
+    // Cells one interaction cutoff wide hold a constant fraction of the graph
+    // once it is this dense, so the grid only shaved the naive sweep to about
+    // a third of itself.
+    // Density-sized cells keep the comparisons per node roughly constant.
+    expect(pairs).toBeLessThan(naive / 8)
+    expect(pairs / data.nodes.length).toBeLessThan(100)
+  })
+
+  it('caps the comparisons when one outlier stretches the grid over a tight cluster', () => {
+    // 1,200 nodes piled into a ten-unit disc plus one node far outside it: the
+    // bounding box is enormous while the density is not, so a cell sized off
+    // that box alone swallows the whole cluster and costs O(n²) again.
+    const nodes: GraphNode[] = []
+    for (let i = 0; i < 1200; i += 1) {
+      const angle = i * 2.399963
+      nodes.push(node(`n${i}.md`, Math.cos(angle) * 0.25 * Math.sqrt(i), Math.sin(angle) * 0.25 * Math.sqrt(i)))
+    }
+    nodes.push(node('far.md', 50_000, 0, { degree: 0 }))
+    const data: GraphData = { nodes, edges: [] }
+    const layout = new ForceLayout(data, OPTIONS)
+
+    const pairs = countPairComparisons(() => layout.tick(1))
+
+    expect(pairs).toBeLessThan((nodes.length * (nodes.length - 1)) / 2 / 8)
+    expect(allFinite(data)).toBe(true)
+  })
+
+  it('still settles a graph that runs on the grid path', () => {
+    const data = spiralGraph(500, 700)
+    const layout = new ForceLayout(data, OPTIONS)
+    layout.tick(600)
+
+    const lookup = new Map(data.nodes.map((n) => [n.id, n]))
+    const lengths = data.edges.map((e) => distance(lookup.get(e.source)!, lookup.get(e.target)!))
+    const mean = lengths.reduce((sum, len) => sum + len, 0) / lengths.length
+    expect(mean).toBeGreaterThan(OPTIONS.linkDistance * 0.75)
+    expect(mean).toBeLessThan(OPTIONS.linkDistance * 1.6)
+    expect(Math.min(...lengths)).toBeGreaterThan(10)
+    expect(Math.max(...lengths)).toBeLessThan(OPTIONS.linkDistance * 4)
   })
 
   it('skips pairs beyond the interaction cutoff once the grid kicks in', () => {

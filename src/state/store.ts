@@ -48,11 +48,23 @@ export const DEFAULT_SETTINGS: Settings = {
 const SETTINGS_KEY = 'spacefore.settings'
 const STARRED_KEY = 'spacefore.starred'
 
+/**
+ * Read a persisted value, keeping the fallback's shape.
+ *
+ * Arrays are restored as arrays: spreading one into an object literal yields
+ * `{"0": "A.md"}`, and every consumer of the value then throws on `.includes`
+ * or `new Set(…)`. A persisted value whose shape does not match the fallback
+ * (an object where an array is expected, or the reverse) is discarded rather
+ * than merged, so a legacy or hand-edited entry cannot brick the app.
+ */
 function loadJSON<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
     if (!raw) return fallback
-    return { ...fallback, ...(JSON.parse(raw) as object) } as T
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(fallback)) return (Array.isArray(parsed) ? parsed : fallback) as T
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback
+    return { ...fallback, ...parsed } as T
   } catch {
     return fallback
   }
@@ -209,6 +221,57 @@ export interface AppState {
 
 const saveTimers = new Map<NotePath, ReturnType<typeof setTimeout>>()
 
+/** Trailing debounce before a typing burst is reflected in the link index. */
+const INDEX_REBUILD_MS = 150
+
+let indexTimer: ReturnType<typeof setTimeout> | null = null
+/** The notes map whose index rebuild is still queued behind `indexTimer`. */
+let pendingNotes: Map<NotePath, Note> | null = null
+/** That rebuild, once somebody needed it before the timer fired. */
+let pendingIndex: VaultIndex | null = null
+/** The note being typed in, so a burst in one note cannot slow an edit to another. */
+let burstPath: NotePath | null = null
+
+/** Disarm every autosave debounce — used when the vault underneath them goes away. */
+function clearSaveTimers(): void {
+  for (const timer of saveTimers.values()) clearTimeout(timer)
+  saveTimers.clear()
+}
+
+/** Drop a queued index rebuild; the caller is committing a fresh index itself. */
+function clearPendingIndex(): void {
+  if (indexTimer) clearTimeout(indexTimer)
+  indexTimer = null
+  pendingNotes = null
+  pendingIndex = null
+  burstPath = null
+}
+
+/**
+ * Everything a note contributes to the link index: its link targets, its tags
+ * and its aliases. Prose, headings and where on the page a link sits leave the
+ * shape of the index alone — only its `line`/`context` detail, which the
+ * trailing rebuild catches up on.
+ */
+function indexSignature(note: Note): string {
+  const links = note.parsed.links.map((link) => `${link.embed ? '!' : ''}${link.target}`)
+  const aliases = note.parsed.frontmatter.aliases
+  return JSON.stringify([links, note.parsed.allTags, Array.isArray(aliases) ? aliases : []])
+}
+
+/**
+ * The index describing `state.notes`.
+ *
+ * Usually that is `state.index`. While a rebuild is queued behind the typing
+ * debounce it is built here instead — once, then cached — so a caller that
+ * needs a correct index right now never sees the pre-keystroke one.
+ */
+function currentIndex(state: AppState): VaultIndex {
+  if (pendingNotes !== state.notes) return state.index
+  if (!pendingIndex) pendingIndex = buildIndex(state.notes)
+  return pendingIndex
+}
+
 function makeTab(kind: Tab['kind'], path: NotePath | null, mode: ViewMode): Tab {
   return { id: newId('tab'), kind, path, mode, pinned: false }
 }
@@ -241,7 +304,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: loadJSON<Settings>(SETTINGS_KEY, DEFAULT_SETTINGS),
   palette: null,
   toasts: [],
-  starred: loadJSON<NotePath[]>(STARRED_KEY, []) as NotePath[],
+  starred: loadJSON<NotePath[]>(STARRED_KEY, []).filter((path) => typeof path === 'string'),
   recent: [],
   searchQuery: '',
   hoveredPath: null,
@@ -250,8 +313,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   /* ------------------------------------------------------------------ */
 
   async openVault(adapter) {
-    set({ loading: true, error: null, adapter, vaultName: adapter.name })
+    // Autosave timers armed against the outgoing vault must never fire once it
+    // is gone. Their content is flushed here instead — to the adapter that is
+    // still installed, which is the one that owns it.
+    clearSaveTimers()
+    set({ loading: true, error: null })
+    if (get().adapter) {
+      await get().saveAll()
+      const unsaved = [...get().dirty]
+      if (unsaved.length > 0) {
+        get().pushToast(`Unsaved changes in ${unsaved.join(', ')} could not be saved before loading the vault`, 'error')
+      }
+    }
+
     try {
+      // Nothing is published before every read has landed: a store holding the
+      // new adapter next to the old notes writes one vault's text into another.
       const files = await adapter.list()
       const notes = new Map<NotePath, Note>()
       const attachments: VaultFile[] = []
@@ -266,14 +343,28 @@ export const useAppStore = create<AppState>((set, get) => ({
         }),
       )
       attachments.sort((a, b) => a.path.localeCompare(b.path))
-      set({
+      const index = buildIndex(notes)
+      clearPendingIndex()
+      set((s) => ({
+        adapter,
+        vaultName: adapter.name,
         notes,
         attachments,
-        index: buildIndex(notes),
+        index,
         loading: false,
         dirty: new Set(),
-        revision: get().revision + 1,
-      })
+        // A tab left on a note this vault does not have keeps rendering the
+        // previous vault's text and silently swallows every keystroke, so it
+        // goes back to being an empty tab.
+        panes: s.panes.map((pane) => ({
+          ...pane,
+          tabs: pane.tabs.map((tab) =>
+            tab.kind === 'note' && tab.path !== null && !notes.has(tab.path) ? { ...tab, path: null } : tab,
+          ),
+        })),
+        recent: s.recent.filter((path) => notes.has(path)),
+        revision: s.revision + 1,
+      }))
 
       // Land on a sensible first note when nothing is open yet.
       const state = get()
@@ -286,6 +377,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().openPath(home)
       }
     } catch (error) {
+      // The load failed: leave the vault that is open exactly as it was, down
+      // to its adapter, rather than running on with a half-swapped store.
       set({ loading: false, error: error instanceof Error ? error.message : String(error) })
     }
   },
@@ -300,11 +393,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     const previous = state.notes.get(path)
     if (!previous || previous.content === content) return
 
+    const note = makeNote(path, content, previous.mtime)
     const notes = new Map(state.notes)
-    notes.set(path, makeNote(path, content, previous.mtime))
+    notes.set(path, note)
     const dirty = new Set(state.dirty)
     dirty.add(path)
-    set({ notes, dirty, index: buildIndex(notes) })
+    // The notes map is published synchronously — the editor, the word count and
+    // the dirty markers all read it — but the link index is not: rebuilding it
+    // is O(whole vault) and typing must not pay that per keystroke. It is
+    // committed on a short trailing debounce instead, and `currentIndex` hands
+    // a fresh one to anyone who asks before the timer fires.
+    set({ notes, dirty })
+    // One exception: an edit that changes what this note contributes to the
+    // index and does *not* arrive inside a typing burst in this same note is a
+    // discrete action — linking a mention, a paste, a scripted edit — and costs
+    // a single rebuild, so components keyed on `index` reflect it at once.
+    const inBurst = indexTimer !== null && burstPath === path
+    if (!inBurst && indexSignature(note) !== indexSignature(previous)) {
+      pendingNotes = null
+      pendingIndex = null
+      set({ index: buildIndex(notes) })
+    } else {
+      pendingNotes = notes
+      pendingIndex = null
+    }
+    burstPath = path
+    if (indexTimer) clearTimeout(indexTimer)
+    indexTimer = setTimeout(() => {
+      indexTimer = null
+      const latest = get()
+      if (pendingNotes !== latest.notes) {
+        pendingNotes = null
+        pendingIndex = null
+        return
+      }
+      const index = pendingIndex ?? buildIndex(latest.notes)
+      pendingNotes = null
+      pendingIndex = null
+      set({ index })
+    }, INDEX_REBUILD_MS)
 
     const timer = saveTimers.get(path)
     if (timer) clearTimeout(timer)
@@ -329,12 +456,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       clearTimeout(timer)
       saveTimers.delete(path)
     }
+    // The exact text this call is responsible for. The user can type again
+    // while the write is in flight, and this write does not save that edit.
+    const written = note.content
     set((s) => ({ saving: new Set(s.saving).add(path) }))
+    if (get().adapter !== adapter) {
+      // The vault was swapped while this save was being set up; its content
+      // belongs to a vault that is no longer open.
+      set((s) => {
+        const saving = new Set(s.saving)
+        saving.delete(path)
+        return { saving }
+      })
+      return
+    }
     try {
-      await adapter.write(path, note.content)
+      await adapter.write(path, written)
       set((s) => {
         const dirty = new Set(s.dirty)
-        dirty.delete(path)
+        // Only this write's text is saved: anything typed since is still dirty,
+        // and clearing the flag for it would defeat the unload guard.
+        if (s.notes.get(path)?.content === written) dirty.delete(path)
         const saving = new Set(s.saving)
         saving.delete(path)
         return { dirty, saving }
@@ -365,11 +507,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const next = new Map(notes)
     next.set(target, makeNote(target, content, Date.now()))
-    set({ notes: next, index: buildIndex(next) })
+    const index = buildIndex(next)
+    clearPendingIndex()
+    set({ notes: next, index })
     if (adapter?.writable) {
       try {
         await adapter.write(target, content)
       } catch (error) {
+        // A note that never reached the vault is unsaved, not saved: keeping it
+        // dirty is what gets autosave, `saveAll` and the unload flush to retry.
+        set((s) => ({ dirty: new Set(s.dirty).add(target) }))
         get().pushToast(`Could not create ${target}: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
     }
@@ -388,32 +535,39 @@ export const useAppStore = create<AppState>((set, get) => ({
   async deleteNote(path) {
     const { adapter, notes } = get()
     if (!notes.has(path)) return
-    const next = new Map(notes)
-    next.delete(path)
-    set((s) => {
-      const dirty = new Set(s.dirty)
-      dirty.delete(path)
-      return {
-        notes: next,
-        index: buildIndex(next),
-        dirty,
-        starred: s.starred.filter((p) => p !== path),
-        recent: s.recent.filter((p) => p !== path),
-        panes: s.panes.map((pane) => closeTabsFor(pane, path)),
-      }
-    })
     if (adapter?.writable) {
+      // Remove the file first: a workspace that has forgotten a note the vault
+      // still holds reads as data loss the moment the note comes back.
       try {
         await adapter.remove(path)
       } catch (error) {
         get().pushToast(`Could not delete ${path}: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        return
       }
     }
+    clearPendingIndex()
+    set((s) => {
+      const next = new Map(s.notes)
+      next.delete(path)
+      const dirty = new Set(s.dirty)
+      dirty.delete(path)
+      const starred = s.starred.filter((p) => p !== path)
+      saveJSON(STARRED_KEY, starred)
+      return {
+        notes: next,
+        index: buildIndex(next),
+        dirty,
+        starred,
+        recent: s.recent.filter((p) => p !== path),
+        panes: s.panes.map((pane) => closeTabsFor(pane, path)),
+      }
+    })
     get().pushToast(`Deleted ${path}`, 'info')
   },
 
   async renameNote(from, to) {
-    const { adapter, notes } = get()
+    const state = get()
+    const { adapter, notes } = state
     const note = notes.get(from)
     if (!note) return
     const target = to.toLowerCase().endsWith('.md') ? to : `${to}.md`
@@ -422,14 +576,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
 
-    const oldName = basename(from)
+    // Links are rewritten against the vault as it stands *before* the rename,
+    // so each one can be checked for where it actually pointed.
+    const before = currentIndex(state)
     const newName = basename(target)
     const next = new Map<NotePath, Note>()
     const rewritten: NotePath[] = []
 
     for (const [path, current] of notes) {
       if (path === from) continue
-      const updated = rewriteWikiLinks(current.content, oldName, newName)
+      const updated = rewriteLinksTo(current, from, target, before)
       if (updated !== current.content) {
         next.set(path, makeNote(path, updated, current.mtime))
         rewritten.push(path)
@@ -439,16 +595,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     next.set(target, makeNote(target, note.content, note.mtime))
 
+    const index = buildIndex(next)
+    clearPendingIndex()
     set((s) => {
       const dirty = new Set(s.dirty)
       dirty.delete(from)
       dirty.add(target)
       rewritten.forEach((p) => dirty.add(p))
+      const starred = s.starred.map((p) => (p === from ? target : p))
+      saveJSON(STARRED_KEY, starred)
       return {
         notes: next,
-        index: buildIndex(next),
+        index,
         dirty,
-        starred: s.starred.map((p) => (p === from ? target : p)),
+        starred,
         recent: s.recent.map((p) => (p === from ? target : p)),
         panes: s.panes.map((pane) => ({
           ...pane,
@@ -527,13 +687,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   async openLink(target, fromPath, options) {
-    const { index, settings } = get()
-    const resolved = resolveLinkTarget(target, fromPath, index)
+    const state = get()
+    const resolved = resolveLinkTarget(target, fromPath, currentIndex(state))
     if (resolved) {
       get().openPath(resolved, options)
       return
     }
-    const folder = dirname(fromPath) || settings.newNoteFolder
+    const folder = dirname(fromPath) || state.settings.newNoteFolder
     const name = sanitizeFileName(target)
     const path = await get().createNote(joinPath(folder, `${name}.md`), `# ${name}\n\n`)
     get().openPath(path, { ...options, mode: 'edit' })
@@ -754,19 +914,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   backlinksFor(path) {
-    const { index, notes } = get()
-    return getBacklinks(path, index, notes)
+    const state = get()
+    return getBacklinks(path, currentIndex(state), state.notes)
   },
 
   outgoingFor(path) {
-    const { index, notes } = get()
-    const edges = index.outgoing.get(path) ?? []
+    const state = get()
+    const edges = currentIndex(state).outgoing.get(path) ?? []
     const groups = new Map<NotePath, BacklinkGroup>()
     for (const edge of edges) {
       if (!edge.to) continue
       const group = groups.get(edge.to)
       if (group) group.edges.push(edge)
-      else groups.set(edge.to, { source: edge.to, title: notes.get(edge.to)?.parsed.title ?? basename(edge.to), edges: [edge] })
+      else
+        groups.set(edge.to, {
+          source: edge.to,
+          title: state.notes.get(edge.to)?.parsed.title ?? basename(edge.to),
+          edges: [edge],
+        })
     }
     return [...groups.values()]
   },
@@ -777,20 +942,56 @@ function closeTabsFor(pane: Pane, path: NotePath): Pane {
   return { ...pane, tabs }
 }
 
+/** `path` without its `.md` extension — the form a wiki link is usually written in. */
+function withoutExtension(path: NotePath): string {
+  return path.toLowerCase().endsWith('.md') ? path.slice(0, -3) : path
+}
+
 /**
- * Rewrite `[[Old]]`, `[[Old|Alias]]`, `[[Old#Heading]]` and `![[Old]]` to point
- * at `newName`, leaving every other link untouched.
+ * Rewrite the links in `note` that point at `from` so they point at `to`,
+ * leaving `[[Old|Alias]]`, `[[Old#Heading]]`, `[[Old#^block]]` and `![[Old]]`
+ * decoration exactly as written.
+ *
+ * A link is only rewritten when it *resolved* to `from` in `index` and names it
+ * directly, so `[[Foo]]` that pointed at a different `Foo.md` in another folder
+ * is left alone, and a path-form `[[Bar/Foo]]` that did point here is rewritten
+ * in path form rather than left dangling. Only the links `parseNote` reported
+ * are touched, which is what keeps `[[Foo]]` inside a fenced code block or an
+ * inline code span verbatim.
  */
-export function rewriteWikiLinks(content: string, oldName: string, newName: string): string {
-  if (oldName === newName) return content
-  return content.replace(/(!?)\[\[([^\]\n]+)\]\]/g, (match, bang: string, inner: string) => {
-    const pipe = inner.indexOf('|')
-    const linkPart = pipe === -1 ? inner : inner.slice(0, pipe)
-    const rest = pipe === -1 ? '' : inner.slice(pipe)
-    const hash = linkPart.search(/[#^]/)
-    const target = (hash === -1 ? linkPart : linkPart.slice(0, hash)).trim()
-    const fragment = hash === -1 ? '' : linkPart.slice(hash)
-    if (target.toLowerCase() !== oldName.toLowerCase()) return match
-    return `${bang}[[${newName}${fragment}${rest}]]`
-  })
+export function rewriteLinksTo(note: Note, from: NotePath, to: NotePath, index: VaultIndex): string {
+  if (from === to) return note.content
+  const names = new Set(
+    [basename(from), `${basename(from)}.md`, from, withoutExtension(from)].map((name) => name.toLowerCase()),
+  )
+  let content = note.content
+
+  // Right to left, so the offsets of the links still to come stay valid.
+  for (let i = note.parsed.links.length - 1; i >= 0; i -= 1) {
+    const link = note.parsed.links[i]!
+    const written = link.target.trim()
+    // An alias — or any other spelling that happens to resolve here — is not a
+    // name of this file, so renaming the file does not invalidate it.
+    if (!names.has(written.toLowerCase())) continue
+    if (resolveLinkTarget(link.target, note.path, index) !== from) continue
+
+    const keepExtension = written.toLowerCase().endsWith('.md')
+    const replacement = written.includes('/')
+      ? keepExtension
+        ? to
+        : withoutExtension(to)
+      : keepExtension
+        ? `${basename(to)}.md`
+        : basename(to)
+    const raw = content.slice(link.start, link.end)
+    const at = raw.indexOf(written, raw.indexOf('[[') + 2)
+    if (at === -1) continue
+    content =
+      content.slice(0, link.start) +
+      raw.slice(0, at) +
+      replacement +
+      raw.slice(at + written.length) +
+      content.slice(link.end)
+  }
+  return content
 }

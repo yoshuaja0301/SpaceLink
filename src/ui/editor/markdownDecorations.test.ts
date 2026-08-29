@@ -6,7 +6,13 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 
 import type { DecorationKind, DecorationRange, SelectionSpan } from './markdownDecorations'
-import { computeDecorationRanges, markdownDecorations, refreshDecorations } from './markdownDecorations'
+import {
+  computeDecorationRanges,
+  flashLine,
+  flashLineHighlight,
+  markdownDecorations,
+  refreshDecorations,
+} from './markdownDecorations'
 
 /** Pretend every target except the ones listed is missing from the vault. */
 function vault(...existing: string[]) {
@@ -397,6 +403,53 @@ describe('markdownDecorations plugin', () => {
       view.dispatch({ effects: refreshDecorations.of(null) })
       expect(view.dom.querySelectorAll('.cm-hidden-syntax')).toHaveLength(0)
       expect(view.dom.querySelectorAll('.cm-syntax-marker').length).toBeGreaterThan(0)
+    } finally {
+      view.destroy()
+    }
+  })
+})
+
+describe('flashLineHighlight', () => {
+  function mountFlash(doc: string): EditorView {
+    const view = new EditorView({ state: EditorState.create({ doc, extensions: [flashLineHighlight] }) })
+    document.body.appendChild(view.dom)
+    return view
+  }
+
+  const lit = (view: EditorView): string[] =>
+    [...view.dom.querySelectorAll('.cm-flash-line')].map((el) => el.textContent ?? '')
+
+  it('lights the line holding the offset and clears again on null', () => {
+    const view = mountFlash('one\ntwo\nthree')
+    try {
+      expect(lit(view)).toEqual([])
+      // Mid-line, to prove the whole line is taken, not just the offset.
+      view.dispatch({ effects: flashLine.of(view.state.doc.line(2).from + 1) })
+      expect(lit(view)).toEqual(['two'])
+      view.dispatch({ effects: flashLine.of(null) })
+      expect(lit(view)).toEqual([])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('follows the text when an edit above it shifts the document', () => {
+    const view = mountFlash('one\ntwo\nthree')
+    try {
+      view.dispatch({ effects: flashLine.of(view.state.doc.line(3).from) })
+      expect(lit(view)).toEqual(['three'])
+      view.dispatch({ changes: { from: 0, insert: 'zero\n' } })
+      expect(lit(view)).toEqual(['three'])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('clamps an offset past the end of the document', () => {
+    const view = mountFlash('one\ntwo')
+    try {
+      view.dispatch({ effects: flashLine.of(9999) })
+      expect(lit(view)).toEqual(['two'])
     } finally {
       view.destroy()
     }

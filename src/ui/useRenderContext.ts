@@ -11,14 +11,16 @@
  *   - a miss returns `null`, kicks off the read and, when it lands, notifies
  *     every mounted hook so the component re-renders and asks again.
  *
- * The cache is module-level on purpose — it is keyed by vault path, so two
- * panes showing the same image share one object URL, and switching tabs does
- * not re-read the file. It is bounded; the URL of an evicted entry is revoked
- * so the blob can be collected.
+ * The cache is module-level on purpose — it is keyed by vault *and* path, so
+ * two panes showing the same image share one object URL, switching tabs does
+ * not re-read the file, and `img/logo.png` in one vault is never served for
+ * `img/logo.png` in the next one. It is bounded; the URL of an evicted entry —
+ * or of a vault that is no longer open — is revoked so the blob can be
+ * collected.
  */
 import { useEffect, useMemo, useReducer } from 'react'
 
-import type { NotePath, VaultAdapter, VaultFile } from '../types'
+import type { Note, NotePath, VaultAdapter, VaultFile, VaultIndex } from '../types'
 import type { RenderContext } from '../core/markdown/render'
 import { resolveLinkTarget } from '../core/graph/index'
 import { useAppStore } from '../state/store'
@@ -127,14 +129,55 @@ function resolveAttachment(
 /** Plenty for any realistic note, small enough to bound blob memory. */
 const MAX_CACHED_ASSETS = 64
 
-/** vault path -> `blob:`/`data:` URL. Insertion ordered, so the first key is the oldest. */
-const assetCache = new Map<NotePath, string>()
+/** `<vault id>\0<path>` -> `blob:`/`data:` URL. Insertion ordered, so the first key is the oldest. */
+const assetCache = new Map<string, string>()
 /** Reads in progress, so a re-render does not queue the same file twice. */
-const inFlight = new Set<NotePath>()
+const inFlight = new Set<string>()
 /** Files the adapter could not hand us. Never retried — `resolveAsset` runs on every render. */
-const unavailable = new Set<NotePath>()
+const unavailable = new Set<string>()
 /** Mounted hooks waiting to be told that the cache changed. */
 const listeners = new Set<() => void>()
+
+/**
+ * One id per adapter *instance*, so a different vault — and reopening the same
+ * folder, which `reloadVault` does — gets its own keyspace instead of inheriting
+ * whatever the previous vault cached under the same path.
+ */
+const vaultIds = new WeakMap<VaultAdapter, number>()
+let nextVaultId = 0
+/** Key prefix of the vault currently on screen. `\0` alone means "no vault". */
+let activePrefix = '\u0000'
+
+function vaultPrefix(adapter: VaultAdapter | null): string {
+  if (!adapter) return '\u0000'
+  let id = vaultIds.get(adapter)
+  if (id === undefined) {
+    nextVaultId += 1
+    id = nextVaultId
+    vaultIds.set(adapter, id)
+  }
+  return `${id}\u0000`
+}
+
+/**
+ * Point the cache at `adapter` and throw away what the vault before it left
+ * behind, revoking its object URLs. Idempotent, so every mounted hook can call
+ * it while its context is being rebuilt.
+ */
+function activateVault(adapter: VaultAdapter | null): string {
+  const prefix = vaultPrefix(adapter)
+  if (prefix === activePrefix) return prefix
+  activePrefix = prefix
+  for (const [key, url] of [...assetCache]) {
+    if (key.startsWith(prefix)) continue
+    assetCache.delete(key)
+    revokeAsset(url)
+  }
+  for (const key of [...unavailable]) {
+    if (!key.startsWith(prefix)) unavailable.delete(key)
+  }
+  return prefix
+}
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   png: 'image/png',
@@ -160,10 +203,10 @@ function revokeAsset(url: string): void {
   }
 }
 
-function cacheAsset(path: NotePath, url: string): void {
-  const previous = assetCache.get(path)
+function cacheAsset(key: string, url: string): void {
+  const previous = assetCache.get(key)
   if (previous && previous !== url) revokeAsset(previous)
-  assetCache.set(path, url)
+  assetCache.set(key, url)
   while (assetCache.size > MAX_CACHED_ASSETS) {
     const oldest = assetCache.keys().next()
     if (oldest.done) break
@@ -200,17 +243,21 @@ function notifyAssetListeners(): void {
 }
 
 /** Fire-and-forget read. Safe to call during render — nothing happens synchronously. */
-function loadAsset(adapter: VaultAdapter, path: NotePath): void {
-  if (assetCache.has(path) || inFlight.has(path) || unavailable.has(path)) return
-  inFlight.add(path)
+function loadAsset(adapter: VaultAdapter, key: string, path: NotePath): void {
+  if (assetCache.has(key) || inFlight.has(key) || unavailable.has(key)) return
+  inFlight.add(key)
   void (async () => {
     try {
       const blob = await adapter.readBinary(path)
-      cacheAsset(path, await blobToUrl(blob, path))
+      const url = await blobToUrl(blob, path)
+      // The vault can be swapped while the read is in flight; that URL now
+      // belongs to a vault nobody is looking at, so it is revoked, not kept.
+      if (key.startsWith(activePrefix)) cacheAsset(key, url)
+      else revokeAsset(url)
     } catch {
-      unavailable.add(path)
+      unavailable.add(key)
     } finally {
-      inFlight.delete(path)
+      inFlight.delete(key)
       notifyAssetListeners()
     }
   })()
@@ -220,17 +267,58 @@ function loadAsset(adapter: VaultAdapter, path: NotePath): void {
  * Hook
  * ------------------------------------------------------------------ */
 
+/** Deepest `![[Note]]` nesting the renderer follows. Mirrors `MAX_EMBED_DEPTH` in render.ts. */
+const MAX_EMBED_DEPTH = 3
+
+/**
+ * The text of every note this one transcludes, transitively. `getEmbedContent`
+ * is the only thing the context reads out of the notes map, so *this* — not the
+ * map's identity, which `setNoteContent` replaces on every keystroke anywhere
+ * in the vault — is what the context has to be memoised on. Typing in an
+ * unrelated note leaves it byte for byte the same, and the previews of notes
+ * that did not change are not re-rendered.
+ */
+function embedSignature(
+  currentPath: NotePath,
+  notes: Map<NotePath, Note>,
+  index: VaultIndex,
+): string {
+  const parts: string[] = []
+  const seen = new Set<NotePath>([currentPath])
+  let frontier: NotePath[] = [currentPath]
+  for (let depth = 0; depth < MAX_EMBED_DEPTH && frontier.length > 0; depth += 1) {
+    const next: NotePath[] = []
+    for (const from of frontier) {
+      const source = notes.get(from)
+      if (!source) continue
+      for (const link of source.parsed.links) {
+        // An `![[image.png]]` embed resolves to no note, so it drops out here.
+        if (!link.embed || !link.target) continue
+        const target = resolveLinkTarget(link.target, from, index)
+        if (!target || seen.has(target)) continue
+        seen.add(target)
+        const embedded = notes.get(target)
+        if (!embedded) continue
+        parts.push(target, embedded.content)
+        next.push(target)
+      }
+    }
+    frontier = next
+  }
+  return parts.join('\u0000')
+}
+
 /**
  * The `RenderContext` for a note, memoised on everything the renderer can
- * observe: the note being rendered, the link index, the note bodies (for
- * transclusion), the attachment list and the asset cache generation. A new
- * object identity is exactly the signal a consumer needs to re-render.
+ * observe: the note being rendered, the link index, the text of the notes it
+ * transcludes, the attachment list and the asset cache generation. A new object
+ * identity is exactly the signal a consumer needs to re-render.
  */
 export function useRenderContext(currentPath: NotePath): RenderContext {
-  const notes = useAppStore((state) => state.notes)
   const index = useAppStore((state) => state.index)
   const attachments = useAppStore((state) => state.attachments)
   const adapter = useAppStore((state) => state.adapter)
+  const embeds = useAppStore((state) => embedSignature(currentPath, state.notes, state.index))
 
   // Bumped when a pending asset read finishes, which re-runs the memo below
   // and hands the consumer a fresh context that now resolves the asset.
@@ -246,14 +334,19 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
   const attachmentIndex = useMemo(() => buildAttachmentIndex(attachments), [attachments])
 
   return useMemo<RenderContext>(() => {
-    // `assetTick` is never read: it exists so that a finished asset read
-    // produces a brand new context object, which is what makes the consumer
-    // re-render and ask `resolveAsset` again.
+    // `assetTick` and `embeds` are never read here: they exist so that a
+    // finished asset read, or an edit to a transcluded note, produces a brand
+    // new context object, which is what makes the consumer re-render and ask
+    // again.
     void assetTick
+    void embeds
+    const prefix = activateVault(adapter)
     return {
       currentPath,
       resolveLink: (target, fromPath) => resolveLinkTarget(target, fromPath, index),
-      getEmbedContent: (path) => notes.get(path)?.content ?? null,
+      // Read live rather than closing over the map: `embeds` above already
+      // decides when a transclusion has actually changed.
+      getEmbedContent: (path) => useAppStore.getState().notes.get(path)?.content ?? null,
       resolveAsset: (target, fromPath) => {
         const raw = target.trim()
         if (!raw) return null
@@ -263,12 +356,13 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
         const path = resolveAttachment(raw, fromPath, attachmentIndex)
         if (!path) return null
 
-        const cached = assetCache.get(path)
+        const key = `${prefix}${path}`
+        const cached = assetCache.get(key)
         if (cached) return cached
-        if (adapter) loadAsset(adapter, path)
+        if (adapter) loadAsset(adapter, key, path)
         return null
       },
       depth: 0,
     }
-  }, [currentPath, index, notes, attachmentIndex, adapter, assetTick])
+  }, [currentPath, index, embeds, attachmentIndex, adapter, assetTick])
 }

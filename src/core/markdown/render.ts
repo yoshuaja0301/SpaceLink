@@ -14,6 +14,27 @@
  * The markdown-it instance is built once at module scope. Nothing that depends
  * on a `RenderContext` is cached — the context travels through markdown-it's
  * `env`, so `renderMarkdown` stays safe to call at animation frame rate.
+ *
+ * ## Task checkbox ownership (binding — the reading view writes files from it)
+ *
+ * Every task checkbox is emitted as
+ * `<input class="task-checkbox" type="checkbox" data-src="PATH" data-line="N" … disabled>`.
+ *
+ * - `data-src` names the note the task text actually lives in and `data-line`
+ *   is a 0-based line index into **that** note's source, frontmatter included.
+ * - Inside a `![[Note]]` transclusion both refer to the *embedded* note, never
+ *   to the note being displayed — `![[Note#Heading]]` and `![[Note#^block]]`
+ *   included, where `data-line` still counts from the top of the embedded file
+ *   rather than from the top of the extracted slice.
+ * - So the UI has a single rule: rewrite line `data-line` of the note named by
+ *   `data-src`. `data-src` is omitted only when the context names no note
+ *   (`currentPath === ''`), which is why that rule is written
+ *   `checkbox.dataset.src ?? <displayed path>`.
+ *
+ * Heading ids follow the same "must agree with the other module" discipline:
+ * they are `slugifyHeading(text)` de-duplicated per note exactly the way
+ * `extractHeadings` in ./parse numbers repeats (`log`, `log-2`, `log-3`), so
+ * `document.getElementById(heading.slug)` finds the heading the parser meant.
  */
 import MarkdownIt from 'markdown-it'
 import type {
@@ -317,9 +338,14 @@ function renderNoteEmbed(t: WikiTarget, raw: string, sf: SfEnv): string {
         ? `${fmTitle || label} > ^${t.blockId}`
         : fmTitle || basenameOf(path))
 
-  let body = parsed.body
-  if (t.heading) body = extractHeadingSection(parsed.body, t.heading)
-  else if (t.blockId) body = extractBlock(parsed.body, t.blockId)
+  // `data-line` inside the embed has to index the embedded note's own source,
+  // so the offset is that note's frontmatter plus wherever the slice starts.
+  const slice: BodySlice = t.heading
+    ? extractHeadingSection(parsed.body, t.heading)
+    : t.blockId
+      ? extractBlock(parsed.body, t.blockId)
+      : { text: parsed.body, line: 0 }
+  const lineOffset = countLines(content.slice(0, parsed.bodyOffset)) + slice.line
 
   const parent = sf.ctx
   const childCtx: RenderContext = {
@@ -330,7 +356,7 @@ function renderNoteEmbed(t: WikiTarget, raw: string, sf: SfEnv): string {
       parent.resolveAsset ? parent.resolveAsset(target, fromPath) : null,
     getEmbedContent: (p) => (parent.getEmbedContent ? parent.getEmbedContent(p) : null),
   }
-  const inner = renderBody(body, childCtx, 0)
+  const inner = renderBody(slice.text, childCtx, lineOffset)
 
   return (
     `<div class="embed" data-href="${escapeHtml(label)}">` +
@@ -342,12 +368,18 @@ function renderNoteEmbed(t: WikiTarget, raw: string, sf: SfEnv): string {
 
 const FENCE_LINE = /^\s{0,3}(?:```|~~~)/
 
+/** A slice of an embedded note: its text plus the 0-based body line it starts on. */
+interface BodySlice {
+  text: string
+  line: number
+}
+
 /**
  * Slice out the section owned by `heading`: the heading line itself plus
  * everything up to the next heading of the same or higher level. Fenced code is
  * skipped so a `# comment` inside a shell block does not end the section.
  */
-function extractHeadingSection(body: string, heading: string): string {
+function extractHeadingSection(body: string, heading: string): BodySlice {
   const wanted = slugifyHeading(heading)
   const wantedText = heading.trim().toLowerCase()
   const lines = body.split('\n')
@@ -371,7 +403,7 @@ function extractHeadingSection(body: string, heading: string): string {
       break
     }
   }
-  if (startIdx === -1) return ''
+  if (startIdx === -1) return { text: '', line: 0 }
 
   inFence = false
   let endIdx = lines.length
@@ -388,11 +420,11 @@ function extractHeadingSection(body: string, heading: string): string {
       break
     }
   }
-  return lines.slice(startIdx, endIdx).join('\n')
+  return { text: lines.slice(startIdx, endIdx).join('\n'), line: startIdx }
 }
 
 /** `![[Note#^id]]` — the block (paragraph / list) tagged with `^id`. */
-function extractBlock(body: string, blockId: string): string {
+function extractBlock(body: string, blockId: string): BodySlice {
   const lines = body.split('\n')
   const marker = new RegExp(`\\s\\^${blockId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`)
   for (let i = 0; i < lines.length; i += 1) {
@@ -401,9 +433,9 @@ function extractBlock(body: string, blockId: string): string {
     while (from > 0 && (lines[from - 1] as string).trim() !== '') from -= 1
     const block = lines.slice(from, i + 1)
     block[block.length - 1] = (block[block.length - 1] as string).replace(marker, '')
-    return block.join('\n')
+    return { text: block.join('\n'), line: from }
   }
-  return ''
+  return { text: '', line: 0 }
 }
 
 /* ------------------------------------------------------------------ *
@@ -822,8 +854,10 @@ function taskListRule(state: StateCore): void {
     if (!m) continue
 
     const checked = (m[1] as string) !== ' '
-    // `data-line` indexes the ORIGINAL source, frontmatter included: the UI
-    // toggles a task by rewriting exactly that line.
+    // `data-line` indexes the ORIGINAL source of `data-src`, frontmatter
+    // included: the UI toggles a task by rewriting exactly that line of exactly
+    // that note. Inside an embed both belong to the embedded note, so a
+    // transcluded task edits the file it came from, not the one on screen.
     const line = (liOpen.map?.[0] ?? inline.map?.[0] ?? 0) + sf.lineOffset
 
     const markerLen = (m[0] as string).length
@@ -834,7 +868,7 @@ function taskListRule(state: StateCore): void {
     }
 
     const checkbox = new state.Token('sf_task_checkbox', 'input', 0)
-    checkbox.meta = { checked, line }
+    checkbox.meta = { checked, line, src: sf.ctx.currentPath }
     inline.children = [checkbox, ...(inline.children ?? [])]
 
     liOpen.attrJoin('class', 'task-item')
@@ -855,9 +889,13 @@ function taskListRule(state: StateCore): void {
 }
 
 function renderTaskCheckbox(tokens: Token[], idx: number): string {
-  const meta = (tokens[idx]!.meta ?? {}) as { checked?: boolean; line?: number }
+  const meta = (tokens[idx]!.meta ?? {}) as { checked?: boolean; line?: number; src?: string }
   const checked = meta.checked ? ' checked' : ''
-  return `<input class="task-checkbox" type="checkbox" data-line="${meta.line ?? 0}"${checked} disabled>`
+  const src = meta.src ? ` data-src="${escapeHtml(meta.src)}"` : ''
+  return (
+    `<input class="task-checkbox" type="checkbox"${src} ` +
+    `data-line="${meta.line ?? 0}"${checked} disabled>`
+  )
 }
 
 /* ------------------------------------------------------------------ *
@@ -896,16 +934,24 @@ function inlineText(token: Token): string {
 
 function headingRule(state: StateCore): void {
   const tokens = state.tokens
+  // Repeats are numbered per note, exactly as `extractHeadings` numbers them —
+  // core rules run once per `render`, and an embed renders through its own
+  // `renderBody`, so this counter never leaks across a note boundary.
+  const slugCounts = new Map<string, number>()
   for (let i = 0; i < tokens.length - 1; i += 1) {
     const open = tokens[i] as Token
     if (open.type !== 'heading_open') continue
     const inline = tokens[i + 1] as Token
     if (inline.type !== 'inline') continue
 
-    // Deliberately not de-duplicated: the outline panel links to
-    // `slugifyHeading(text)`, so the rendered id has to match it exactly.
-    const slug = slugifyHeading(inlineText(inline))
-    if (!slug) continue
+    // The outline panel and the command palette look the heading up by the slug
+    // `extractHeadings` reported, so the id has to match that one exactly —
+    // numbering included, and duplicate ids would break `getElementById` anyway.
+    const base = slugifyHeading(inlineText(inline))
+    if (!base) continue
+    const seen = slugCounts.get(base) ?? 0
+    slugCounts.set(base, seen + 1)
+    const slug = seen === 0 ? base : `${base}-${seen + 1}`
     open.attrSet('id', slug)
 
     const anchor = new state.Token('sf_heading_anchor', '', 0)
@@ -1218,6 +1264,7 @@ const PURIFY_CONFIG: PurifyConfig = {
     'data-heading',
     'data-block',
     'data-tag',
+    'data-src',
     'data-line',
     'data-lang',
     'data-callout',
