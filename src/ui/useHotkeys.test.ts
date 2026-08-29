@@ -289,3 +289,26 @@ describe('useHotkeys', () => {
     expect(run).not.toHaveBeenCalled()
   })
 })
+
+describe('capture-phase precedence', () => {
+  it('runs an app shortcut even when a nested handler would preventDefault first', () => {
+    // CodeMirror binds Mod+G to "find next" and stops the event. Listening in
+    // the capture phase is what keeps Ctrl+G opening the graph from the editor.
+    const run = vi.fn()
+    renderHook(() => useHotkeys([command({ run, shortcut: 'Ctrl+G' })]))
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const greedy = (event: KeyboardEvent): void => event.preventDefault()
+    host.addEventListener('keydown', greedy)
+
+    host.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true, cancelable: true }),
+    )
+
+    expect(run).toHaveBeenCalledTimes(1)
+
+    host.removeEventListener('keydown', greedy)
+    host.remove()
+  })
+})

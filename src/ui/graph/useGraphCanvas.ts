@@ -330,6 +330,12 @@ function createEngine(context: EngineContext): Engine {
   /** A press that turned into a drag must not also register as a click. */
   let suppressClick = false
   let hasFitted = false
+  // The first fit happens while every node is still stacked on its seed spiral,
+  // so it frames a blob a few dozen units across and lands at max zoom. Re-frame
+  // once the simulation has actually spread the graph out — but never after the
+  // user has taken the view into their own hands.
+  let autoFitPending = false
+  let userAdjusted = false
 
   const nodeIndex = new Map<string, GraphNode>()
   const neighbours = new Map<string, Set<string>>()
@@ -396,6 +402,10 @@ function createEngine(context: EngineContext): Engine {
         sim.tick(TICKS_PER_FRAME)
         dirty = true
         frame = requestFrame(pump)
+      }
+      if (autoFitPending && !userAdjusted && sim.alpha <= SETTLED_ALPHA) {
+        autoFitPending = false
+        fit()
       }
     }
     if (dirty) {
@@ -541,12 +551,22 @@ function createEngine(context: EngineContext): Engine {
     const bounds = sim ? sim.bounds() : { minX: -1, minY: -1, maxX: 1, maxY: 1 }
     transform = fitTransform(bounds, size, FIT_PADDING)
     hasFitted = true
+    // Still settling? Then this framing is provisional — take another one once
+    // the nodes have stopped moving.
+    autoFitPending = sim !== null && sim.alpha > SETTLED_ALPHA
     kick()
+  }
+
+  /** Any deliberate pan/zoom/drag hands the viewport to the user for good. */
+  const claimView = (): void => {
+    userAdjusted = true
+    autoFitPending = false
   }
 
   const zoomAt = (point: Point, factor: number): void => {
     const k = clampZoom(transform.k * (Number.isFinite(factor) && factor > 0 ? factor : 1))
     if (k === transform.k) return
+    claimView()
     // Keep the world point under the cursor exactly where it is.
     const anchor = screenToWorld(point, transform)
     transform = { k, x: point.x - anchor.x * k, y: point.y - anchor.y * k }
@@ -554,6 +574,7 @@ function createEngine(context: EngineContext): Engine {
   }
 
   const panBy = (dx: number, dy: number): void => {
+    if (dx !== 0 || dy !== 0) claimView()
     transform = { ...transform, x: transform.x + dx, y: transform.y + dy }
     kick()
   }
@@ -637,6 +658,7 @@ function createEngine(context: EngineContext): Engine {
     }
     if (state.id && sim) {
       const world = screenToWorld(point, transform)
+      claimView()
       sim.pin(state.id, world.x, world.y)
       kick()
     }

@@ -499,7 +499,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         }
         const active = pane.tabs.find((tab) => tab.id === pane.activeTabId)
-        const mode = options.mode ?? active?.mode ?? 'edit'
+        // A graph or search tab carries a placeholder mode; inheriting it would
+        // drop the reader into preview when they click through from the graph.
+        // Take the mode from a real note tab instead, and fall back to editing.
+        const inherited =
+          active?.kind === 'note' ? active.mode : pane.tabs.find((tab) => tab.kind === 'note')?.mode
+        const mode = options.mode ?? inherited ?? 'edit'
         const reusable = !options.newTab && active && !active.pinned && (active.kind !== 'note' || active.path === null)
         if (reusable) {
           return {

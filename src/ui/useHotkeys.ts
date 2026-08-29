@@ -337,7 +337,13 @@ export function useHotkeys(commands: Command[]): void {
       }
     }
 
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    // Capture phase on purpose. CodeMirror's own keymaps run on the editor and
+    // call preventDefault first — `searchKeymap` claims Mod+G for "find next",
+    // for one — which would swallow app shortcuts the moment the caret is in a
+    // note. Listening on the way down makes the command palette's bindings
+    // authoritative; everything the app does not claim still reaches the
+    // editor untouched, and the `typing` guard below keeps plain keystrokes out.
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
 }
