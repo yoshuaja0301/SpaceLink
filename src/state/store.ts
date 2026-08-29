@@ -24,7 +24,6 @@ import type {
 } from '../types'
 import { parseNote } from '../core/markdown/parse'
 import { buildIndex, emptyIndex, getBacklinks, resolveLinkTarget } from '../core/graph/index'
-import { createDemoVault } from '../core/vault/demoVault'
 
 const AUTOSAVE_MS_MIN = 200
 

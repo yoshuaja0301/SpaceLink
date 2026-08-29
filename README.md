@@ -72,7 +72,10 @@ npm test         # vitest
 | `Ctrl/⌘ S` | Save now |
 | `Ctrl/⌘ E` | Toggle edit / preview |
 | `Ctrl/⌘ G` | Graph view |
-| `Ctrl/⌘ B` | Toggle sidebar |
+| `Ctrl/⌘ Alt B` | Toggle sidebar |
+| `Ctrl/⌘ B` / `Ctrl/⌘ I` | Bold / italic |
+| `Ctrl/⌘ K` | Insert link |
+| `Ctrl/⌘ Enter` | Toggle task checkbox |
 | `Ctrl/⌘ \` | Split right |
 | `Ctrl/⌘ W` | Close tab |
 | `Ctrl/⌘ ,` | Settings |

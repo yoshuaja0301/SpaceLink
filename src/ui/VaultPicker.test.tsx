@@ -1,0 +1,258 @@
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act } from 'react'
+import { afterEach, beforeEach, vi } from 'vitest'
+
+import type { NotePath, VaultAdapter } from '../types'
+import { emptyIndex } from '../core/graph/index'
+import { createMemoryVault } from '../core/vault/memoryVault'
+import { DEFAULT_SETTINGS, useAppStore } from '../state/store'
+import { VaultPicker } from './VaultPicker'
+
+// The browser and directory backends are stubbed: one needs IndexedDB and the
+// other needs a user gesture plus the File System Access API, neither of which
+// jsdom has. The demo vault is left real — it is pure in-memory.
+vi.mock('../core/vault/browserVault', () => ({
+  createBrowserVault: vi.fn(),
+  hasStoredVault: vi.fn(),
+  seedVault: vi.fn(),
+}))
+vi.mock('../core/vault/directoryVault', () => ({
+  isDirectoryVaultSupported: vi.fn(),
+  pickDirectoryVault: vi.fn(),
+}))
+
+import { createBrowserVault, hasStoredVault, seedVault } from '../core/vault/browserVault'
+import { isDirectoryVaultSupported, pickDirectoryVault } from '../core/vault/directoryVault'
+
+const PRISTINE = useAppStore.getState()
+
+const STORED_NOTES: Record<NotePath, string> = {
+  'Kept.md': '# Kept\n',
+  'Notes/Other.md': '# Other\n',
+  'Notes/Third.md': '# Third\n',
+}
+
+function browserAdapter(files: Record<NotePath, string> = {}): VaultAdapter {
+  return { ...createMemoryVault(files, { name: 'SpaceFore' }), kind: 'browser' }
+}
+
+/** Render and let the "what is in browser storage?" probe settle. */
+async function show(onReady?: () => void): Promise<void> {
+  await act(async () => {
+    render(<VaultPicker onReady={onReady} />)
+  })
+}
+
+function card(choice: 'demo' | 'browser' | 'directory'): HTMLButtonElement {
+  const node = document.querySelector<HTMLButtonElement>(`.vault-picker-option[data-choice="${choice}"]`)
+  if (!node) throw new Error(`No ${choice} card rendered`)
+  return node
+}
+
+async function click(choice: 'demo' | 'browser' | 'directory'): Promise<void> {
+  await act(async () => {
+    fireEvent.click(card(choice))
+  })
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  useAppStore.setState(
+    {
+      ...PRISTINE,
+      notes: new Map(),
+      attachments: [],
+      index: emptyIndex(),
+      adapter: null,
+      vaultName: '',
+      loading: false,
+      error: null,
+      dirty: new Set(),
+      saving: new Set(),
+      settings: { ...DEFAULT_SETTINGS },
+      toasts: [],
+      recent: [],
+      starred: [],
+      panes: [{ id: 'pane-a', tabs: [], activeTabId: null }],
+      activePaneId: 'pane-a',
+    },
+    true,
+  )
+
+  vi.mocked(hasStoredVault).mockResolvedValue(false)
+  vi.mocked(createBrowserVault).mockImplementation(async () => browserAdapter())
+  vi.mocked(seedVault).mockResolvedValue(undefined)
+  vi.mocked(isDirectoryVaultSupported).mockReturnValue(false)
+  vi.mocked(pickDirectoryVault).mockResolvedValue(null)
+})
+
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+
+describe('VaultPicker', () => {
+  it('offers three keyboard-reachable cards, demo first', async () => {
+    await show()
+
+    const cards = [...document.querySelectorAll<HTMLButtonElement>('.vault-picker-option')]
+    expect(cards).toHaveLength(3)
+    expect(cards.every((node) => node.tagName === 'BUTTON' && node.type === 'button')).toBe(true)
+    expect(cards.map((node) => node.dataset.choice)).toEqual(['demo', 'browser', 'directory'])
+    expect(screen.getByText('Try the demo vault')).toBeTruthy()
+    // The recommendation, and the size of what you are about to open.
+    expect(card('demo').textContent).toMatch(/Recommended — \d+ notes/)
+  })
+
+  it('opens the demo vault into the store and tells the shell it is done', async () => {
+    const onReady = vi.fn()
+    await show(onReady)
+    await click('demo')
+
+    const state = useAppStore.getState()
+    expect(state.vaultName).toBe('Demo vault')
+    expect(state.adapter?.kind).toBe('demo')
+    expect(state.notes.size).toBeGreaterThan(0)
+    expect(state.error).toBeNull()
+    expect(onReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers an empty browser vault and seeds it with a single welcome note', async () => {
+    await show()
+
+    expect(card('browser').textContent).toContain('Start empty')
+    await click('browser')
+
+    expect(vi.mocked(seedVault)).toHaveBeenCalledTimes(1)
+    const [, files] = vi.mocked(seedVault).mock.calls[0]!
+    expect(Object.keys(files)).toEqual(['Welcome.md'])
+    expect(useAppStore.getState().adapter?.kind).toBe('browser')
+  })
+
+  it('offers to continue an existing browser vault, with its note count, and does not reseed', async () => {
+    vi.mocked(hasStoredVault).mockResolvedValue(true)
+    vi.mocked(createBrowserVault).mockImplementation(async () => browserAdapter(STORED_NOTES))
+    await show()
+
+    expect(screen.getByText('Continue where you left off')).toBeTruthy()
+    expect(card('browser').textContent).toContain('3 notes')
+
+    await click('browser')
+    expect(vi.mocked(seedVault)).not.toHaveBeenCalled()
+    expect([...useAppStore.getState().notes.keys()].sort()).toEqual(['Kept.md', 'Notes/Other.md', 'Notes/Third.md'])
+  })
+
+  it('falls back to the empty wording when the storage probe fails', async () => {
+    vi.mocked(hasStoredVault).mockRejectedValue(new Error('storage blocked'))
+    await show()
+    expect(card('browser').textContent).toContain('Start empty')
+    expect(useAppStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('disables the folder card and says why when the browser lacks the API', async () => {
+    await show()
+
+    const folder = card('directory')
+    expect(folder.disabled).toBe(true)
+    expect(folder.textContent).toContain('File System Access API')
+
+    fireEvent.click(folder)
+    expect(vi.mocked(pickDirectoryVault)).not.toHaveBeenCalled()
+  })
+
+  it('enables the folder card where the API exists', async () => {
+    vi.mocked(isDirectoryVaultSupported).mockReturnValue(true)
+    const adapter: VaultAdapter = { ...createMemoryVault({ 'Note.md': '# Note\n' }, { name: 'my-vault' }), kind: 'directory' }
+    vi.mocked(pickDirectoryVault).mockResolvedValue(adapter)
+    const onReady = vi.fn()
+    await show(onReady)
+
+    expect(card('directory').disabled).toBe(false)
+    await click('directory')
+
+    expect(useAppStore.getState().vaultName).toBe('my-vault')
+    expect(onReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a cancelled folder picker as a no-op', async () => {
+    vi.mocked(isDirectoryVaultSupported).mockReturnValue(true)
+    vi.mocked(pickDirectoryVault).mockResolvedValue(null)
+    const onReady = vi.fn()
+    await show(onReady)
+
+    await click('directory')
+
+    expect(onReady).not.toHaveBeenCalled()
+    expect(useAppStore.getState().adapter).toBeNull()
+    expect(useAppStore.getState().toasts).toHaveLength(0)
+    expect(screen.queryByRole('alert')).toBeNull()
+    // Still usable: the cards are not left in their loading state.
+    expect(card('demo').disabled).toBe(false)
+  })
+
+  it('shows an error with a retry, and toasts it, when opening fails', async () => {
+    vi.mocked(isDirectoryVaultSupported).mockReturnValue(true)
+    vi.mocked(pickDirectoryVault).mockRejectedValue(new Error('Permission was not granted.'))
+    const onReady = vi.fn()
+    await show(onReady)
+
+    await click('directory')
+
+    expect(onReady).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('Permission was not granted.')
+    expect(useAppStore.getState().toasts.map((toast) => [toast.kind, toast.message])).toEqual([
+      ['error', 'Permission was not granted.'],
+    ])
+
+    // Retrying re-runs the same choice, and a success clears the error.
+    const adapter: VaultAdapter = { ...createMemoryVault({ 'A.md': '# A\n' }, { name: 'second-try' }), kind: 'directory' }
+    vi.mocked(pickDirectoryVault).mockResolvedValue(adapter)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    })
+
+    expect(vi.mocked(pickDirectoryVault)).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(useAppStore.getState().vaultName).toBe('second-try')
+    expect(onReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a vault that fails to load rather than silently opening nothing', async () => {
+    const broken: VaultAdapter = {
+      ...createMemoryVault({}, { name: 'broken' }),
+      kind: 'browser',
+      list: () => Promise.reject(new Error('Vault is unreadable')),
+    }
+    vi.mocked(createBrowserVault).mockImplementation(async () => broken)
+    const onReady = vi.fn()
+    await show(onReady)
+
+    await click('browser')
+
+    expect(onReady).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('Vault is unreadable')
+  })
+
+  it('locks the other cards while one is opening', async () => {
+    let release = (): void => {}
+    vi.mocked(createBrowserVault).mockImplementation(
+      () =>
+        new Promise<VaultAdapter>((resolve) => {
+          release = () => resolve(browserAdapter())
+        }),
+    )
+    await show()
+
+    await act(async () => {
+      fireEvent.click(card('browser'))
+    })
+    expect(card('browser').getAttribute('aria-busy')).toBe('true')
+    expect(card('browser').textContent).toContain('Opening…')
+    expect(card('demo').disabled).toBe(true)
+
+    await act(async () => {
+      release()
+    })
+    expect(card('demo').disabled).toBe(false)
+  })
+})

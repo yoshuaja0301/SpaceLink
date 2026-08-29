@@ -1,0 +1,344 @@
+/*
+ * SpaceFore — rendered note typography.
+ *
+ * Scoped to `.markdown-preview`, the container `Preview.tsx` fills with the
+ * sanitised HTML from `core/markdown/render.ts`. Colours come only from the
+ * tokens in `theme.css`, so both themes come for free.
+ */
+
+.markdown-preview {
+  font-family: var(--font-editor);
+  font-size: 1rem;
+  line-height: var(--line-height-normal);
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+  -webkit-font-smoothing: antialiased;
+}
+.markdown-preview > :first-child { margin-top: 0; }
+.markdown-preview > :last-child { margin-bottom: 0; }
+
+/* ---- headings --------------------------------------------------------- */
+
+.markdown-preview :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.6em 0 0.5em;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.011em;
+  color: var(--text-normal);
+  scroll-margin-top: var(--space-6);
+}
+.markdown-preview h1 { font-size: 1.9em; letter-spacing: -0.02em; }
+.markdown-preview h2 { font-size: 1.5em; padding-bottom: 0.24em; border-bottom: 1px solid var(--divider); }
+.markdown-preview h3 { font-size: 1.26em; }
+.markdown-preview h4 { font-size: 1.1em; }
+.markdown-preview h5 { font-size: 1em; }
+.markdown-preview h6 {
+  font-size: 0.92em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ---- block flow ------------------------------------------------------- */
+
+.markdown-preview p { margin: 0 0 1em; }
+.markdown-preview :is(ul, ol) { margin: 0 0 1em; padding-left: 1.6em; }
+.markdown-preview li { margin: 0.25em 0; }
+.markdown-preview li > :is(ul, ol) { margin: 0.25em 0 0.35em; }
+.markdown-preview li::marker { color: var(--text-faint); }
+.markdown-preview hr { height: 1px; margin: var(--space-7) 0; border: 0; background: var(--divider); }
+.markdown-preview blockquote {
+  margin: 0 0 1em;
+  padding: var(--space-1) var(--space-4);
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+  font-style: italic;
+}
+.markdown-preview blockquote > :last-child { margin-bottom: 0; }
+.markdown-preview abbr[title] { text-decoration: underline dotted var(--border-strong); cursor: help; }
+.markdown-preview kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); color: var(--text-normal); }
+
+/* ---- links ------------------------------------------------------------ */
+
+.markdown-preview a { color: var(--link); text-decoration: none; }
+.internal-link { color: var(--link); text-decoration: none; border-radius: 2px; cursor: pointer; }
+.internal-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.internal-link.is-unresolved {
+  color: var(--link-unresolved);
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  opacity: 0.85;
+}
+.internal-link.is-unresolved:hover { opacity: 1; }
+.external-link { color: var(--link); text-decoration: none; }
+.external-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+/* Small trailing arrow so outbound links read as outbound without an icon font. */
+.external-link::after {
+  content: '↗';
+  display: inline-block;
+  margin-left: 0.15em;
+  font-size: 0.78em;
+  line-height: 1;
+  vertical-align: 0.12em;
+  opacity: 0.7;
+}
+
+/* ---- tags ------------------------------------------------------------- */
+
+.tag {
+  display: inline-block;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  font-size: 0.85em;
+  font-weight: 500;
+  line-height: 1.5;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tag:hover { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- code ------------------------------------------------------------- */
+
+.markdown-preview code {
+  padding: 0.12em 0.34em;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+}
+.markdown-preview pre,
+.code-block {
+  position: relative;
+  margin: 0 0 1.1em;
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--code-bg);
+  line-height: 1.55;
+  tab-size: 2;
+}
+.markdown-preview pre code,
+.code-block code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-normal);
+  font-size: 0.85em;
+  white-space: pre;
+}
+/* Language badge, straight from the `data-lang` the renderer emits. */
+.code-block[data-lang]:not([data-lang=''])::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-2);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+/* ---- task list items --------------------------------------------------- */
+
+.markdown-preview ul:has(> .task-item) { padding-left: 1.1em; list-style: none; }
+.task-item { position: relative; display: flex; align-items: flex-start; gap: var(--space-2); list-style: none; }
+.task-item > input[type='checkbox'] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0.28em 0 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  cursor: default;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.task-item > input[type='checkbox']:checked { border-color: var(--accent); background: var(--accent); }
+/* The tick is drawn, not a glyph, so it stays crisp at any size. */
+.task-item > input[type='checkbox']:checked::after {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 8px;
+  margin: 0.5px auto 0;
+  border: solid var(--text-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(43deg);
+}
+.task-item > input[type='checkbox']:checked ~ * {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
+}
+
+/* ---- tables ------------------------------------------------------------ */
+
+.markdown-preview table {
+  width: 100%;
+  margin: 0 0 1.2em;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 0.94em;
+  overflow: hidden;
+}
+.markdown-preview :is(th, td) {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-preview th { background: var(--bg-tertiary); font-weight: 600; white-space: nowrap; }
+.markdown-preview tbody tr:nth-child(even) { background: var(--bg-hover); }
+.markdown-preview tbody tr:last-child td { border-bottom: 0; }
+
+/* ---- images ------------------------------------------------------------ */
+
+.markdown-preview img { max-width: 100%; height: auto; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.markdown-preview figure { margin: 0 0 1.2em; }
+.markdown-preview figcaption { margin-top: var(--space-2); color: var(--text-faint); font-size: 0.86em; text-align: center; }
+
+/* ---- callouts ----------------------------------------------------------- *
+ * Supports both markup shapes: `class="callout callout-warning"` and
+ * `class="callout" data-callout="warning"`. */
+
+.callout {
+  --callout-color: var(--accent);
+  margin: 0 0 1.2em;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--callout-color);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--callout-color) 9%, transparent);
+}
+.callout > :last-child { margin-bottom: 0; }
+.callout-title { margin: 0 0 var(--space-2); color: var(--callout-color); font-weight: 650; }
+.callout-note, .callout[data-callout='note'] { --callout-color: var(--accent); }
+.callout-info, .callout[data-callout='info'] { --callout-color: #3d8bd4; }
+.callout-tip, .callout[data-callout='tip'], .callout[data-callout='success'] { --callout-color: var(--text-success); }
+.callout-warning, .callout[data-callout='warning'], .callout[data-callout='caution'] { --callout-color: #d08a1f; }
+.callout-danger, .callout[data-callout='danger'], .callout[data-callout='error'] { --callout-color: var(--text-error); }
+
+/* ---- embeds (`![[Note]]`) ----------------------------------------------- */
+
+.embed {
+  margin: 0 0 1.2em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.embed-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-ui);
+  font-weight: 600;
+}
+.embed-body { padding: var(--space-3) var(--space-4); font-size: 0.96em; }
+.embed-body > :last-child { margin-bottom: 0; }
+/* A cycle or a too-deep transclusion renders as a stub, not a crash. */
+.embed-body:empty::before { content: 'Embedded note omitted'; color: var(--text-faint); font-style: italic; }
+
+/* ---- frontmatter property table ------------------------------------------ */
+
+.frontmatter {
+  margin: 0 0 var(--space-6);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-ui);
+}
+.frontmatter table { width: 100%; margin: 0; border: 0; border-collapse: collapse; font-size: inherit; }
+.frontmatter :is(td, th) {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--divider);
+  background: none;
+  vertical-align: top;
+}
+.frontmatter tr:last-child :is(td, th) { border-bottom: 0; }
+.frontmatter :is(th, td:first-child, dt),
+.frontmatter-key {
+  width: 1%;
+  color: var(--text-faint);
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: left;
+}
+.frontmatter dd, .frontmatter-value { margin: 0; color: var(--text-normal); }
+.frontmatter dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-3); margin: 0; }
+
+/* ---- footnotes ------------------------------------------------------------ */
+
+.markdown-preview :is(.footnote-ref, sup) a { padding: 0 0.15em; color: var(--link); font-size: 0.82em; text-decoration: none; }
+.markdown-preview .footnotes {
+  margin-top: var(--space-8);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--divider);
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+.markdown-preview .footnotes hr { display: none; }
+.markdown-preview .footnotes ol { padding-left: 1.4em; }
+.markdown-preview .footnote-backref { margin-left: 0.35em; text-decoration: none; }
+
+/* ---- KaTeX ---------------------------------------------------------------- */
+
+.markdown-preview .katex { font-size: 1.06em; color: var(--text-normal); }
+.markdown-preview .katex-display { margin: var(--space-5) 0; padding: var(--space-1) 0; overflow-x: auto; overflow-y: hidden; }
+.markdown-preview .katex-display > .katex { font-size: 1.15em; }
+/* KaTeX paints parse failures in its own red; keep it on-palette. */
+.markdown-preview .katex-error { color: var(--text-error) !important; font-family: var(--font-mono); font-size: 0.9em; }
+
+/* ------------------------------------------------------------------ *
+ * Heading anchors
+ *
+ * The renderer emits a `#` anchor after every heading. It stays out of the
+ * way until the heading is hovered or the anchor itself takes focus, so the
+ * reading view is not littered with hashes.
+ * ------------------------------------------------------------------ */
+
+.markdown-preview .heading-anchor {
+  margin-left: var(--space-2);
+  color: var(--text-faint);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.markdown-preview :is(h1, h2, h3, h4, h5, h6):hover .heading-anchor,
+.markdown-preview .heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+.markdown-preview .heading-anchor:hover {
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-preview .heading-anchor { transition: none; }
+}
