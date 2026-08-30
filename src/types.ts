@@ -314,6 +314,29 @@ export interface Settings {
   graphChargeStrength: number
 }
 
+/**
+ * A question the app needs answered before it can continue — a rename, or a
+ * confirmation before something destructive. Native `prompt`/`confirm` are not
+ * an option: they are blocked outright in sandboxed frames, so the action would
+ * silently do nothing.
+ */
+export interface AppDialog {
+  kind: 'prompt' | 'confirm'
+  title: string
+  /** Supporting line under the title. */
+  message?: string
+  /** Starting value for a `prompt`. */
+  initial?: string
+  /** Visible label for a `prompt`'s field. Defaults to "Name". */
+  inputLabel?: string
+  /** Label for the affirmative button. Defaults to "OK". */
+  confirmLabel?: string
+  /** Style the affirmative button as destructive. */
+  danger?: boolean
+  /** Rejects nothing — resolves with the answer, or null/false when dismissed. */
+  resolve: (answer: string | boolean | null) => void
+}
+
 export interface Toast {
   id: string
   message: string

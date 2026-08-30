@@ -303,7 +303,16 @@ ul, ol { margin: 0; padding: 0; }
   font-weight: 650;
 }
 
-.right-sidebar-body { padding-top: var(--space-2); }
+/* The panels flow normally, but the local graph is `flex: 1 1 auto` and needs a
+ * flex column to stretch into — without one it collapses to a canvas's intrinsic
+ * 150px and leaves the rest of the sidebar empty. */
+.right-sidebar-body {
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--space-2);
+}
+.right-sidebar-body > * { flex: 0 0 auto; }
+.right-sidebar-body > .graph-view { flex: 1 1 auto; min-height: 240px; }
 
 .sidebar-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-1) var(--space-6); }
 
@@ -1059,6 +1068,12 @@ button.statusbar-item:hover { background: var(--bg-hover); color: var(--text-nor
  * 14. Form controls
  * ======================================================================= */
 
+/* The app's own prompt/confirm, rendered by DialogHost inside a Modal. */
+.dialog-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.dialog-message { margin: 0; color: var(--text-muted); }
+.dialog-input { width: 100%; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1403,3 +1418,7 @@ kbd {
    * clears the decoration itself after 1.2s. */
   .editor-host .cm-flash-line { animation: none; background-color: var(--accent-soft); }
 }
+
+/* Prompt field inside a DialogHost modal. */
+.dialog-field { display: flex; flex-direction: column; gap: var(--space-2); }
+.dialog-field > span { color: var(--text-muted); font-size: var(--font-size-ui); }

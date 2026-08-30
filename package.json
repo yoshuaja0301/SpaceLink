@@ -3,14 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "SpaceFore — a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
+  "description": "SpaceFore \u2014 a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false || tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "node e2e/run.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.1",
     "jsdom": "^30.0.1",
+    "playwright": "^1.56.0",
     "typescript": "^5.9.3",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"

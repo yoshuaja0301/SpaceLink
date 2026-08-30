@@ -70,6 +70,10 @@ const ZOOM_STEP = 1.25
 const WHEEL_DIVISOR = 320
 /** Labels appear at or above this zoom, plus always for hovered/current nodes. */
 const LABEL_ZOOM = 0.75
+/** Slack around a label's measured box when testing it against its neighbours. */
+const LABEL_PADDING = 2
+/** Approximate cap height used for a label's collision box. */
+const LABEL_LINE_HEIGHT = 11
 /** Label baseline offset below the node circle, in px. */
 const LABEL_GAP = 5
 const LABEL_FONT_SIZE = 11
@@ -468,6 +472,8 @@ function createEngine(context: EngineContext): Engine {
 
     const view = transform
     const { hoveredId = null, currentId = null } = props.current
+    /** Label candidates for this frame; drawn after every node circle is down. */
+    const labels: { text: string; x: number; y: number; alpha: number; strong: boolean; priority: number }[] = []
     // Hovering focuses the graph: the node, its neighbours and the edges
     // between them keep full opacity, everything else fades back.
     const focusId = hoveredId && nodeIndex.has(hoveredId) ? hoveredId : null
@@ -540,15 +546,46 @@ function createEngine(context: EngineContext): Engine {
 
       const showLabel = view.k >= LABEL_ZOOM || isFocus || isCurrent
       if (!showLabel) continue
-      painter.globalAlpha = alpha
-      const text = clipLabel(node.label || node.id)
-      const y = at.y + radius + LABEL_GAP
+      // Collected, not drawn: labels go down in a second pass so the important
+      // ones claim their space first and the rest step aside (see below).
+      labels.push({
+        text: clipLabel(node.label || node.id),
+        x: at.x,
+        y: at.y + radius + LABEL_GAP,
+        alpha,
+        strong: isCurrent || isFocus,
+        priority: isCurrent || isFocus ? Number.MAX_SAFE_INTEGER : node.degree,
+      })
+    }
+
+    // Second pass. A dense neighbourhood used to stack every label on top of
+    // its neighbours' — unreadable in a narrow sidebar. Draw the current and
+    // hovered nodes first, then the biggest hubs, and drop any label whose box
+    // would collide with one already placed.
+    labels.sort((a, b) => b.priority - a.priority)
+    const placed: { left: number; right: number; top: number; bottom: number }[] = []
+    for (const label of labels) {
+      const half = painter.measureText(label.text).width / 2
+      const box = {
+        left: label.x - half - LABEL_PADDING,
+        right: label.x + half + LABEL_PADDING,
+        top: label.y - LABEL_LINE_HEIGHT,
+        bottom: label.y + LABEL_PADDING,
+      }
+      const collides = placed.some(
+        (other) => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top,
+      )
+      // The current note and whatever is hovered are never dropped.
+      if (collides && label.priority !== Number.MAX_SAFE_INTEGER) continue
+      placed.push(box)
+
+      painter.globalAlpha = label.alpha
       // A halo in the page background keeps labels legible over dense edges.
       painter.lineWidth = 3
       painter.strokeStyle = palette.background
-      painter.strokeText(text, at.x, y)
-      painter.fillStyle = isCurrent || isFocus ? palette.labelStrong : palette.label
-      painter.fillText(text, at.x, y)
+      painter.strokeText(label.text, label.x, label.y)
+      painter.fillStyle = label.strong ? palette.labelStrong : palette.label
+      painter.fillText(label.text, label.x, label.y)
     }
 
     painter.globalAlpha = 1

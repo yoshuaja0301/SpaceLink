@@ -158,40 +158,54 @@ describe('file commands', () => {
     }
   })
 
-  it('renames through the store, keeping the note in its folder', () => {
+  it('renames through the store, keeping the note in its folder', async () => {
     const renameNote = vi.fn(async () => {})
     seed({ 'notes/Old.md': '# Old' })
     useAppStore.setState({ renameNote })
     act(() => useAppStore.getState().openPath('notes/Old.md'))
-    vi.spyOn(window, 'prompt').mockReturnValue('New name')
 
-    void find(commands().current, 'file:rename').run()
+    // Rename asks through the store, which renders the app's own modal — not
+    // window.prompt, which sandboxed frames block outright.
+    const done = find(commands().current, 'file:rename').run()
+    expect(useAppStore.getState().dialog?.kind).toBe('prompt')
+    act(() => useAppStore.getState().resolveDialog('New name'))
+    await done
+
     expect(renameNote).toHaveBeenCalledWith('notes/Old.md', 'notes/New name.md')
   })
 
-  it('does not rename when the prompt is cancelled', () => {
+  it('does not rename when the prompt is cancelled', async () => {
     const renameNote = vi.fn(async () => {})
     seed({ 'Old.md': '# Old' })
     useAppStore.setState({ renameNote })
     act(() => useAppStore.getState().openPath('Old.md'))
-    vi.spyOn(window, 'prompt').mockReturnValue(null)
 
-    void find(commands().current, 'file:rename').run()
+    const done = find(commands().current, 'file:rename').run()
+    act(() => useAppStore.getState().resolveDialog(null))
+    await done
+
     expect(renameNote).not.toHaveBeenCalled()
+    expect(useAppStore.getState().dialog).toBeNull()
   })
 
-  it('asks before deleting', () => {
+  it('asks before deleting', async () => {
     const deleteNote = vi.fn(async () => {})
     seed({ 'A.md': '# A' })
     useAppStore.setState({ deleteNote })
     act(() => useAppStore.getState().openPath('A.md'))
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    void find(commands().current, 'file:delete').run()
+    // Declining leaves the note alone.
+    let done = find(commands().current, 'file:delete').run()
+    expect(useAppStore.getState().dialog?.kind).toBe('confirm')
+    expect(useAppStore.getState().dialog?.danger).toBe(true)
+    act(() => useAppStore.getState().resolveDialog(false))
+    await done
     expect(deleteNote).not.toHaveBeenCalled()
 
-    confirmSpy.mockReturnValue(true)
-    void find(commands().current, 'file:delete').run()
+    // Confirming goes through.
+    done = find(commands().current, 'file:delete').run()
+    act(() => useAppStore.getState().resolveDialog(true))
+    await done
     expect(deleteNote).toHaveBeenCalledWith('A.md')
   })
 

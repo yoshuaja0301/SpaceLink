@@ -9,6 +9,7 @@ import { createMemoryVault } from '../core/vault/memoryVault'
 import { buildIndex } from '../core/graph/index'
 import type { AppState } from './store'
 import {
+  LAST_VAULT_KEY,
   basename,
   dirname,
   formatDate,
@@ -711,5 +712,23 @@ describe('backlink selectors', () => {
     await useAppStore.getState().deleteNote('Concepts/Atomic Notes.md')
     const outgoing = useAppStore.getState().outgoingFor('Start Here.md')
     expect(outgoing.map((g) => g.source)).toEqual(['Concepts/Zettelkasten.md'])
+  })
+})
+
+describe('the last vault kind is remembered', () => {
+  it('records the kind of a vault that loaded successfully', async () => {
+    localStorage.removeItem(LAST_VAULT_KEY)
+    await openSeededVault()
+    expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'demo' })
+  })
+
+  it('does not record a vault that failed to load', async () => {
+    await openSeededVault()
+    localStorage.setItem(LAST_VAULT_KEY, JSON.stringify({ kind: 'demo' }))
+    const broken = createMemoryVault({})
+    Object.defineProperty(broken, 'kind', { value: 'browser' })
+    broken.list = () => Promise.reject(new Error('no storage'))
+    await useAppStore.getState().openVault(broken)
+    expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'demo' })
   })
 })

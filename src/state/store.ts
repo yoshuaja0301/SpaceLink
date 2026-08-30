@@ -8,6 +8,7 @@
 import { create } from 'zustand'
 
 import type {
+  AppDialog,
   BacklinkGroup,
   Note,
   NotePath,
@@ -46,6 +47,8 @@ export const DEFAULT_SETTINGS: Settings = {
 }
 
 const SETTINGS_KEY = 'spacefore.settings'
+/** Which kind of vault was last opened, so a reload comes back to the same one. */
+export const LAST_VAULT_KEY = 'spacefore.vault'
 const STARRED_KEY = 'spacefore.starred'
 
 /**
@@ -161,6 +164,8 @@ export interface AppState {
   /* ui --------------------------------------------------------------- */
   settings: Settings
   palette: null | 'commands' | 'quickswitch' | 'headings'
+  /** The question currently on screen, if any. Rendered by `DialogHost`. */
+  dialog: AppDialog | null
   toasts: Toast[]
   starred: NotePath[]
   recent: NotePath[]
@@ -205,6 +210,12 @@ export interface AppState {
   updateSettings: (patch: Partial<Settings>) => void
   setTheme: (theme: ThemeName) => void
   setPalette: (palette: AppState['palette']) => void
+  /** Ask for a line of text. Resolves with the answer, or null when dismissed. */
+  askText: (title: string, initial: string, options?: { message?: string; confirmLabel?: string; inputLabel?: string }) => Promise<string | null>
+  /** Ask for a yes/no. Resolves false when dismissed. */
+  askConfirm: (title: string, options?: { message?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>
+  /** Answer the open dialog and close it. */
+  resolveDialog: (answer: string | boolean | null) => void
   setSearchQuery: (query: string) => void
   setHoveredPath: (path: NotePath | null) => void
   toggleStar: (path: NotePath) => void
@@ -303,6 +314,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   settings: loadJSON<Settings>(SETTINGS_KEY, DEFAULT_SETTINGS),
   palette: null,
+  dialog: null,
   toasts: [],
   starred: loadJSON<NotePath[]>(STARRED_KEY, []).filter((path) => typeof path === 'string'),
   recent: [],
@@ -345,6 +357,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       attachments.sort((a, b) => a.path.localeCompare(b.path))
       const index = buildIndex(notes)
       clearPendingIndex()
+      // Remember the kind so the next load reopens this vault instead of
+      // dropping the reader back into the demo with their notes seemingly gone.
+      saveJSON(LAST_VAULT_KEY, { kind: adapter.kind })
       set((s) => ({
         adapter,
         vaultName: adapter.name,
@@ -867,6 +882,44 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setPalette(palette) {
     set({ palette })
+  },
+
+  askText(title, initial, options = {}) {
+    // Only one question at a time: an unanswered one is dismissed rather than
+    // left dangling, so its caller always settles.
+    get().resolveDialog(null)
+    return new Promise<string | null>((resolve) => {
+      set({
+        dialog: {
+          kind: 'prompt',
+          title,
+          initial,
+          ...options,
+          resolve: (answer) => resolve(typeof answer === 'string' ? answer : null),
+        },
+      })
+    })
+  },
+
+  askConfirm(title, options = {}) {
+    get().resolveDialog(null)
+    return new Promise<boolean>((resolve) => {
+      set({
+        dialog: {
+          kind: 'confirm',
+          title,
+          ...options,
+          resolve: (answer) => resolve(answer === true),
+        },
+      })
+    })
+  },
+
+  resolveDialog(answer) {
+    const dialog = get().dialog
+    if (!dialog) return
+    set({ dialog: null })
+    dialog.resolve(answer)
   },
 
   setSearchQuery(query) {

@@ -190,17 +190,17 @@ async function copyText(text: string): Promise<boolean> {
   return ok
 }
 
-function ask(question: string, initial: string): string | null {
-  if (typeof window === 'undefined' || typeof window.prompt !== 'function') return null
-  const answer = window.prompt(question, initial)
-  return answer === null ? null : answer
+/**
+ * Questions go through the store, which renders them with the app's own modal.
+ * `window.prompt` / `window.confirm` are not used: both are blocked in sandboxed
+ * frames, where the command would silently do nothing.
+ */
+function ask(title: string, initial: string): Promise<string | null> {
+  return store().askText(title, initial, { confirmLabel: 'Rename', inputLabel: 'New name' })
 }
 
-function confirmed(question: string): boolean {
-  // No `confirm` at all (a worker, a test harness) means nobody can answer;
-  // the command was invoked deliberately, so take that as the answer.
-  if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true
-  return window.confirm(question) === true
+function confirmed(title: string, message: string): Promise<boolean> {
+  return store().askConfirm(title, { message, confirmLabel: 'Delete', danger: true })
 }
 
 /** App.tsx owns the settings modal and vault picker and listens for these. */
@@ -342,15 +342,15 @@ export function buildCommands(context: CommandContext): Command[] {
       section: 'File',
       shortcut: 'F2',
       enabled: () => store().activeNote() !== null,
-      run: () => {
+      run: async () => {
         const state = store()
         const note = state.activeNote()
         if (!note) return
-        const answer = ask('Rename note', note.name)
+        const answer = await ask('Rename note', note.name)
         if (answer === null) return
         const name = sanitizeFileName(answer)
         if (!name || name === note.name) return
-        return state.renameNote(note.path, joinPath(dirname(note.path), `${name}.md`))
+        await state.renameNote(note.path, joinPath(dirname(note.path), `${name}.md`))
       },
     },
     {
@@ -358,12 +358,12 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Delete current note',
       section: 'File',
       enabled: () => store().activeNote() !== null,
-      run: () => {
+      run: async () => {
         const state = store()
         const note = state.activeNote()
         if (!note) return
-        if (!confirmed(`Delete "${note.name}"? This cannot be undone.`)) return
-        return state.deleteNote(note.path)
+        if (!(await confirmed(`Delete "${note.name}"?`, 'This cannot be undone.'))) return
+        await state.deleteNote(note.path)
       },
     },
     {

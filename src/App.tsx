@@ -7,10 +7,14 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 
-import { useAppStore } from './state/store'
+import type { VaultKind } from './types'
+
+import { LAST_VAULT_KEY, useAppStore } from './state/store'
+import { createBrowserVault } from './core/vault/browserVault'
 import { createDemoVault } from './core/vault/demoVault'
 import { createDirectoryVault, restoreVaultHandle } from './core/vault/directoryVault'
 import { CommandPalette } from './ui/CommandPalette'
+import { DialogHost } from './ui/DialogHost'
 import { Ribbon } from './ui/Ribbon'
 import { RightSidebar } from './ui/RightSidebar'
 import { SettingsModal } from './ui/SettingsModal'
@@ -41,21 +45,47 @@ export function App(): React.JSX.Element {
   const commands = useCommands()
   useHotkeys(commands)
 
-  // Startup: reopen a previously granted folder when the browser still allows
-  // it, otherwise fall back to the demo vault so the app is never empty.
+  // Startup: reopen whichever vault was open last. A reader who picked the
+  // browser vault or a folder and then reloaded used to land back in the demo
+  // with their notes apparently gone, so the kind is remembered and restored;
+  // the demo is only the fallback when there is nothing to restore.
   useEffect(() => {
     let cancelled = false
     void (async () => {
+      let lastKind: VaultKind | null = null
       try {
-        const handle = await restoreVaultHandle()
-        if (cancelled) return
-        if (handle) {
-          await openVault(createDirectoryVault(handle))
-          return
-        }
+        const raw = localStorage.getItem(LAST_VAULT_KEY)
+        const parsed: unknown = raw ? JSON.parse(raw) : null
+        const kind = (parsed as { kind?: unknown } | null)?.kind
+        if (kind === 'browser' || kind === 'directory' || kind === 'demo') lastKind = kind
       } catch {
-        /* permission revoked or storage unavailable — fall through to the demo */
+        /* unreadable storage — start from the demo */
       }
+
+      if (lastKind === 'directory' || lastKind === null) {
+        try {
+          const handle = await restoreVaultHandle()
+          if (cancelled) return
+          if (handle) {
+            await openVault(createDirectoryVault(handle))
+            return
+          }
+        } catch {
+          /* permission revoked or storage unavailable — fall through */
+        }
+      }
+
+      if (lastKind === 'browser') {
+        try {
+          const vault = await createBrowserVault()
+          if (cancelled) return
+          await openVault(vault)
+          return
+        } catch {
+          /* IndexedDB unavailable — fall through to the demo */
+        }
+      }
+
       if (!cancelled) await openVault(createDemoVault())
     })().finally(() => {
       if (!cancelled) setBooting(false)
@@ -126,6 +156,7 @@ export function App(): React.JSX.Element {
       <StatusBar />
 
       <CommandPalette />
+      <DialogHost />
       <Toasts />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 

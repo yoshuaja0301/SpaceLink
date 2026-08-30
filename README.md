@@ -56,8 +56,26 @@ npm run dev      # http://localhost:5173
 ```bash
 npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
-npm test         # vitest
+npm test         # vitest — 1200+ unit and component tests
+npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
+
+### End-to-end tests
+
+`npm run e2e` starts the preview server, opens Chromium and walks ~66 real user
+flows — expanding folders, typing, formatting, wiki-link autocomplete, clicking
+links and tags, ticking a task inside a transclusion, search operators, the
+command palette, the graph, renaming with link rewriting, deleting, switching
+vaults, reloading, and keyboard navigation. Any step that fails, and any error
+the page logs, fails the run.
+
+They exist because a whole class of defect passes every unit test and still
+breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
+that never receives a height, a dialog the browser blocks outright. Each of
+those was found here, not by the unit suite.
+
+Playwright needs a browser once: `npx playwright install chromium` (or point
+`PLAYWRIGHT_CHROMIUM_PATH` at one you already have).
 
 ## Keyboard shortcuts
 
@@ -99,8 +117,12 @@ src/
   styles/               design tokens and theme, one dark-first system
 ```
 
+```
+e2e/                    browser-driven suites; see "End-to-end tests" above
+```
+
 `docs/CONTRACTS.md` is the binding module surface — every module is written
-against it.
+against it, including the window-event contract the panels talk over.
 
 The design principle throughout: **the core is pure and testable**, the store
 owns all mutation, and the UI only reads state and dispatches actions.
