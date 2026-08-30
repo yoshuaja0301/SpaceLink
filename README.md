@@ -48,7 +48,52 @@ No account, no server, no telemetry. Everything runs in the tab.
   product tour
 - Export the vault as JSON, export a note as Markdown, import from JSON
 
-## Getting started
+## Installing it
+
+There is no installer to download. SpaceFore is built from source in about
+fifteen seconds, and then installs itself from the browser — it is a progressive
+web app, so the "install" is your browser's, not a package manager's.
+
+You need [Node.js](https://nodejs.org) 20 or newer. Nothing else.
+
+```bash
+git clone <this repository> spacefore
+cd spacefore
+npm install
+npm start -- --vault ~/Notes
+```
+
+`npm start` builds the app and serves it, printing the address to open and the
+access token your other devices will need. Open that address, and install it:
+
+- **macOS / Windows / Linux** — Chrome or Edge, the install icon in the address
+  bar, or menu → *Cast, save and share* → *Install page as app*
+- **iPhone / iPad** — Safari, Share, *Add to Home Screen*
+- **Android** — Chrome, menu, *Install app*
+
+Installed, it opens in its own window, keeps working with the network down, and
+remembers which vault it was on.
+
+The vault folder is created if it is not there. Point it at notes you already
+have and it reads every `.md` file in the folder — nothing is converted, moved
+or rewritten on the way in. If you would rather prove that to yourself first,
+[docs/SERVER.md](docs/SERVER.md#try-it-on-a-copy-first) walks through doing it
+on a copy.
+
+> **To install on another device**, the server needs HTTPS — browsers only
+> treat a page as an app over `https://` or `http://localhost`. Over plain HTTP
+> on your Wi-Fi the app still works and still syncs; it just cannot be
+> installed. [docs/SERVER.md](docs/SERVER.md#reaching-it-from-anywhere) sets up
+> HTTPS with Tailscale in three commands.
+
+### Without a server
+
+You do not need one. `npm run dev` opens the app on `http://localhost:5173`,
+and from there **Open a folder** reads and writes real files on disk through
+the File System Access API (Chrome, Edge, Opera). The server exists so that
+*several* devices can share one folder.
+
+## Working on it
 
 ```bash
 npm install
@@ -58,14 +103,15 @@ npm run dev      # http://localhost:5173
 ```bash
 npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
-npm run server -- --vault ~/Notes   # host a vault for your other devices
-npm test         # vitest — 1200+ unit and component tests
+npm start        # build, then serve it — add -- --vault ~/Notes
+npm run server -- --vault ~/Notes   # serve an existing build
+npm test         # vitest — 1290+ unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens Chromium and walks 91 real user
+`npm run e2e` starts the preview server, opens Chromium and walks 100 real user
 flows — expanding folders, typing, formatting, wiki-link autocomplete, clicking
 links and tags, ticking a task inside a transclusion, search operators, the
 command palette, the graph, renaming with link rewriting, deleting, switching
@@ -94,6 +140,12 @@ They exist because a whole class of defect passes every unit test and still
 breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
 that never receives a height, a dialog the browser blocks outright. Each of
 those was found here, not by the unit suite.
+
+A last suite reads the built bundle off disk and fails if the editor, KaTeX or
+the graph reappear in the chunk the first screen has to download, or if it grows
+past its stated budget — one ordinary looking import would otherwise undo the
+code splitting silently. It then opens a note for editing, opens the graph, and
+renders an equation, each of which has to wait for a chunk to arrive.
 
 Playwright needs a browser once: `npx playwright install chromium` (or point
 `PLAYWRIGHT_CHROMIUM_PATH` at one you already have).
@@ -168,6 +220,10 @@ server** on the other device. It binds to loopback unless you ask otherwise, and
 Cloudflare tunnel — not a forwarded router port), keeping it running on a Mac,
 and what the token does and does not protect.
 
+Opening a vault is one request rather than one per note, so a folder of five
+thousand notes appears in a few seconds rather than queueing behind the
+browser's connection limit, and the splash counts them as they land.
+
 The vault stays an ordinary folder of Markdown files. Time Machine, git and any
 other backup you already have keep working.
 
@@ -175,7 +231,15 @@ other backup you already have keep working.
 
 Chrome / Edge / Opera get the full experience including opening a real folder.
 Firefox and Safari lack the File System Access API, so the folder option is
-disabled there — the browser vault and demo vault work everywhere.
+disabled there — the browser vault, the demo vault and the sync server work
+everywhere.
+
+Installing it as an app needs `https://` or `http://localhost`, which is a
+browser rule rather than one of ours. Over plain HTTP on a local network the app
+runs and syncs normally but stays a page.
+
+Only Chromium has actually been exercised, by the test suites above. Firefox and
+Safari are untested, and nothing here has been run on macOS itself.
 
 ## Licence
 

@@ -136,6 +136,28 @@ The installed app remembers which server it is paired with, so it reconnects on
 its own. It still needs to reach the server: your notes live there, not on the
 device.
 
+### Installing needs `localhost` or HTTPS
+
+Browsers only treat a page as an app — and only run a service worker for it — on
+what they call a secure context: `https://`, or `http://localhost`. That is not
+a SpaceFore rule, and there is no way around it.
+
+What that means in practice, measured rather than assumed:
+
+| Opened at | Installable | Works offline |
+| --- | --- | --- |
+| `http://localhost:4899` — the host machine itself | yes | yes |
+| `http://192.168.1.20:4899` — another device on the Wi-Fi | **no** | **no** |
+| `https://…ts.net` — through Tailscale, below | yes | yes |
+
+The middle row still *works*: the app opens in the browser, reads and writes the
+vault, and syncs live. It just stays a page rather than becoming an app, and it
+needs the server every time it loads.
+
+So: to install on the machine that holds the notes, use its `localhost` address.
+To install on your phone or your laptop, put HTTPS in front of the server first
+— which is what the next section is for, and is worth doing anyway.
+
 ---
 
 ## Reaching it from anywhere
