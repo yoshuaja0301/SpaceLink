@@ -5,7 +5,8 @@
  *
  *   1. the demo vault — read the feature tour without committing anything,
  *   2. the browser vault — IndexedDB, survives a reload, no permission prompt,
- *   3. a real folder on disk — File System Access API, Chromium only.
+ *   3. a real folder on disk — File System Access API, Chromium only,
+ *   4. a sync server — the same vault on every device you own.
  *
  * Whichever is chosen ends the same way: build a `VaultAdapter`, hand it to
  * `openVault`, then tell the shell we are done. Failures stay on this screen
@@ -20,10 +21,12 @@ import { useAppStore } from '../state/store'
 import { createBrowserVault, hasStoredVault, seedVault } from '../core/vault/browserVault'
 import { createDemoVault, DEMO_NOTES } from '../core/vault/demoVault'
 import { isDirectoryVaultSupported, pickDirectoryVault } from '../core/vault/directoryVault'
+import { createRemoteVault } from '../core/vault/remoteVault'
+import { loadRemoteConnection, saveRemoteConnection } from '../core/vault/remoteConnection'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
 
-type Choice = 'demo' | 'browser' | 'directory'
+type Choice = 'demo' | 'browser' | 'directory' | 'remote'
 
 /** The single note a brand-new browser vault starts with. */
 const WELCOME_NOTE: Record<NotePath, string> = {
@@ -95,6 +98,11 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
   const [error, setError] = useState<{ choice: Choice; message: string } | null>(null)
   /** `null` until the IndexedDB probe below has answered. */
   const [stored, setStored] = useState<{ present: boolean; count: number } | null>(null)
+  /** The connect-to-a-server form, opened by its card. */
+  const [connecting, setConnecting] = useState(false)
+  const remembered = loadRemoteConnection()
+  const [serverUrl, setServerUrl] = useState(remembered?.url ?? '')
+  const [serverToken, setServerToken] = useState(remembered?.token ?? '')
 
   const directorySupported = isDirectoryVaultSupported()
   const mountedRef = useRef(true)
@@ -133,9 +141,17 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
   }, [])
 
   /** Build the adapter for a choice. `null` means the user backed out. */
-  const buildAdapter = useCallback(async (choice: Choice) => {
+  const buildAdapter = useCallback(
+    async (choice: Choice) => {
     if (choice === 'demo') return createDemoVault()
     if (choice === 'directory') return pickDirectoryVault()
+    if (choice === 'remote') {
+      const adapter = await createRemoteVault({ url: serverUrl, token: serverToken })
+      // Only remembered once the server has actually accepted the pairing, so a
+      // typo never becomes the connection this device retries on every load.
+      saveRemoteConnection({ url: serverUrl.trim(), token: serverToken.trim(), name: adapter.name })
+      return adapter
+    }
 
     // Seeding is skipped for a vault that already has content, so a returning
     // user never gets a second copy of the welcome note.
@@ -143,7 +159,9 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
     const adapter = await createBrowserVault()
     if (!existing) await seedVault(adapter, WELCOME_NOTE)
     return adapter
-  }, [])
+    },
+    [serverToken, serverUrl],
+  )
 
   const pick = useCallback(
     async (choice: Choice) => {
@@ -225,7 +243,62 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
           busy={busy === 'directory'}
           onPick={onPick}
         />
+        <VaultCard
+          choice="remote"
+          icon="link"
+          title={remembered ? `Reconnect to ${remembered.name ?? 'your server'}` : 'Connect to a server'}
+          description="Sync the same vault across every device you own. Run the server on the machine that holds your notes, then paste its address and token here."
+          disabled={busy !== null}
+          busy={busy === 'remote'}
+          onPick={() => setConnecting((open) => !open)}
+        />
       </div>
+
+      {connecting && (
+        <form
+          className="vault-connect"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onPick('remote')
+          }}
+        >
+          <label className="dialog-field" htmlFor={`${titleId}-url`}>
+            <span>Server address</span>
+            <input
+              id={`${titleId}-url`}
+              className="input"
+              value={serverUrl}
+              placeholder="http://192.168.1.20:4899"
+              autoComplete="url"
+              onChange={(event) => setServerUrl(event.target.value)}
+            />
+          </label>
+          <label className="dialog-field" htmlFor={`${titleId}-token`}>
+            <span>Access token</span>
+            <input
+              id={`${titleId}-token`}
+              className="input"
+              value={serverToken}
+              type="password"
+              placeholder="Printed by the server when it starts"
+              autoComplete="off"
+              onChange={(event) => setServerToken(event.target.value)}
+            />
+          </label>
+          <div className="dialog-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setConnecting(false)}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy !== null || serverUrl.trim() === '' || serverToken.trim() === ''}
+            >
+              {busy === 'remote' ? 'Connecting…' : 'Connect'}
+            </button>
+          </div>
+        </form>
+      )}
 
       <p className="vault-picker-status" role="status">
         {busy !== null && 'Opening vault…'}

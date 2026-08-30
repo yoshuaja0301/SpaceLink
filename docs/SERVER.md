@@ -1,0 +1,253 @@
+# Running SpaceFore as a sync server
+
+One machine holds your notes. Every device you own opens that machine's address,
+installs the app, and reads and writes the same folder.
+
+There is no account system and no cloud service. The machine that holds the
+folder is the whole of it.
+
+```
+   iPhone ─┐
+  iPad ────┼──▶  your Mac  ──▶  ~/Notes  (ordinary .md files)
+  laptop ──┘      port 4899        ▲
+                                   └── Time Machine, git, Dropbox — anything
+                                       that backs up a folder still works
+```
+
+---
+
+## Quick start
+
+On the machine that will hold the notes:
+
+```bash
+npm install
+npm run build                       # the server serves this build
+npm run server -- --vault ~/Notes
+```
+
+It prints something like:
+
+```
+  SpaceFore sync server
+  vault    /Users/you/Notes
+  token    /Users/you/.spacefore/server.json
+
+  this Mac       http://localhost:4899/
+  (bound to loopback — pass --host 0.0.0.0 to reach it from other devices)
+
+  Connect a device: open the address above, choose "Connect to a server",
+  and paste this token:
+
+    9f3c1a…
+```
+
+The vault folder is created if it is not there. Point it at a folder you already
+have and it will pick up every `.md` file in it — nothing is converted, moved or
+rewritten on the way in.
+
+**It binds to loopback by default.** Until you pass `--host`, nothing outside the
+machine can reach it. That is deliberate: exposing a folder of your writing to a
+network should be a decision, not an accident.
+
+### Other devices on the same Wi-Fi
+
+```bash
+npm run server -- --vault ~/Notes --host 0.0.0.0
+```
+
+Now the banner also lists the addresses your Mac answers on:
+
+```
+  same network   http://192.168.1.20:4899/
+```
+
+Open that on the other device, choose **Connect to a server**, paste the address
+and the token, and press Connect. macOS may ask you to allow incoming
+connections the first time — say yes.
+
+---
+
+## Installing it on a device
+
+Once a device is connected, install the app so it opens like anything else on
+the machine:
+
+- **iPhone / iPad** — Safari, Share, *Add to Home Screen*.
+- **Android** — Chrome, menu, *Install app*.
+- **macOS / Windows / Linux** — Chrome or Edge, the install icon in the address
+  bar, or menu → *Cast, save and share* → *Install page as app*.
+
+The installed app remembers which server it is paired with, so it reconnects on
+its own. It still needs to reach the server: your notes live there, not on the
+device.
+
+---
+
+## Reaching it from anywhere
+
+Two ways, both of which give you HTTPS and neither of which requires opening a
+port on your router.
+
+> **Do not forward a port from your router to this server.** It would put a
+> folder of your writing on the public internet behind nothing but a token, with
+> no TLS unless you add it yourself. The two options below are safer and no
+> harder.
+
+### Tailscale (recommended)
+
+A private network between your own devices. Nothing is exposed publicly.
+
+```bash
+brew install --cask tailscale        # then sign in on every device
+npm run server -- --vault ~/Notes --host 0.0.0.0
+tailscale serve --bg 4899            # HTTPS, on your tailnet only
+tailscale serve status               # prints the https://…ts.net address
+```
+
+Connect each device to the `https://…ts.net` address it prints. Only devices
+signed into your tailnet can reach it, so the token is a second lock rather than
+the only one.
+
+### Cloudflare Tunnel
+
+Use this if a device cannot run Tailscale.
+
+```bash
+brew install cloudflared
+npm run server -- --vault ~/Notes
+cloudflared tunnel --url http://localhost:4899
+```
+
+It prints a public `https://…trycloudflare.com` address. **This one is genuinely
+public** — anybody with the URL reaches the login-less API and only the token
+stops them. Use a named tunnel with Cloudflare Access in front if the notes
+matter, and treat the quick tunnel as a temporary measure.
+
+---
+
+## Keeping it running
+
+To have it start with the Mac and come back after a crash, save this as
+`~/Library/LaunchAgents/com.spacefore.server.plist` — adjusting both paths — and
+run `launchctl load ~/Library/LaunchAgents/com.spacefore.server.plist`.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.spacefore.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/you/SpaceFore/server/index.mjs</string>
+    <string>--vault</string><string>/Users/you/Notes</string>
+    <string>--host</string><string>0.0.0.0</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/spacefore.log</string>
+  <key>StandardErrorPath</key><string>/tmp/spacefore.log</string>
+</dict>
+</plist>
+```
+
+`which node` gives you the right path for the first string. The Mac still has to
+be awake for other devices to sync — check *Energy Saver* if it sleeps.
+
+---
+
+## When two devices edit the same note
+
+Every save carries the version the device thought it was editing. If the note
+changed in the meantime — you edited it on your phone on the train, then opened
+the laptop that still had the morning's copy — the server refuses the save, and
+the device writes its version alongside instead:
+
+```
+Ideas/Zettelkasten.md
+Ideas/Zettelkasten (conflict 2026-08-30 14-05-11).md
+```
+
+Nothing is merged automatically and nothing is thrown away. You open both,
+decide, and delete the copy. The app tells you when this happens; it does not
+happen silently.
+
+Notes edited on different devices, or the same note edited at different times,
+never produce a conflict — only genuinely simultaneous edits to the same note do.
+
+---
+
+## Security, plainly
+
+- **The token is the only lock on the API.** It is 256 bits of random data,
+  generated on first run and kept in `~/.spacefore/server.json` with owner-only
+  permissions. Treat it like a password.
+- **It is stored on each device**, in the browser's local storage, so the device
+  can reconnect by itself. A shared or borrowed device should be disconnected
+  (switch to another vault) rather than left paired.
+- **Only `/api/health` is open**, and it answers nothing but "yes, this is a
+  SpaceFore server" — no vault name, no file list.
+- **Plain HTTP on a local network is readable by anything else on that network.**
+  For a home Wi-Fi that is usually acceptable; on a café or office network it is
+  not. Both tunnel options above give you HTTPS.
+- **Rotate the token** by deleting `~/.spacefore/server.json` and restarting.
+  Every device will need to be paired again, which is exactly what you want if
+  one has been lost.
+- **Dot-directories and `node_modules` are never served, walked or written to.**
+  A `.obsidian` folder in the same vault is left alone.
+
+---
+
+## Backups
+
+The vault is a folder of Markdown files. Time Machine already covers it. So does
+`git init` inside it, or any sync service you already use — the server reads the
+folder fresh, so a file restored or changed by something else shows up on every
+device within moments.
+
+The server itself holds no state worth backing up beyond the token.
+
+---
+
+## If something is wrong
+
+**A device says it cannot reach the server.** Check the server is running, that
+it was started with `--host 0.0.0.0` if the device is not the same machine, and
+that macOS is not blocking incoming connections (*System Settings → Network →
+Firewall*).
+
+**"That token was not accepted."** Copy it again from the server's output. If you
+have deleted `~/.spacefore/server.json` at some point, the token changed and
+every device needs pairing again.
+
+**Changes are not appearing on the other device.** Each device holds an open
+connection for changes. Phones drop it when the screen is off and reconnect on
+wake, so give it a moment after unlocking. If it persists, reload the page.
+
+**The app will not load at all.** The server serves the build in `dist/`. Run
+`npm run build` and start it again.
+
+---
+
+## The API, briefly
+
+For anything you might want to script against. Every endpoint but `/api/health`
+needs `Authorization: Bearer <token>`.
+
+| | |
+| --- | --- |
+| `GET /api/health` | `{ ok, service }` — open, and says nothing else |
+| `GET /api/vault` | the vault's name |
+| `GET /api/files` | every file with size, mtime and a SHA-256 of its contents |
+| `GET /api/file?path=…` | the file; `ETag` is its hash |
+| `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash |
+| `DELETE /api/file?path=…` | remove it |
+| `POST /api/rename` | `{ from, to }` |
+| `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers |
+
+Writes are atomic: the file is written beside the target and moved into place, so
+an interrupted save leaves the previous version whole rather than a truncated
+file.

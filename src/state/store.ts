@@ -19,6 +19,7 @@ import type {
   ThemeName,
   Toast,
   VaultAdapter,
+  VaultChange,
   VaultFile,
   VaultIndex,
   ViewMode,
@@ -185,6 +186,11 @@ export interface AppState {
    */
   openVault: (adapter: VaultAdapter, options?: { remember?: boolean }) => Promise<void>
   reloadVault: () => Promise<void>
+  /**
+   * Apply a change that happened outside this device — another device saving
+   * through the sync server, or an editor writing to the folder.
+   */
+  applyVaultChange: (change: VaultChange) => Promise<void>
   setNoteContent: (path: NotePath, content: string) => void
   saveNote: (path: NotePath) => Promise<void>
   saveAll: () => Promise<void>
@@ -238,6 +244,9 @@ export interface AppState {
 }
 
 const saveTimers = new Map<NotePath, ReturnType<typeof setTimeout>>()
+
+/** Unsubscribes the current vault's change feed; replaced on every open. */
+let detachVaultWatch: (() => void) | null = null
 
 /** Trailing debounce before a typing burst is reflected in the link index. */
 const INDEX_REBUILD_MS = 150
@@ -390,6 +399,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         revision: s.revision + 1,
       }))
 
+      // Follow the vault's change feed, if it has one. Backends without a
+      // `watch` simply never report outside changes.
+      detachVaultWatch?.()
+      detachVaultWatch =
+        adapter.watch?.((change) => {
+          void get().applyVaultChange(change)
+        }) ?? null
+
       // Land on a sensible first note when nothing is open yet.
       const state = get()
       const pane = state.panes.find((p) => p.id === state.activePaneId)
@@ -410,6 +427,81 @@ export const useAppStore = create<AppState>((set, get) => ({
   async reloadVault() {
     const adapter = get().adapter
     if (adapter) await get().openVault(adapter)
+  },
+
+  async applyVaultChange(change) {
+    const { adapter } = get()
+    if (!adapter) return
+
+    if (change.type === 'rename' && change.from && change.to) {
+      const from = change.from
+      const to = change.to
+      set((s) => {
+        const note = s.notes.get(from)
+        if (!note) return {}
+        const notes = new Map(s.notes)
+        notes.delete(from)
+        notes.set(to, makeNote(to, note.content, note.mtime))
+        return {
+          notes,
+          index: buildIndex(notes),
+          starred: s.starred.map((path) => (path === from ? to : path)),
+          recent: s.recent.map((path) => (path === from ? to : path)),
+          panes: s.panes.map((pane) => ({
+            ...pane,
+            tabs: pane.tabs.map((tab) => (tab.path === from ? { ...tab, path: to } : tab)),
+          })),
+          revision: s.revision + 1,
+        }
+      })
+      return
+    }
+
+    const path = change.path
+    if (!path) return
+
+    // Never let another device's change overwrite work this one has not saved.
+    // The unsaved version stays; the reader is told, and their next save goes
+    // through the conflict path rather than silently losing either side.
+    if (get().dirty.has(path)) {
+      get().pushToast(`"${basename(path)}" also changed elsewhere. Your unsaved version is still here.`, 'info')
+      return
+    }
+
+    if (change.type === 'remove') {
+      set((s) => {
+        if (!s.notes.has(path)) return {}
+        const notes = new Map(s.notes)
+        notes.delete(path)
+        return {
+          notes,
+          index: buildIndex(notes),
+          attachments: s.attachments.filter((file) => file.path !== path),
+          revision: s.revision + 1,
+        }
+      })
+      return
+    }
+
+    if (!path.toLowerCase().endsWith('.md')) {
+      // An attachment: the listing is enough, the bytes are fetched on demand.
+      await get().reloadVault()
+      return
+    }
+
+    try {
+      const content = await adapter.read(path)
+      set((s) => {
+        const existing = s.notes.get(path)
+        if (existing?.content === content) return {}
+        const notes = new Map(s.notes)
+        notes.set(path, makeNote(path, content, Date.now()))
+        return { notes, index: buildIndex(notes), revision: s.revision + 1 }
+      })
+    } catch {
+      // The file went away between the announcement and the read; the next
+      // event, or a reload, will settle it.
+    }
   },
 
   setNoteContent(path, content) {
@@ -511,6 +603,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         saving.delete(path)
         return { saving }
       })
+
+      // A sync conflict is already resolved by the time it reaches here: the
+      // backend kept this device's version as a separate note. Clearing the
+      // unsaved flag and reloading the server's version is what stops the next
+      // save from making another copy, and another after that.
+      if (error instanceof Error && error.name === 'RemoteConflict') {
+        set((s) => {
+          const dirty = new Set(s.dirty)
+          dirty.delete(path)
+          return { dirty }
+        })
+        get().pushToast(error.message, 'info')
+        await get().applyVaultChange({ type: 'upsert', path })
+        return
+      }
+
       get().pushToast(`Could not save ${path}: ${error instanceof Error ? error.message : String(error)}`, 'error')
     }
   },

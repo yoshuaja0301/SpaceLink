@@ -5,13 +5,14 @@
   "type": "module",
   "description": "SpaceFore \u2014 a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
   "scripts": {
-    "dev": "vite",
     "build": "tsc -b && vite build",
+    "dev": "vite",
+    "e2e": "node e2e/run.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false || tsc -p tsconfig.app.json --noEmit",
+    "server": "node server/index.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "node e2e/run.mjs"
+    "typecheck": "tsc -b"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

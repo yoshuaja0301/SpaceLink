@@ -22,16 +22,34 @@ export const ARGS = [
   '--no-first-run',
 ]
 
-export async function boot({ theme = 'dark', width = 1600, height = 1000 } = {}) {
+export async function boot({ theme = 'dark', width = 1600, height = 1000, url = BASE_URL } = {}) {
   const browser = await chromium.launch({ ...(CHROME ? { executablePath: CHROME } : {}), args: ARGS })
   const page = await browser.newPage({ viewport: { width, height }, colorScheme: theme })
   const problems = []
   page.on('pageerror', e => problems.push('PAGEERROR: ' + e.message))
   page.on('console', m => { if (m.type() === 'error') problems.push('CONSOLE: ' + m.text()) })
   page.on('response', r => { if (r.status() >= 400) problems.push(`HTTP ${r.status()} ${r.url()}`) })
-  await page.goto(BASE_URL, { waitUntil: 'networkidle' })
+  await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForTimeout(1600)
   return { browser, page, problems }
+}
+
+/**
+ * A second, independent device against the same server: its own browser context
+ * means its own storage, so it pairs and syncs separately, exactly as a phone
+ * beside a laptop would.
+ */
+export async function openDevice(browser, url, { theme = 'dark', width = 1200, height = 900 } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
+  const page = await context.newPage()
+  const problems = []
+  page.on('pageerror', (error) => problems.push('PAGEERROR: ' + error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push('CONSOLE: ' + message.text())
+  })
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1400)
+  return { context, page, problems }
 }
 
 let failures = 0

@@ -42,6 +42,8 @@ No account, no server, no telemetry. Everything runs in the tab.
 - **Open a folder** — reads and writes real `.md` files on disk through the
   File System Access API (Chrome, Edge, Opera)
 - **Browser vault** — persisted in IndexedDB, survives reloads, works anywhere
+- **Sync server** — run one machine as the host and every device you own reads
+  and writes the same folder, live. See [docs/SERVER.md](docs/SERVER.md)
 - **Demo vault** — a ready-made 20-note knowledge base that doubles as the
   product tour
 - Export the vault as JSON, export a note as Markdown, import from JSON
@@ -56,13 +58,14 @@ npm run dev      # http://localhost:5173
 ```bash
 npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
+npm run server -- --vault ~/Notes   # host a vault for your other devices
 npm test         # vitest — 1200+ unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens Chromium and walks 80 real user
+`npm run e2e` starts the preview server, opens Chromium and walks 91 real user
 flows — expanding folders, typing, formatting, wiki-link autocomplete, clicking
 links and tags, ticking a task inside a transclusion, search operators, the
 command palette, the graph, renaming with link rewriting, deleting, switching
@@ -80,6 +83,12 @@ it and rewrites the links inside other files, that deleting removes it, that
 changed by another editor is picked up on reload, that switching vaults mid-edit
 leaves the folder untouched, and that a dropped directory permission falls back
 without losing the folder.
+
+The suite after it starts a real sync server over a real folder and pairs **two
+independent browser contexts** with it — a stand-in for a laptop and a phone —
+then checks that an edit on one appears on the other without a reload, that
+creating and deleting propagate, that a file changed on the host reaches both,
+and that two devices editing the same note end up with both versions.
 
 They exist because a whole class of defect passes every unit test and still
 breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
@@ -130,6 +139,7 @@ src/
 ```
 
 ```
+server/                 the sync server: one folder, an HTTP API, a change feed
 e2e/                    browser-driven suites; see "End-to-end tests" above
 ```
 
@@ -138,6 +148,28 @@ against it, including the window-event contract the panels talk over.
 
 The design principle throughout: **the core is pure and testable**, the store
 owns all mutation, and the UI only reads state and dispatches actions.
+
+## Syncing across devices
+
+One machine holds the notes and serves the app; every other device opens its
+address, installs the app and syncs against it. Edits appear on the other
+devices within moments, a file changed by any other program on the host is
+picked up too, and two devices editing the same note at once keep both versions
+rather than one silently winning.
+
+```bash
+npm run build
+npm run server -- --vault ~/Notes --host 0.0.0.0
+```
+
+The server prints an address and an access token; paste both into **Connect to a
+server** on the other device. It binds to loopback unless you ask otherwise, and
+`docs/SERVER.md` covers reaching it from outside your network (Tailscale or a
+Cloudflare tunnel — not a forwarded router port), keeping it running on a Mac,
+and what the token does and does not protect.
+
+The vault stays an ordinary folder of Markdown files. Time Machine, git and any
+other backup you already have keep working.
 
 ## Browser support
 

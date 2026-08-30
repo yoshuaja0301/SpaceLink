@@ -189,7 +189,20 @@ export interface GraphData {
  * Vault storage
  * ------------------------------------------------------------------ */
 
-export type VaultKind = 'demo' | 'browser' | 'directory'
+export type VaultKind = 'demo' | 'browser' | 'directory' | 'remote'
+
+/**
+ * Something changing in the vault outside this client — another device saving
+ * through the sync server, or an editor writing to the folder directly.
+ */
+export interface VaultChange {
+  type: 'upsert' | 'remove' | 'rename'
+  /** Set for `upsert` and `remove`. */
+  path?: NotePath
+  /** Set for `rename`. */
+  from?: NotePath
+  to?: NotePath
+}
 
 /**
  * Storage backend for a vault. Implementations must be safe to call
@@ -209,6 +222,12 @@ export interface VaultAdapter {
   remove(path: NotePath): Promise<void>
   rename(from: NotePath, to: NotePath): Promise<void>
   exists(path: NotePath): Promise<boolean>
+  /**
+   * Optional. Backends that can tell when the vault changed underneath them
+   * (the sync server, for one) call `listener` and return an unsubscribe
+   * function. A backend without it simply never reports outside changes.
+   */
+  watch?(listener: (change: VaultChange) => void): () => void
 }
 
 /* ------------------------------------------------------------------ *

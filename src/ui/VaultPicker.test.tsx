@@ -43,7 +43,7 @@ async function show(onReady?: () => void): Promise<void> {
   })
 }
 
-function card(choice: 'demo' | 'browser' | 'directory'): HTMLButtonElement {
+function card(choice: 'demo' | 'browser' | 'directory' | 'remote'): HTMLButtonElement {
   const node = document.querySelector<HTMLButtonElement>(`.vault-picker-option[data-choice="${choice}"]`)
   if (!node) throw new Error(`No ${choice} card rendered`)
   return node
@@ -92,16 +92,46 @@ afterEach(() => {
 })
 
 describe('VaultPicker', () => {
-  it('offers three keyboard-reachable cards, demo first', async () => {
+  it('offers four keyboard-reachable cards, demo first', async () => {
     await show()
 
     const cards = [...document.querySelectorAll<HTMLButtonElement>('.vault-picker-option')]
-    expect(cards).toHaveLength(3)
+    expect(cards).toHaveLength(4)
     expect(cards.every((node) => node.tagName === 'BUTTON' && node.type === 'button')).toBe(true)
-    expect(cards.map((node) => node.dataset.choice)).toEqual(['demo', 'browser', 'directory'])
+    expect(cards.map((node) => node.dataset.choice)).toEqual(['demo', 'browser', 'directory', 'remote'])
     expect(screen.getByText('Try the demo vault')).toBeTruthy()
     // The recommendation, and the size of what you are about to open.
     expect(card('demo').textContent).toMatch(/Recommended — \d+ notes/)
+  })
+
+  it('asks for an address and a token before it will connect to a server', async () => {
+    await show()
+
+    // The form is not in the way until the card asks for it.
+    expect(screen.queryByLabelText('Server address')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(card('remote'))
+    })
+
+    const address = screen.getByLabelText('Server address') as HTMLInputElement
+    const token = screen.getByLabelText('Access token') as HTMLInputElement
+    expect(token.type).toBe('password')
+
+    // Connecting stays disabled until both halves are there — a half-filled
+    // pairing would only fail against the server.
+    const connect = screen.getByRole('button', { name: 'Connect' }) as HTMLButtonElement
+    expect(connect.disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.change(address, { target: { value: 'http://192.168.1.20:4899' } })
+    })
+    expect((screen.getByRole('button', { name: 'Connect' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.change(token, { target: { value: 'a-token' } })
+    })
+    expect((screen.getByRole('button', { name: 'Connect' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('opens the demo vault into the store and tells the shell it is done', async () => {
