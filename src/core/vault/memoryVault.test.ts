@@ -238,3 +238,19 @@ describe('createMemoryVault — read-only mode', () => {
     expect(await vault.list()).toHaveLength(3)
   })
 })
+
+describe('baseMtime', () => {
+  it('stamps seeded files from the given epoch, keeping them ordered', async () => {
+    const base = 1_800_000_000_000
+    const vault = createMemoryVault({ 'a.md': 'A', 'b.md': 'B' }, { baseMtime: base })
+    const files = await vault.list()
+    const times = files.map((file) => file.mtime).sort((x, y) => x - y)
+    expect(times[0]).toBe(base)
+    expect(times[1]).toBe(base + 1)
+  })
+
+  it('still defaults to the fixed test epoch', async () => {
+    const [first] = await createMemoryVault({ 'a.md': 'A' }).list()
+    expect(first!.mtime).toBe(1_700_000_000_000)
+  })
+})

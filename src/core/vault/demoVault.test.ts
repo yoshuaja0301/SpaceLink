@@ -418,3 +418,15 @@ describe('createDemoVault', () => {
     expect(await b.read('Start Here.md')).toBe(DEMO_NOTES['Start Here.md'])
   })
 })
+
+describe('demo vault freshness', () => {
+  it('stamps its notes near the present, not at the fixed test epoch', async () => {
+    // A vault that opens claiming every note was modified years ago reads as
+    // broken; the demo is generated now, so it should look recent.
+    const files = await createDemoVault().list()
+    const newest = Math.max(...files.map((file) => file.mtime))
+    const ageDays = (Date.now() - newest) / (1000 * 60 * 60 * 24)
+    expect(ageDays).toBeLessThan(31)
+    expect(ageDays).toBeGreaterThanOrEqual(0)
+  })
+})

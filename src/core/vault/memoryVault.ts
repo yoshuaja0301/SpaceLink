@@ -11,6 +11,12 @@ import { comparePaths, mimeTypeOf, normalizePath, toVaultFile } from './paths'
 export interface MemoryVaultOptions {
   name?: string
   writable?: boolean
+  /**
+   * Epoch the seeded files are stamped from. Defaults to a fixed value so tests
+   * are deterministic; the demo vault passes the current time so a freshly
+   * opened vault does not claim its notes were last touched years ago.
+   */
+  baseMtime?: number
 }
 
 /**
@@ -38,7 +44,7 @@ export function createMemoryVault(seed: Record<NotePath, string>, options: Memor
 
   // Seed entry `i` gets mtime BASE + i; every later write bumps the clock by 1,
   // so mtimes stay strictly increasing without ever reading the wall clock.
-  let clock = BASE_MTIME - 1
+  let clock = (options.baseMtime ?? BASE_MTIME) - 1
   for (const [rawPath, content] of Object.entries(seed)) {
     clock += 1
     files.set(normalizePath(rawPath), {

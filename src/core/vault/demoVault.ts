@@ -1392,6 +1392,11 @@ cluster on the next re-index. Then undo, and it drifts back out.
  * Edits are kept for the lifetime of the tab and then thrown away — the vault
  * picker offers a browser or on-disk vault when the user wants persistence.
  */
+/** How far back the oldest demo note is stamped, so the list has some spread. */
+const DEMO_AGE_SPREAD_MS = 1000 * 60 * 60 * 24 * 30
+
 export function createDemoVault(): VaultAdapter {
-  return createMemoryVault(DEMO_NOTES, { name: 'Demo vault' })
+  // Stamped from "now" rather than the memory vault's fixed test epoch, so the
+  // demo does not open claiming every note was last modified years ago.
+  return createMemoryVault(DEMO_NOTES, { name: 'Demo vault', baseMtime: Date.now() - DEMO_AGE_SPREAD_MS })
 }
