@@ -265,7 +265,7 @@ export function findUnlinkedMentions(
 
 /** The names a note is searched for, as one comparable value. */
 function namesKey(note: Note): string {
-  return mentionNames(note).join(' ')
+  return mentionNames(note).join('\0')
 }
 
 /**
@@ -482,6 +482,36 @@ function Section({ title, count, collapsed, onToggle, children }: SectionProps):
  * ------------------------------------------------------------------ */
 
 /** Trailing debounce before a typing burst is reflected in the unlinked scan. */
+/**
+ * How many context lines one source note shows before it asks.
+ *
+ * A note that a long journal links from every line has thousands of mentions,
+ * and rendering all of them puts tens of thousands of elements in the sidebar —
+ * enough that typing in the note itself stutters, because every keystroke
+ * rebuilds the index this panel is derived from. Showing a page at a time costs
+ * the same on a note with three backlinks and bounds what any one click adds.
+ */
+const CONTEXTS_SHOWN = 20
+const CONTEXTS_PER_STEP = 200
+
+interface ShowMoreProps {
+  total: number
+  showing: number
+  onClick: () => void
+}
+
+/** The row at the end of a truncated group. Renders nothing when nothing is hidden. */
+function ShowMore({ total, showing, onClick }: ShowMoreProps): JSX.Element | null {
+  const hidden = total - showing
+  if (hidden <= 0) return null
+  const step = Math.min(hidden, CONTEXTS_PER_STEP)
+  return (
+    <button type="button" className="backlink-more" onClick={onClick}>
+      {`Show ${step.toLocaleString()} more of ${hidden.toLocaleString()}`}
+    </button>
+  )
+}
+
 const RESCAN_MS = 250
 
 /** Stable identity for "nothing was scanned", so the memos below do not churn. */
@@ -504,6 +534,24 @@ export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): J
   // once the typing stops, so a burst of keystrokes costs one scan at most
   // instead of one per character.
   const [scanNotes, setScanNotes] = useState<ReadonlyMap<NotePath, Note>>(notes)
+
+  // How much of each source note the reader has asked to see, by section and
+  // source. Reset when the note changes: the previous note's groups are gone.
+  const [shown, setShown] = useState<ReadonlyMap<string, number>>(() => new Map())
+  useEffect(() => setShown(new Map()), [path])
+
+  const limitOf = useCallback(
+    (section: string, source: NotePath): number => shown.get(`${section}:${source}`) ?? CONTEXTS_SHOWN,
+    [shown],
+  )
+  const showMore = useCallback((section: string, source: NotePath): void => {
+    setShown((previous) => {
+      const key = `${section}:${source}`
+      const next = new Map(previous)
+      next.set(key, (previous.get(key) ?? CONTEXTS_SHOWN) + CONTEXTS_PER_STEP)
+      return next
+    })
+  }, [])
 
   // Backlinks are derived, not stored: recompute when the note or the link
   // index changes (every edit anywhere in the vault rebuilds the index).
@@ -598,7 +646,7 @@ export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): J
                 <span className="nav-item-title">{group.title}</span>
                 <span className="tag-count">{group.edges.length}</span>
               </button>
-              {group.edges.map((edge, position) => {
+              {group.edges.slice(0, limitOf('linked', group.source)).map((edge, position) => {
                 const parts = splitContext(edge.context, edge.targetText)
                 return (
                   <button
@@ -614,6 +662,11 @@ export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): J
                   </button>
                 )
               })}
+              <ShowMore
+                total={group.edges.length}
+                showing={limitOf('linked', group.source)}
+                onClick={() => showMore('linked', group.source)}
+              />
             </div>
           ))
         )}
@@ -643,7 +696,7 @@ export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): J
                 <span className="nav-item-title">{group.title}</span>
                 <span className="tag-count">{group.mentions.length}</span>
               </button>
-              {group.mentions.map((mention) => {
+              {group.mentions.slice(0, limitOf('unlinked', group.source)).map((mention) => {
                 const parts = splitAt(mention.context, mention.contextStart, mention.text.length)
                 return (
                   <div className="backlink-mention" key={mention.start}>
@@ -670,6 +723,11 @@ export function BacklinksPanel({ path, visible = true }: BacklinksPanelProps): J
                   </div>
                 )
               })}
+              <ShowMore
+                total={group.mentions.length}
+                showing={limitOf('unlinked', group.source)}
+                onClick={() => showMore('unlinked', group.source)}
+              />
             </div>
           ))
         )}

@@ -797,6 +797,19 @@ ul, ol { margin: 0; padding: 0; }
 }
 .backlink-context:hover { border-left-color: var(--accent); background: var(--bg-hover); color: var(--text-normal); }
 
+/* The row that reveals the rest of a group that was too long to render at once. */
+.backlink-more {
+  width: calc(100% - var(--space-3));
+  margin-left: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid transparent;
+  color: var(--accent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.backlink-more:hover { background: var(--bg-hover); text-decoration: underline; }
+
 /* Outline indents by heading level — `--level` or `data-level`, either works. */
 .outline-item {
   display: block;

@@ -367,6 +367,60 @@ describe('BacklinksPanel — linked mentions', () => {
 })
 
 /* ------------------------------------------------------------------ *
+ * Component — very long groups
+ * ------------------------------------------------------------------ */
+
+describe('BacklinksPanel — a source note that links here thousands of times', () => {
+  /** A journal whose every line links the same note, as a long daily log does. */
+  const HEAVY: Record<NotePath, string> = {
+    'Hub.md': '# Hub\n',
+    'Journal.md':
+      '# Journal\n\n' +
+      Array.from({ length: 3000 }, (_, line) => `Line ${line} mentions [[Hub]].`).join('\n') +
+      '\n',
+  }
+
+  it('renders a page of them rather than all three thousand', () => {
+    seed(HEAVY)
+    const { container } = render(<BacklinksPanel path="Hub.md" />)
+    const linked = section(container, 'Linked mentions')
+
+    // The count is honest about the total…
+    expect(groups(linked)).toEqual([['Journal', '3000']])
+    // …but the sidebar is not carrying 3,000 elements to say so.
+    expect(contexts(linked)).toHaveLength(20)
+    expect(contexts(linked)[0]).toContain('Line 0 mentions')
+  })
+
+  it('reveals the next page when asked, and stops offering once none are left', () => {
+    seed(HEAVY)
+    const { container } = render(<BacklinksPanel path="Hub.md" />)
+    const linked = section(container, 'Linked mentions')
+    const more = (): HTMLButtonElement | null => linked.querySelector('.backlink-more')
+
+    expect(more()!.textContent).toBe('Show 200 more of 2,980')
+    fireEvent.click(more()!)
+    expect(contexts(linked)).toHaveLength(220)
+    expect(more()!.textContent).toBe('Show 200 more of 2,780')
+
+    for (let click = 0; click < 14; click += 1) fireEvent.click(more()!)
+    expect(contexts(linked)).toHaveLength(3000)
+    expect(more()).toBeNull()
+  })
+
+  it('forgets how far the reader had scrolled when a different note is opened', () => {
+    seed(HEAVY)
+    const view = render(<BacklinksPanel path="Hub.md" />)
+    fireEvent.click(view.container.querySelector('.backlink-more')!)
+    expect(contexts(section(view.container, 'Linked mentions'))).toHaveLength(220)
+
+    view.rerender(<BacklinksPanel path="Journal.md" />)
+    view.rerender(<BacklinksPanel path="Hub.md" />)
+    expect(contexts(section(view.container, 'Linked mentions'))).toHaveLength(20)
+  })
+})
+
+/* ------------------------------------------------------------------ *
  * Component — unlinked mentions
  * ------------------------------------------------------------------ */
 
