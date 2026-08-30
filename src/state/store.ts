@@ -176,7 +176,14 @@ export interface AppState {
   revision: number
 
   /* actions: vault --------------------------------------------------- */
-  openVault: (adapter: VaultAdapter) => Promise<void>
+  /**
+   * Load a vault and make it the current one.
+   *
+   * `remember: false` loads it without recording it as the user's choice —
+   * used for the automatic fallback at boot, so a vault that could not be
+   * reopened this time is still the one reopened next time.
+   */
+  openVault: (adapter: VaultAdapter, options?: { remember?: boolean }) => Promise<void>
   reloadVault: () => Promise<void>
   setNoteContent: (path: NotePath, content: string) => void
   saveNote: (path: NotePath) => Promise<void>
@@ -324,7 +331,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   /* ------------------------------------------------------------------ */
 
-  async openVault(adapter) {
+  async openVault(adapter, options = {}) {
     // Autosave timers armed against the outgoing vault must never fire once it
     // is gone. Their content is flushed here instead — to the adapter that is
     // still installed, which is the one that owns it.
@@ -359,7 +366,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       clearPendingIndex()
       // Remember the kind so the next load reopens this vault instead of
       // dropping the reader back into the demo with their notes seemingly gone.
-      saveJSON(LAST_VAULT_KEY, { kind: adapter.kind })
+      // A fallback never overwrites the choice: one revoked folder permission
+      // must not cost the reader their vault for good.
+      if (options.remember !== false) saveJSON(LAST_VAULT_KEY, { kind: adapter.kind })
       set((s) => ({
         adapter,
         vaultName: adapter.name,

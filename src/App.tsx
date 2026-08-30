@@ -62,6 +62,7 @@ export function App(): React.JSX.Element {
         /* unreadable storage — start from the demo */
       }
 
+      let lostFolder = false
       if (lastKind === 'directory' || lastKind === null) {
         try {
           const handle = await restoreVaultHandle()
@@ -70,8 +71,12 @@ export function App(): React.JSX.Element {
             await openVault(createDirectoryVault(handle))
             return
           }
+          // A folder was remembered but could not be reopened — the browser
+          // drops directory grants after a while. Say so rather than quietly
+          // presenting the demo vault as if nothing happened.
+          lostFolder = lastKind === 'directory'
         } catch {
-          /* permission revoked or storage unavailable — fall through */
+          lostFolder = lastKind === 'directory'
         }
       }
 
@@ -86,7 +91,15 @@ export function App(): React.JSX.Element {
         }
       }
 
-      if (!cancelled) await openVault(createDemoVault())
+      if (cancelled) return
+      // `remember: false`: this is a fallback, not a choice. The remembered
+      // vault stays remembered, so restoring the grant is enough to get it back.
+      await openVault(createDemoVault(), { remember: false })
+      if (lostFolder) {
+        useAppStore
+          .getState()
+          .pushToast('Could not reopen your folder — the browser no longer has permission. Open it again from the status bar.', 'error')
+      }
     })().finally(() => {
       if (!cancelled) setBooting(false)
     })

@@ -732,3 +732,20 @@ describe('the last vault kind is remembered', () => {
     expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'demo' })
   })
 })
+
+describe('a fallback vault does not overwrite the remembered choice', () => {
+  it('leaves the recorded kind alone when remember is false', async () => {
+    localStorage.setItem(LAST_VAULT_KEY, JSON.stringify({ kind: 'directory' }))
+    // The boot fallback: a folder that could not be reopened this time must
+    // still be the vault reopened next time.
+    await useAppStore.getState().openVault(createMemoryVault(SEED, { name: 'Demo' }), { remember: false })
+    expect(useAppStore.getState().notes.size).toBe(4)
+    expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'directory' })
+  })
+
+  it('still records a vault the user picked deliberately', async () => {
+    localStorage.setItem(LAST_VAULT_KEY, JSON.stringify({ kind: 'directory' }))
+    await openSeededVault()
+    expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'demo' })
+  })
+})

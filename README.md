@@ -62,12 +62,24 @@ npm run e2e      # drive the built app in a real browser (needs `npm run build` 
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens Chromium and walks ~66 real user
+`npm run e2e` starts the preview server, opens Chromium and walks 80 real user
 flows — expanding folders, typing, formatting, wiki-link autocomplete, clicking
 links and tags, ticking a task inside a transclusion, search operators, the
 command palette, the graph, renaming with link rewriting, deleting, switching
 vaults, reloading, and keyboard navigation. Any step that fails, and any error
 the page logs, fails the run.
+
+The last suite covers the folder-on-disk vault against the browser's **real**
+File System Access implementation. `showDirectoryPicker()` opens a native dialog
+no automation can click, so that one call is stubbed — but it hands back a
+genuine `FileSystemDirectoryHandle` from the origin private file system, and
+every assertion about what is on disk reads through a *fresh* handle rather than
+the adapter's cache. It checks that edits land in the file, that renaming moves
+it and rewrites the links inside other files, that deleting removes it, that
+`.obsidian` and `node_modules` are never walked or written to, that a file
+changed by another editor is picked up on reload, that switching vaults mid-edit
+leaves the folder untouched, and that a dropped directory permission falls back
+without losing the folder.
 
 They exist because a whole class of defect passes every unit test and still
 breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
