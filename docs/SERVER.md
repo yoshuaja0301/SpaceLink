@@ -84,6 +84,18 @@ spaces and an em dash, four levels of nesting, an 800 KB note, CRLF line
 endings, binary attachments, an existing `.obsidian` — and it is what turned up
 the line-ending bug described below.
 
+### Large vaults
+
+A device opens a vault by fetching every note's text in a single streamed
+response, so the number of notes costs bandwidth rather than round trips. Five
+thousand notes — about 4 MB of Markdown — arrive in a few seconds over a local
+network, and the app counts them onto the splash as they land rather than
+freezing until the last one.
+
+Reading them is not the slow part; parsing them is. That work is done in batches
+with the main thread handed back between them, so the window stays responsive
+throughout.
+
 ### Line endings
 
 A vault written on Windows, or shared through git with CRLF, keeps its line
@@ -284,6 +296,7 @@ needs `Authorization: Bearer <token>`.
 | `GET /api/health` | `{ ok, service }` — open, and says nothing else |
 | `GET /api/vault` | the vault's name |
 | `GET /api/files` | every file with size, mtime and a SHA-256 of its contents |
+| `GET /api/bundle` | every note's text in one streamed response, as newline-delimited JSON. This is what a device uses to open the vault — one request rather than one per note |
 | `GET /api/file?path=…` | the file; `ETag` is its hash |
 | `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash |
 | `DELETE /api/file?path=…` | remove it |
@@ -293,3 +306,7 @@ needs `Authorization: Bearer <token>`.
 Writes are atomic: the file is written beside the target and moved into place, so
 an interrupted save leaves the previous version whole rather than a truncated
 file.
+
+Content hashes are remembered against each file's size and mtime, so listing a
+vault does not re-read every byte of it. A file whose size and mtime both match
+what was seen last time keeps its hash; anything else is read again.
