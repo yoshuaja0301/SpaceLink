@@ -29,6 +29,24 @@ import { buildIndex, emptyIndex, getBacklinks, resolveLinkTarget } from '../core
 
 const AUTOSAVE_MS_MIN = 200
 
+/** How many notes a local backend reads and parses between yields. */
+const LOAD_BATCH = 250
+
+/**
+ * Hand the main thread back long enough for the browser to paint and handle
+ * input, then continue.
+ *
+ * `setTimeout(0)` is what actually lets a frame through — a resolved promise or
+ * `queueMicrotask` runs before rendering, so a loop built on those blocks the
+ * page just as thoroughly as one with no yield at all. `MessageChannel` would
+ * be a hair faster to resume but has the same problem.
+ */
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   fontSize: 16,
@@ -168,6 +186,8 @@ export interface AppState {
   attachments: VaultFile[]
   index: VaultIndex
   loading: boolean
+  /** How far through opening a vault we are, for the splash. Null when idle. */
+  loadingProgress: { done: number; total: number } | null
   error: string | null
   dirty: Set<NotePath>
   saving: Set<NotePath>
@@ -283,6 +303,70 @@ function clearSaveTimers(): void {
   saveTimers.clear()
 }
 
+/**
+ * Deferred parsing, for notes big enough that parsing them per keystroke is
+ * what makes typing stutter.
+ *
+ * `parseNote` is linear and reasonable — about 90 ns a byte — but a note is
+ * parsed *whole* on every edit, so a 1.2 MB journal costs 115 ms per character
+ * and the editor becomes unusable. Nothing about the note's size is assumed
+ * here: the last parse is timed, and only a note that actually proved slow
+ * stops being reparsed mid-burst. Its `parsed` then trails its `content` until
+ * the typing settles, at which point one parse catches everything up.
+ *
+ * What trails, concretely: the word count, the outline, the tab title, the tag
+ * and backlink panels — all of which already trail the same 150 ms behind the
+ * link index for the same reason. What never trails: the text in the editor,
+ * what is written to disk, and any index a caller explicitly asks for.
+ */
+const REPARSE_BUDGET_MS = 8
+/** What the last parse of each note cost, in milliseconds. */
+const parseCost = new Map<NotePath, number>()
+/** Notes whose `parsed` is behind their `content`. */
+const staleParse = new Set<NotePath>()
+
+const now = (): number =>
+  typeof performance === 'object' && typeof performance.now === 'function' ? performance.now() : Date.now()
+
+/** Parse `content` into a note, remembering what it cost. */
+function parseAndTime(path: NotePath, content: string, mtime: number, lineEnding: Note['lineEnding']): Note {
+  const started = now()
+  const note = makeNote(path, content, mtime, lineEnding)
+  parseCost.set(path, now() - started)
+  return note
+}
+
+/**
+ * The note as it stands after a keystroke — reparsed, unless parsing it has
+ * already proved too expensive to do per keystroke.
+ */
+function retypedNote(previous: Note, content: string): Note {
+  if ((parseCost.get(previous.path) ?? 0) > REPARSE_BUDGET_MS) {
+    staleParse.add(previous.path)
+    return { ...previous, content }
+  }
+  const note = parseAndTime(previous.path, content, previous.mtime, previous.lineEnding)
+  staleParse.delete(previous.path)
+  return note
+}
+
+/**
+ * Every note whose parse was deferred, brought up to date.
+ *
+ * Returns the same map when there was nothing to do, so callers can tell
+ * whether anything needs publishing.
+ */
+function settleParses(notes: Map<NotePath, Note>): Map<NotePath, Note> {
+  if (staleParse.size === 0) return notes
+  const settled = new Map(notes)
+  for (const path of staleParse) {
+    const note = settled.get(path)
+    if (!note) continue
+    settled.set(path, parseAndTime(path, note.content, note.mtime, note.lineEnding))
+  }
+  return settled
+}
+
 /** Drop a queued index rebuild; the caller is committing a fresh index itself. */
 function clearPendingIndex(): void {
   if (indexTimer) clearTimeout(indexTimer)
@@ -290,6 +374,8 @@ function clearPendingIndex(): void {
   pendingNotes = null
   pendingIndex = null
   burstPath = null
+  staleParse.clear()
+  parseCost.clear()
 }
 
 /**
@@ -312,6 +398,21 @@ function indexSignature(note: Note): string {
  * needs a correct index right now never sees the pre-keystroke one.
  */
 function currentIndex(state: AppState): VaultIndex {
+  // A caller here has asked for a correct index *now*, so a parse deferred
+  // behind the typing debounce is paid for now too. The result is cached the
+  // same way, so a burst of callers costs one parse between them.
+  if (staleParse.size > 0) {
+    // Nothing is published from here: this runs inside selectors and during
+    // render, where writing to the store is not allowed. The freshly parsed
+    // notes are used to build the index and then dropped; the trailing timer
+    // does the same work once more and publishes it. Only the parse is
+    // repeated, and only for a caller that asked for an index mid-burst.
+    if (pendingNotes !== state.notes || !pendingIndex) {
+      pendingNotes = state.notes
+      pendingIndex = buildIndex(settleParses(state.notes))
+    }
+    return pendingIndex
+  }
   if (pendingNotes !== state.notes) return state.index
   if (!pendingIndex) pendingIndex = buildIndex(state.notes)
   return pendingIndex
@@ -335,6 +436,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   attachments: [],
   index: emptyIndex(),
   loading: false,
+  loadingProgress: null,
   error: null,
   dirty: new Set(),
   saving: new Set(),
@@ -378,16 +480,50 @@ export const useAppStore = create<AppState>((set, get) => ({
       const files = await adapter.list()
       const notes = new Map<NotePath, Note>()
       const attachments: VaultFile[] = []
-      await Promise.all(
-        files.map(async (file) => {
-          if (!file.isMarkdown) {
-            attachments.push(file)
-            return
-          }
-          const content = await adapter.read(file.path)
-          notes.set(file.path, makeNote(file.path, content, file.mtime))
-        }),
-      )
+      const mtimes = new Map<NotePath, number>()
+      let total = 0
+      for (const file of files) {
+        if (file.isMarkdown) {
+          mtimes.set(file.path, file.mtime)
+          total += 1
+        } else {
+          attachments.push(file)
+        }
+      }
+      set({ loadingProgress: { done: 0, total } })
+
+      // Parsing every note is the expensive half of opening a vault — around
+      // 120 µs each, so a five thousand note vault is most of a second of
+      // straight-line work. Doing it in batches with a yield in between costs a
+      // few milliseconds in scheduling and buys a splash that paints, counts up,
+      // and answers the window's close button.
+      let batches = 0
+      const absorb = async (batch: ReadonlyMap<NotePath, string>): Promise<void> => {
+        // Between batches, never after the last one: a vault small enough to
+        // arrive in one go is parsed and published without ever going near a
+        // timer, which is both faster and what the reader expects.
+        if (batches > 0) await yieldToBrowser()
+        batches += 1
+        for (const [path, content] of batch) {
+          notes.set(path, makeNote(path, content, mtimes.get(path) ?? Date.now()))
+        }
+        set({ loadingProgress: { done: notes.size, total } })
+      }
+
+      if (adapter.readAll) {
+        // One request for the whole vault, where the backend can do that.
+        for await (const batch of adapter.readAll()) await absorb(batch)
+      } else {
+        // Local backends: reading is cheap, so the batching is only about
+        // keeping the main thread free between chunks.
+        const paths = [...mtimes.keys()]
+        for (let start = 0; start < paths.length; start += LOAD_BATCH) {
+          const slice = paths.slice(start, start + LOAD_BATCH)
+          const texts = await Promise.all(slice.map((path) => adapter.read(path)))
+          await absorb(new Map(slice.map((path, at) => [path, texts[at]!])))
+        }
+      }
+
       attachments.sort((a, b) => a.path.localeCompare(b.path))
       const index = buildIndex(notes)
       clearPendingIndex()
@@ -403,6 +539,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         attachments,
         index,
         loading: false,
+        loadingProgress: null,
         dirty: new Set(),
         // A tab left on a note this vault does not have keeps rendering the
         // previous vault's text and silently swallows every keystroke, so it
@@ -438,7 +575,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (error) {
       // The load failed: leave the vault that is open exactly as it was, down
       // to its adapter, rather than running on with a half-swapped store.
-      set({ loading: false, error: error instanceof Error ? error.message : String(error) })
+      set({ loading: false, loadingProgress: null, error: error instanceof Error ? error.message : String(error) })
     }
   },
 
@@ -527,11 +664,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const previous = state.notes.get(path)
     if (!previous || previous.content === content) return
 
-    const note = makeNote(path, content, previous.mtime, previous.lineEnding)
+    const note = retypedNote(previous, content)
     const notes = new Map(state.notes)
     notes.set(path, note)
-    const dirty = new Set(state.dirty)
-    dirty.add(path)
+    // Only a *changed* dirty set gets a new identity. Handing out a fresh one
+    // on every keystroke tells every component subscribed to it that something
+    // happened, and the file explorer answers that by reconciling one row per
+    // note in the vault — which is why typing used to get slower the more notes
+    // you had, in notes of any size.
+    const dirty = state.dirty.has(path) ? state.dirty : new Set(state.dirty).add(path)
     // The notes map is published synchronously — the editor, the word count and
     // the dirty markers all read it — but the link index is not: rebuilding it
     // is O(whole vault) and typing must not pay that per keystroke. It is
@@ -556,6 +697,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     indexTimer = setTimeout(() => {
       indexTimer = null
       const latest = get()
+      // A deferred parse comes due here, before the index is rebuilt from it —
+      // an index built on stale `parsed` data would be wrong, not merely late.
+      const settled = settleParses(latest.notes)
+      if (settled !== latest.notes) {
+        staleParse.clear()
+        pendingNotes = null
+        pendingIndex = null
+        set({ notes: settled, index: buildIndex(settled) })
+        return
+      }
       if (pendingNotes !== latest.notes) {
         pendingNotes = null
         pendingIndex = null

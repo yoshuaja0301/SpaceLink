@@ -274,6 +274,14 @@ function createdTime(note: Note): number {
  */
 function noteKeys(notes: Map<NotePath, Note>, sort: ExplorerSort): string[] {
   const keys: string[] = []
+  // Sorted by name, the time is not part of what the tree looks like — so it is
+  // left out of the key rather than formatted into one string per note on every
+  // store update, which on a five thousand note vault is five thousand strings
+  // allocated and compared for nothing.
+  if (sort === 'name') {
+    for (const path of notes.keys()) keys.push(path)
+    return keys
+  }
   for (const note of notes.values()) {
     keys.push(`${sort === 'created' ? createdTime(note) : note.mtime}\u0000${note.path}`)
   }
@@ -282,9 +290,9 @@ function noteKeys(notes: Map<NotePath, Note>, sort: ExplorerSort): string[] {
 
 function decodeNoteKey(key: string): ExplorerEntry {
   const cut = key.indexOf('\u0000')
-  const path = key.slice(cut + 1)
+  const path = cut === -1 ? key : key.slice(cut + 1)
   // `makeNote` names a note after its path, so the name needs no subscription.
-  return { path, name: basename(path), isMarkdown: true, time: Number(key.slice(0, cut)) }
+  return { path, name: basename(path), isMarkdown: true, time: cut === -1 ? 0 : Number(key.slice(0, cut)) }
 }
 
 /** The note tab the workspace is currently showing, if any. */

@@ -152,6 +152,71 @@ describe('createRemoteVault', () => {
   })
 })
 
+describe('opening the whole vault at once', () => {
+  const collect = async (adapter: Awaited<ReturnType<typeof connect>>): Promise<Map<string, string>> => {
+    const all = new Map<string, string>()
+    for await (const batch of adapter.readAll!()) for (const [path, text] of batch) all.set(path, text)
+    return all
+  }
+
+  it('hands over every note in one pass', async () => {
+    const adapter = await connect()
+    const all = await collect(adapter)
+
+    expect([...all.keys()].sort()).toEqual(['Home.md', 'Ideas/Seed.md'])
+    expect(all.get('Home.md')).toBe(await onDisk('Home.md'))
+    expect(all.get('Ideas/Seed.md')).toBe('# Seed\n')
+  })
+
+  it('leaves attachments out — they are fetched only when something needs them', async () => {
+    await writeFile(join(vault, 'photo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const adapter = await connect()
+    expect([...(await collect(adapter)).keys()]).not.toContain('photo.png')
+    await rm(join(vault, 'photo.png'), { force: true })
+  })
+
+  it('learns each note’s hash on the way, so the first save is still conditional', async () => {
+    const laptop = await connect()
+    const phone = await connect()
+    await collect(laptop) // the laptop opened the vault, and read nothing since
+
+    // Somebody else changes the note the laptop believes it knows.
+    await phone.write('Home.md', '# Home\n\nfrom the phone\n')
+
+    // If the bundle had not carried hashes the laptop would write blindly and
+    // clobber this. It must be a conflict instead.
+    await expect(laptop.write('Home.md', '# Home\n\nfrom the laptop\n')).rejects.toBeInstanceOf(RemoteConflict)
+    expect(await onDisk('Home.md')).toBe('# Home\n\nfrom the phone\n')
+
+    for (const name of await filesInVault()) {
+      if (name.includes('conflict')) await rm(join(vault, name), { force: true })
+    }
+  })
+
+  it('copes with a vault of a few thousand notes', async () => {
+    const many = join(vault, 'Many')
+    await mkdir(many, { recursive: true })
+    await Promise.all(
+      Array.from({ length: 1200 }, (_, i) => writeFile(join(many, `Note ${i}.md`), `# Note ${i}\n\nbody ${i}\n`)),
+    )
+
+    const adapter = await connect()
+    let batches = 0
+    const all = new Map<string, string>()
+    for await (const batch of adapter.readAll!()) {
+      batches += 1
+      for (const [path, text] of batch) all.set(path, text)
+    }
+
+    expect(all.size).toBe(1202)
+    expect(all.get('Many/Note 999.md')).toBe('# Note 999\n\nbody 999\n')
+    // Delivered in pieces, so a caller can paint between them.
+    expect(batches).toBeGreaterThan(1)
+
+    await rm(many, { recursive: true, force: true })
+  }, 30_000)
+})
+
 describe('two devices editing the same note', () => {
   it('keeps both versions instead of choosing a winner', async () => {
     const laptop = await connect()

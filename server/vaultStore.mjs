@@ -68,6 +68,55 @@ export class VaultStore {
   /** @param {string} root */
   constructor(root) {
     this.root = resolve(root)
+    /**
+     * Content hashes, keyed by absolute path.
+     *
+     * A listing has to report a hash per file, and computing one means reading
+     * the file — so an unguarded `list()` reads the entire vault every time a
+     * device asks what has changed. Size and mtime together are what every
+     * backup tool in existence uses to decide a file is unchanged, and they are
+     * free: `readdir` has already returned the entry. A file whose size and
+     * mtime both match keeps its remembered hash and is not read again.
+     *
+     * The cost of being wrong is bounded: a file edited within the same
+     * millisecond, to exactly the same length, would keep a stale hash — and
+     * the watcher would still announce the change, so a device refetches it.
+     * @type {Map<string, { size: number, mtimeMs: number, hash: string }>}
+     */
+    this.hashes = new Map()
+  }
+
+  /**
+   * The hash of a file, from the cache when size and mtime say it cannot have
+   * changed. Returns null if the file could not be read.
+   *
+   * @param {string} absolute
+   * @param {import('node:fs').Stats} info
+   * @returns {Promise<string | null>}
+   */
+  async hashFor(absolute, info) {
+    const remembered = this.hashes.get(absolute)
+    if (remembered && remembered.size === info.size && remembered.mtimeMs === info.mtimeMs) {
+      return remembered.hash
+    }
+    const body = await readFile(absolute).catch(() => null)
+    if (!body) {
+      this.hashes.delete(absolute)
+      return null
+    }
+    const hash = hashOf(body)
+    this.hashes.set(absolute, { size: info.size, mtimeMs: info.mtimeMs, hash })
+    return hash
+  }
+
+  /** Record what a write just put on disk, so the next listing does not re-read it. */
+  /**
+   * @param {string} absolute
+   * @param {import('node:fs').Stats} info
+   * @param {string} hash
+   */
+  rememberHash(absolute, info, hash) {
+    this.hashes.set(absolute, { size: info.size, mtimeMs: info.mtimeMs, hash })
   }
 
   /**
@@ -116,6 +165,7 @@ export class VaultStore {
     const entries = []
 
     /**
+     * An arrow function on purpose: it reads `this.hashFor`.
      * @param {string} absolute
      * @param {string} prefix
      */
@@ -137,12 +187,14 @@ export class VaultStore {
         }
         if (!entry.isFile()) continue
         try {
-          const [info, body] = await Promise.all([stat(childAbsolute), readFile(childAbsolute)])
+          const info = await stat(childAbsolute)
+          const hash = await this.hashFor(childAbsolute, info)
+          if (hash === null) continue
           entries.push({
             path: childPath,
             size: info.size,
             mtime: Math.round(info.mtimeMs),
-            hash: hashOf(body),
+            hash,
             isMarkdown: /\.md$/i.test(entry.name),
           })
         } catch {
@@ -164,9 +216,38 @@ export class VaultStore {
     const { absolute, relative: rel } = this.resolvePath(path)
     try {
       const [body, info] = await Promise.all([readFile(absolute), stat(absolute)])
-      return { body, hash: hashOf(body), mtime: Math.round(info.mtimeMs) }
+      const hash = hashOf(body)
+      this.rememberHash(absolute, info, hash)
+      return { body, hash, mtime: Math.round(info.mtimeMs) }
     } catch {
       throw new VaultNotFoundError(`"${rel}" is not in the vault.`)
+    }
+  }
+
+  /**
+   * Every Markdown file in the vault, one at a time.
+   *
+   * A device opening a vault needs the text of every note. Asking for them one
+   * request at a time is fine for a folder of twenty and hopeless for a folder
+   * of five thousand: a browser opens six connections to an origin, so the
+   * requests queue and the vault takes minutes to appear. Yielding them here
+   * lets the API hand the whole vault over in a single response.
+   *
+   * Attachments are deliberately left out. They are binary, often far larger
+   * than the notes, and nothing needs them until a note that embeds one is
+   * actually rendered.
+   *
+   * @returns {AsyncGenerator<{ path: string, mtime: number, hash: string, text: string }>}
+   */
+  async *readAllMarkdown() {
+    for (const entry of await this.list()) {
+      if (!entry.isMarkdown) continue
+      const { absolute } = this.resolvePath(entry.path)
+      const body = await readFile(absolute, 'utf8').catch(() => null)
+      // A note that vanished between the listing and the read is simply not in
+      // this bundle; the change feed will tell every device it is gone.
+      if (body === null) continue
+      yield { path: entry.path, mtime: entry.mtime, hash: entry.hash, text: body }
     }
   }
 
@@ -195,11 +276,12 @@ export class VaultStore {
   async write(path, body, expectedHash) {
     const { absolute } = this.resolvePath(path)
     const existing = await readFile(absolute).catch(() => null)
+    const current = existing ? hashOf(existing) : ''
+    const incoming = hashOf(body)
 
     if (expectedHash === '*') {
-      if (existing) throw new VaultConflictError('That file already exists.', hashOf(existing))
+      if (existing) throw new VaultConflictError('That file already exists.', current)
     } else if (expectedHash !== undefined) {
-      const current = existing ? hashOf(existing) : ''
       if (current !== expectedHash) {
         throw new VaultConflictError('The file changed since you last read it.', current)
       }
@@ -207,9 +289,10 @@ export class VaultStore {
 
     // Same-content writes are dropped: an editor that saves on every keystroke
     // must not wake every other device for nothing.
-    if (existing && hashOf(existing) === hashOf(body)) {
+    if (existing && current === incoming) {
       const info = await stat(absolute)
-      return { hash: hashOf(existing), mtime: Math.round(info.mtimeMs) }
+      this.rememberHash(absolute, info, current)
+      return { hash: current, mtime: Math.round(info.mtimeMs) }
     }
 
     await mkdir(dirname(absolute), { recursive: true })
@@ -226,7 +309,8 @@ export class VaultStore {
       throw error
     }
     const info = await stat(absolute)
-    return { hash: hashOf(body), mtime: Math.round(info.mtimeMs) }
+    this.rememberHash(absolute, info, incoming)
+    return { hash: incoming, mtime: Math.round(info.mtimeMs) }
   }
 
   /** @param {string} path */
@@ -235,6 +319,7 @@ export class VaultStore {
     const info = await stat(absolute).catch(() => null)
     if (!info) throw new VaultNotFoundError(`"${rel}" is not in the vault.`)
     await rm(absolute, { force: true })
+    this.hashes.delete(absolute)
   }
 
   /**
@@ -250,6 +335,10 @@ export class VaultStore {
     if (clash) throw new VaultConflictError(`"${target.relative}" already exists.`, '')
     await mkdir(dirname(target.absolute), { recursive: true })
     await rename(source.absolute, target.absolute)
+    // The hash travels with the bytes; only the key it is filed under changes.
+    const moved = this.hashes.get(source.absolute)
+    this.hashes.delete(source.absolute)
+    if (moved) this.hashes.set(target.absolute, moved)
   }
 
   /** @param {string} path */

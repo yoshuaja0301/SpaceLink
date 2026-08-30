@@ -132,6 +132,112 @@ describe('listing', () => {
   })
 })
 
+describe('the whole vault in one response', () => {
+  /** Read an NDJSON body into its records. */
+  const records = async (response) =>
+    (await response.text())
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+
+  it('sends every note, with its text, in one request', async () => {
+    const response = await call('/api/bundle')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toMatch(/ndjson/)
+
+    const lines = await records(response)
+    expect(lines[0]).toMatchObject({ type: 'head', notes: 2 })
+    expect(lines.at(-1)).toEqual({ type: 'end' })
+
+    const notes = lines.filter((line) => line.type === 'note')
+    expect(notes.map((n) => n.path).sort()).toEqual(['Home.md', 'Ideas/Seed.md'])
+    expect(notes.find((n) => n.path === 'Home.md').text).toBe(await onDisk('Home.md'))
+    // The hash is the same one a listing reports, so a device can use the
+    // bundle to prime its conditional writes.
+    const listed = (await (await call('/api/files')).json()).files
+    for (const note of notes) {
+      expect(note.hash).toBe(listed.find((f) => f.path === note.path).hash)
+    }
+  })
+
+  it('names attachments without shipping their bytes', async () => {
+    await writeFile(join(vault, 'diagram.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const lines = await records(await call('/api/bundle'))
+
+    const attachment = lines.find((line) => line.type === 'attachment')
+    expect(attachment).toMatchObject({ path: 'diagram.png', isMarkdown: false })
+    expect(attachment.text).toBeUndefined()
+    expect(lines.some((line) => line.type === 'note' && line.path === 'diagram.png')).toBe(false)
+
+    await rm(join(vault, 'diagram.png'), { force: true })
+  })
+
+  it('leaves out what the rest of the API leaves out', async () => {
+    await mkdir(join(vault, '.obsidian'), { recursive: true })
+    await writeFile(join(vault, '.obsidian/workspace.md'), 'private\n')
+    await mkdir(join(vault, 'node_modules'), { recursive: true })
+    await writeFile(join(vault, 'node_modules/junk.md'), 'junk\n')
+
+    const body = await (await call('/api/bundle')).text()
+    expect(body).not.toMatch(/obsidian|node_modules|private|junk/)
+
+    await rm(join(vault, '.obsidian'), { recursive: true, force: true })
+    await rm(join(vault, 'node_modules'), { recursive: true, force: true })
+  })
+
+  it('needs the token like everything else', async () => {
+    expect((await fetch(`${base}/api/bundle`)).status).toBe(401)
+  })
+})
+
+describe('hashes are not recomputed for files that did not change', () => {
+  it('reads each file once across repeated listings', async () => {
+    const store = new VaultStore(vault)
+    const first = await store.list()
+    expect(first.length).toBeGreaterThan(0)
+
+    // Nothing has changed, so a second listing must not read a single byte.
+    let reads = 0
+    const realHashFor = store.hashFor.bind(store)
+    store.hashFor = async (absolute, info) => {
+      const before = store.hashes.get(absolute)
+      const hash = await realHashFor(absolute, info)
+      if (!before || before.hash !== hash || before.mtimeMs !== info.mtimeMs) reads += 1
+      return hash
+    }
+    const second = await store.list()
+    expect(second).toEqual(first)
+    expect(reads).toBe(0)
+  })
+
+  it('notices a file that actually changed', async () => {
+    const store = new VaultStore(vault)
+    const before = (await store.list()).find((f) => f.path === 'Home.md')
+
+    // A whole millisecond later, so the mtime genuinely differs.
+    await new Promise((resolve) => setTimeout(resolve, 12))
+    await writeFile(join(vault, 'Home.md'), '# Home\n\nrewritten by something else\n')
+
+    const after = (await store.list()).find((f) => f.path === 'Home.md')
+    expect(after.hash).not.toBe(before.hash)
+    expect(after.hash).toBe(hashOf(await onDisk('Home.md')))
+  })
+
+  it('forgets a file it removed, and moves the hash with a rename', async () => {
+    const store = new VaultStore(vault)
+    await store.list()
+    const home = join(vault, 'Home.md')
+    const hash = store.hashes.get(home).hash
+
+    await store.rename('Home.md', 'Moved.md')
+    expect(store.hashes.has(home)).toBe(false)
+    expect(store.hashes.get(join(vault, 'Moved.md')).hash).toBe(hash)
+
+    await store.remove('Moved.md')
+    expect(store.hashes.has(join(vault, 'Moved.md'))).toBe(false)
+  })
+})
+
 describe('reading and writing', () => {
   it('round-trips a file and tags it with its hash', async () => {
     const response = await call('/api/file?path=Home.md')

@@ -40,6 +40,13 @@ const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 30_000
 
 /**
+ * How many notes `readAll` hands over at a time. Large enough that the yield
+ * itself is not the cost, small enough that the caller can paint between
+ * batches instead of freezing until the last note lands.
+ */
+const READ_ALL_BATCH = 250
+
+/**
  * A stable id for this browser, so the server can tag events with the device
  * that caused them and this one can ignore its own.
  */
@@ -221,6 +228,60 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
           mtime: file.mtime,
         }
       })
+    },
+
+    /**
+     * The whole vault in one response, decoded as it arrives.
+     *
+     * The alternative — a request per note — is what made opening a five
+     * thousand note vault take minutes rather than seconds: a browser holds
+     * six connections open to an origin, so the reads queue six deep. This is
+     * one connection, and the notes are handed over in batches so the caller
+     * can show progress instead of a frozen splash.
+     */
+    async *readAll(): AsyncGenerator<ReadonlyMap<NotePath, string>> {
+      const response = await request('/api/bundle')
+      if (!response.ok || !response.body) {
+        throw new Error(`The server could not send the vault (${response.status}).`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let pending = ''
+      let batch = new Map<NotePath, string>()
+
+      /** One NDJSON line. Unparseable lines are skipped rather than failing the load. */
+      const take = (line: string): void => {
+        if (!line) return
+        let record: { type?: string; path?: string; text?: string; hash?: string }
+        try {
+          record = JSON.parse(line) as typeof record
+        } catch {
+          return
+        }
+        if (record.type !== 'note' || typeof record.path !== 'string' || typeof record.text !== 'string') return
+        const path = normalizePath(record.path)
+        if (record.hash) hashes.set(path, record.hash)
+        batch.set(path, record.text)
+      }
+
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        pending += decoder.decode(value, { stream: true })
+        let newline = pending.indexOf('\n')
+        while (newline !== -1) {
+          take(pending.slice(0, newline))
+          pending = pending.slice(newline + 1)
+          newline = pending.indexOf('\n')
+        }
+        if (batch.size >= READ_ALL_BATCH) {
+          yield batch
+          batch = new Map()
+        }
+      }
+      take(pending + decoder.decode())
+      if (batch.size > 0) yield batch
     },
 
     async read(path: NotePath): Promise<string> {

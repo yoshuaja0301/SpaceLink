@@ -253,6 +253,37 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
       return
     }
 
+    // Every note's text in one response, as newline-delimited JSON.
+    //
+    // This is what a device uses to open the vault. One request instead of one
+    // per note matters more than it sounds: a browser will only hold six
+    // connections open to an origin, so five thousand reads queue six deep and
+    // the vault takes minutes to appear. It streams, so neither the server nor
+    // the client ever holds the whole vault in memory as one string.
+    if (url.pathname === '/api/bundle' && request.method === 'GET') {
+      response.writeHead(200, {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'cache-control': 'no-store',
+        // Nothing downstream should try to buffer this to add a length.
+        'transfer-encoding': 'chunked',
+      })
+      const files = await store.list()
+      response.write(JSON.stringify({ type: 'head', files: files.length, notes: files.filter((f) => f.isMarkdown).length }) + '\n')
+      for await (const note of store.readAllMarkdown()) {
+        // Back-pressure: a fast disk must not outrun a slow connection into an
+        // unbounded write buffer.
+        if (!response.write(JSON.stringify({ type: 'note', ...note }) + '\n')) {
+          await new Promise((resolve) => response.once('drain', resolve))
+        }
+      }
+      for (const file of files) {
+        if (file.isMarkdown) continue
+        response.write(JSON.stringify({ type: 'attachment', ...file }) + '\n')
+      }
+      response.end(JSON.stringify({ type: 'end' }) + '\n')
+      return
+    }
+
     if (url.pathname === '/api/file') {
       if (request.method === 'GET') {
         const file = await store.read(path)

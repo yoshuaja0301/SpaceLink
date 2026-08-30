@@ -32,6 +32,7 @@ import { useTheme } from './ui/useTheme'
 export function App(): React.JSX.Element {
   const adapter = useAppStore((s) => s.adapter)
   const loading = useAppStore((s) => s.loading)
+  const progress = useAppStore((s) => s.loadingProgress)
   const sidebarPanel = useAppStore((s) => s.sidebarPanel)
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen)
@@ -161,11 +162,26 @@ export function App(): React.JSX.Element {
   const closePicker = useCallback(() => setPickerOpen(false), [])
 
   if (booting && !adapter) {
+    // A big vault takes a moment. Counting the notes as they land is the
+    // difference between "it is working" and "it has hung".
+    const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : null
     return (
       <div className="app app-booting">
         <div className="boot-splash">
           <div className="boot-logo" aria-hidden="true" />
-          <p>Opening vault…</p>
+          <p>{progress ? `Opening vault… ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} notes` : 'Opening vault…'}</p>
+          {pct !== null && (
+            <div
+              className="boot-progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              aria-label="Opening vault"
+            >
+              <div className="boot-progress-bar" style={{ width: `${pct}%` }} />
+            </div>
+          )}
         </div>
       </div>
     )
@@ -196,7 +212,11 @@ export function App(): React.JSX.Element {
       <CommandPalette />
       <DialogHost />
       <Toasts />
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {/* Mounted only while it is open. It renders nothing when closed either
+          way, but its hooks still ran — including one that walks every path in
+          the vault to list the folders — so a closed dialog was doing work
+          proportional to the vault on every keystroke. */}
+      {settingsOpen && <SettingsModal open onClose={() => setSettingsOpen(false)} />}
 
       {(pickerOpen || (!adapter && !loading)) && (
         <div className="vault-picker-layer">

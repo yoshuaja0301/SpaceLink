@@ -238,6 +238,17 @@ export interface VaultAdapter {
    * function. A backend without it simply never reports outside changes.
    */
   watch?(listener: (change: VaultChange) => void): () => void
+  /**
+   * Optional. Every note's text in one go, for backends where reading them one
+   * at a time is much worse than reading them together — a network backend
+   * above all, where five thousand reads queue six deep behind the browser's
+   * connection limit.
+   *
+   * Yields batches so a caller can show progress and stay responsive rather
+   * than waiting on one enormous promise. A backend without it is read a note
+   * at a time, which is the right thing for local storage.
+   */
+  readAll?(): AsyncIterable<ReadonlyMap<NotePath, string>>
 }
 
 /* ------------------------------------------------------------------ *

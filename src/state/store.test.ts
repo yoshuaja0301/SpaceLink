@@ -183,6 +183,69 @@ describe('openVault', () => {
     expect(state.activeTab()?.path).toBe('Start Here.md')
   })
 
+  it('asks a backend for the whole vault at once when it can do that', async () => {
+    const files: Record<NotePath, string> = {}
+    for (let i = 0; i < 600; i += 1) files[`Note ${i}.md`] = `# Note ${i}\n\nbody ${i}\n`
+    const adapter = createMemoryVault(files, { name: 'Bulk' })
+
+    let reads = 0
+    const oneAtATime = adapter.read.bind(adapter)
+    adapter.read = async (path) => {
+      reads += 1
+      return oneAtATime(path)
+    }
+    adapter.readAll = async function* readAll() {
+      // Two batches, so the batching path is the one under test.
+      const paths = Object.keys(files)
+      yield new Map(paths.slice(0, 400).map((p) => [p, files[p]!]))
+      yield new Map(paths.slice(400).map((p) => [p, files[p]!]))
+    }
+
+    await useAppStore.getState().openVault(adapter)
+
+    expect(useAppStore.getState().notes.size).toBe(600)
+    expect(useAppStore.getState().notes.get('Note 599.md')?.content).toContain('body 599')
+    // The whole point: not one request per note.
+    expect(reads).toBe(0)
+  })
+
+  it('counts the notes as they land, and stops counting once they have', async () => {
+    const files: Record<NotePath, string> = {}
+    for (let i = 0; i < 300; i += 1) files[`Note ${i}.md`] = `# Note ${i}\n`
+    const adapter = createMemoryVault(files, { name: 'Counted' })
+    const seen: (number | null)[] = []
+    const unsubscribe = useAppStore.subscribe((state) => {
+      const at = state.loadingProgress ? state.loadingProgress.done : null
+      if (seen.at(-1) !== at) seen.push(at)
+    })
+
+    adapter.readAll = async function* readAll() {
+      const paths = Object.keys(files)
+      yield new Map(paths.slice(0, 100).map((p) => [p, files[p]!]))
+      yield new Map(paths.slice(100, 200).map((p) => [p, files[p]!]))
+      yield new Map(paths.slice(200).map((p) => [p, files[p]!]))
+    }
+
+    await useAppStore.getState().openVault(adapter)
+    unsubscribe()
+
+    expect(seen.filter((at) => at !== null)).toEqual([0, 100, 200, 300])
+    // Cleared when the vault is open, so the splash does not linger.
+    expect(useAppStore.getState().loadingProgress).toBeNull()
+  })
+
+  it('still opens a backend that can only be read a note at a time', async () => {
+    const files: Record<NotePath, string> = {}
+    for (let i = 0; i < 600; i += 1) files[`Note ${i}.md`] = `# Note ${i}\n\nbody ${i}\n`
+    const adapter = createMemoryVault(files, { name: 'One by one' })
+    expect(adapter.readAll).toBeUndefined()
+
+    await useAppStore.getState().openVault(adapter)
+
+    expect(useAppStore.getState().notes.size).toBe(600)
+    expect(useAppStore.getState().notes.get('Note 42.md')?.content).toContain('body 42')
+  })
+
   it('reports a failure instead of leaving the app half-loaded', async () => {
     const broken = createMemoryVault({})
     broken.list = () => Promise.reject(new Error('disk on fire'))
@@ -287,6 +350,104 @@ describe('openVault', () => {
     const toast = useAppStore.getState().toasts.find((t) => t.message.includes('could not be saved before loading'))
     expect(toast?.kind).toBe('error')
     expect(toast?.message).toContain('Start Here.md')
+  })
+})
+
+describe('typing in a note that is expensive to parse', () => {
+  /** Big enough that parsing it costs real time — the same shape as a long journal. */
+  const HUGE = ['# Journal', '', ...Array.from({ length: 14_000 }, (_, i) => `${i}. A line that links [[Hub]] and tags #jurnal.`), ''].join('\n')
+
+  const seedHuge = async (): Promise<void> => {
+    const adapter = createMemoryVault(
+      { 'Hub.md': '# Hub\n', 'Target.md': '# Target\n', 'Journal.md': HUGE },
+      { name: 'Heavy' },
+    )
+    await useAppStore.getState().openVault(adapter)
+    // One keystroke to learn what this note costs to parse. Nothing is deferred
+    // until it has been parsed once — there is nothing to go on before that.
+    useAppStore.getState().setNoteContent('Journal.md', `${HUGE}\n`)
+  }
+
+  /** A note's `parsed` is replaced wholesale by a parse, so its identity says whether one happened. */
+  const parsedOf = (path: NotePath): unknown => useAppStore.getState().notes.get(path)!.parsed
+
+  it('stops reparsing the whole note on every keystroke once it proves slow', async () => {
+    await seedHuge()
+
+    let content = `${HUGE}\n`
+    const afterFirst = parsedOf('Journal.md')
+
+    for (let i = 0; i < 30; i += 1) {
+      content += 'x'
+      useAppStore.getState().setNoteContent('Journal.md', content)
+    }
+
+    // The rest of the burst reuses it rather than parsing 600 KB thirty times.
+    expect(parsedOf('Journal.md')).toBe(afterFirst)
+    // The text itself is never behind: it is what gets saved.
+    expect(useAppStore.getState().notes.get('Journal.md')!.content).toBe(content)
+  })
+
+  it('catches the parse up once the typing stops', async () => {
+    // The clock the deferral measures itself against is left real: a frozen
+    // `performance.now()` reports every parse as free, and the store then
+    // (correctly, but uninterestingly) never defers one.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    await seedHuge()
+
+    const content = `${HUGE}\n## A brand new heading\n`
+    useAppStore.getState().setNoteContent('Journal.md', content)
+
+    // Mid-burst the outline has not noticed the heading yet…
+    const headings = useAppStore.getState().notes.get('Journal.md')!.parsed.headings
+    expect(headings.some((h) => h.text === 'A brand new heading')).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(400)
+
+    // …and once the typing settles, it has.
+    expect(
+      useAppStore.getState().notes.get('Journal.md')!.parsed.headings.some((h) => h.text === 'A brand new heading'),
+    ).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('never hands out an index built on a parse that is behind', async () => {
+    await seedHuge()
+
+    useAppStore.getState().setNoteContent('Journal.md', `${HUGE}\nAnd now [[Target]].\n`)
+
+    // Asked for right now, mid-burst: the answer has to be the true one, even
+    // though the note's own `parsed` has not caught up yet.
+    expect(useAppStore.getState().backlinksFor('Target.md')).toHaveLength(1)
+  })
+
+  it('writes the text that was typed, not the text that was last parsed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    await seedHuge()
+    const adapter = useAppStore.getState().adapter!
+    useAppStore.getState().updateSettings({ autosaveDelay: 300 })
+
+    const content = `${HUGE}\nthe very last thing typed\n`
+    useAppStore.getState().setNoteContent('Journal.md', content)
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(await adapter.read('Journal.md')).toBe(content)
+    vi.useRealTimers()
+  })
+
+  it('leaves ordinary notes parsing on every keystroke', async () => {
+    await openSeededVault()
+
+    const seen = new Set<unknown>()
+    for (const typed of ['a', 'ab', 'abc', 'abcd']) {
+      useAppStore.getState().setNoteContent('Start Here.md', `# Start Here\n\n${typed}\n`)
+      seen.add(parsedOf('Start Here.md'))
+    }
+
+    // Four keystrokes, four parses: a note this size is not worth deferring,
+    // and nothing about it lags, not even for a frame.
+    expect(seen.size).toBe(4)
+    expect(useAppStore.getState().notes.get('Start Here.md')!.parsed.body).toContain('abcd')
   })
 })
 

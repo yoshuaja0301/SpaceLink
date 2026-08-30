@@ -95,6 +95,21 @@ ul, ol { margin: 0; padding: 0; }
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* Only shown once the note count is known, so it never sits empty. */
+.boot-progress {
+  width: 220px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+.boot-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
 /* ======================================================================= *
  * 3. Ribbon
  * ======================================================================= */
