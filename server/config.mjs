@@ -61,7 +61,7 @@ export async function loadOrCreateToken() {
  * Parse the command line.
  *
  * @param {string[]} argv
- * @returns {{ vault: string, port: number, host: string, token: string | null, tlsCert: string | null, tlsKey: string | null, help: boolean }}
+ * @returns {{ vault: string, port: number, host: string, token: string | null, tlsCert: string | null, tlsKey: string | null, printReady: boolean, help: boolean }}
  */
 export function parseArgs(argv) {
   const options = {
@@ -74,6 +74,7 @@ export function parseArgs(argv) {
     tlsCert: null,
     /** @type {string | null} */
     tlsKey: null,
+    printReady: false,
     help: false,
   }
 
@@ -104,6 +105,9 @@ export function parseArgs(argv) {
       case '--tls-key':
         options.tlsKey = value()
         break
+      case '--print-ready':
+        options.printReady = true
+        break
       case '--help':
       case '-h':
         options.help = true
@@ -114,8 +118,11 @@ export function parseArgs(argv) {
     }
   }
 
-  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
-    throw new Error(`--port must be a number between 1 and 65535, not "${options.port}".`)
+  // Port 0 asks the operating system for a free one. That is what a wrapper
+  // launching this server wants: it cannot know which ports are already taken,
+  // and it reads the real one back from the ready line.
+  if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) {
+    throw new Error(`--port must be a number between 0 and 65535, not "${options.port}".`)
   }
   if ((options.tlsCert === null) !== (options.tlsKey === null)) {
     throw new Error('--tls-cert and --tls-key must be given together.')
@@ -131,12 +138,18 @@ SpaceFore sync server — one vault, one owner, any number of devices.
 
 Options
   --vault <dir>     Folder of Markdown files to serve. Created if missing.
-  --port <number>   Port to listen on (default 4899).
+  --port <number>   Port to listen on (default 4899). 0 asks the system for a
+                    free one, which it then reports on the ready line below.
   --host <address>  Address to bind (default 127.0.0.1 — loopback only).
                     Use 0.0.0.0 to reach it from other devices on your network.
   --token <value>   Access token. Defaults to one stored in ~/.spacefore/server.json.
   --tls-cert <file> Certificate for HTTPS. Usually unnecessary: a tunnel
   --tls-key <file>  (Tailscale, Cloudflare) terminates TLS for you.
+  --print-ready     Print one line of JSON on stdout once the server is
+                    listening: {"spacefore":"ready","url":…,"port":…,"token":…,
+                    "vault":…}. For a program launching this server — the macOS
+                    app does — so it does not have to read the banner meant for
+                    people.
   -h, --help        Show this.
 
 See docs/SERVER.md for reaching it from other devices, and for keeping it

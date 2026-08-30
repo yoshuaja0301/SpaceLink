@@ -13,7 +13,7 @@ import { LAST_VAULT_KEY, useAppStore } from './state/store'
 import { createBrowserVault } from './core/vault/browserVault'
 import { createDemoVault } from './core/vault/demoVault'
 import { createDirectoryVault, restoreVaultHandle } from './core/vault/directoryVault'
-import { loadRemoteConnection } from './core/vault/remoteConnection'
+import { loadRemoteConnection, saveRemoteConnection, takeHandoffConnection } from './core/vault/remoteConnection'
 import { createRemoteVault } from './core/vault/remoteVault'
 import { CommandPalette } from './ui/CommandPalette'
 import { DialogHost } from './ui/DialogHost'
@@ -57,6 +57,23 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false
     void (async () => {
+      // Launched by something local that already knows the server and the
+      // token — the macOS app does exactly this. It wins over whatever was
+      // remembered: the host just told us where the vault is.
+      const handoff = takeHandoffConnection(window.location, window.history)
+      if (handoff) {
+        try {
+          const vault = await createRemoteVault(handoff)
+          if (cancelled) return
+          saveRemoteConnection({ url: handoff.url, token: handoff.token, name: vault.name })
+          await openVault(vault)
+          return
+        } catch {
+          // The host is gone or the token was refused. Fall through to whatever
+          // this device was doing before rather than showing an empty window.
+        }
+      }
+
       let lastKind: VaultKind | null = null
       try {
         const raw = localStorage.getItem(LAST_VAULT_KEY)

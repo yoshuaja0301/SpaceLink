@@ -447,6 +447,124 @@ describe('change events', () => {
   })
 })
 
+describe('being launched by another program', () => {
+  it('lets the system pick a port, and says which one it picked', async () => {
+    const { spawn } = await import('node:child_process')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { fileURLToPath } = await import('node:url')
+
+    const folder = await mkdtemp(join(tmpdir(), 'spacefore-ready-'))
+    const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+    const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--print-ready', '--token', TOKEN])
+
+    try {
+      const ready = await new Promise((resolvePromise, rejectPromise) => {
+        let buffered = ''
+        const timer = setTimeout(() => rejectPromise(new Error(`no ready line; stdout was:\n${buffered}`)), 15_000)
+        child.stdout.on('data', (chunk) => {
+          buffered += String(chunk)
+          const line = buffered.split('\n').find((candidate) => candidate.startsWith('{'))
+          if (!line) return
+          clearTimeout(timer)
+          resolvePromise(JSON.parse(line))
+        })
+        child.on('error', rejectPromise)
+      })
+
+      expect(ready.spacefore).toBe('ready')
+      expect(ready.token).toBe(TOKEN)
+      expect(ready.vault).toBe(folder)
+      // The whole point: a real port, not the 0 that was asked for.
+      expect(ready.port).toBeGreaterThan(0)
+      expect(ready.url).toBe(`http://127.0.0.1:${ready.port}/`)
+
+      // …and it is genuinely listening there.
+      const health = await fetch(`${ready.url}api/health`)
+      expect(health.status).toBe(200)
+      expect(await health.json()).toMatchObject({ ok: true, service: 'spacefore' })
+    } finally {
+      child.kill('SIGTERM')
+      await rm(folder, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('stops by itself when whatever launched it goes away', async () => {
+    const { spawn } = await import('node:child_process')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { fileURLToPath } = await import('node:url')
+
+    const folder = await mkdtemp(join(tmpdir(), 'spacefore-leash-'))
+    const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+    const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--print-ready', '--token', TOKEN], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    try {
+      const ready = await new Promise((resolvePromise, rejectPromise) => {
+        const timer = setTimeout(() => rejectPromise(new Error('no ready line')), 15_000)
+        let buffered = ''
+        child.stdout.on('data', (chunk) => {
+          buffered += String(chunk)
+          const line = buffered.split('\n').find((candidate) => candidate.startsWith('{'))
+          if (!line) return
+          clearTimeout(timer)
+          resolvePromise(JSON.parse(line))
+        })
+      })
+      expect((await fetch(`${ready.url}api/health`)).status).toBe(200)
+
+      // The parent lets go of stdin — which is what happens when it quits or
+      // crashes. Nothing is signalled; the server has to notice on its own.
+      child.stdin.end()
+
+      const code = await new Promise((resolvePromise, rejectPromise) => {
+        const timer = setTimeout(() => rejectPromise(new Error('it was still running 10 s later')), 10_000)
+        child.on('exit', (value) => {
+          clearTimeout(timer)
+          resolvePromise(value)
+        })
+      })
+      expect(code).toBe(0)
+
+      // …and it really let go of the port.
+      await expect(fetch(`${ready.url}api/health`)).rejects.toThrow()
+    } finally {
+      child.kill('SIGKILL')
+      await rm(folder, { recursive: true, force: true })
+    }
+  }, 40_000)
+
+  it('keeps the token off stdout unless it was asked for', async () => {
+    const { spawn } = await import('node:child_process')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { fileURLToPath } = await import('node:url')
+
+    const folder = await mkdtemp(join(tmpdir(), 'spacefore-quiet-'))
+    const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+    const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--token', TOKEN])
+
+    try {
+      const output = await new Promise((resolvePromise) => {
+        let buffered = ''
+        child.stdout.on('data', (chunk) => {
+          buffered += String(chunk)
+          if (buffered.includes('Reaching it from outside')) resolvePromise(buffered)
+        })
+        setTimeout(() => resolvePromise(buffered), 12_000)
+      })
+      // The banner still shows a person their token — that is what it is for —
+      // but no machine-readable line appears for a caller that did not ask.
+      expect(output).not.toMatch(/"spacefore":"ready"/)
+    } finally {
+      child.kill('SIGTERM')
+      await rm(folder, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+
 describe('parseArgs', () => {
   it('reads the options a person would actually type', () => {
     const options = parseArgs(['--vault', '/tmp/notes', '--port', '5000', '--host', '0.0.0.0'])

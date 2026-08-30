@@ -257,6 +257,37 @@ try {
     return status.split('\n').slice(0, 2).join(' / ')
   })
 
+  await step('a local host can hand the pairing over in the address', async () => {
+    // What the macOS app does: it starts the server, then opens the page with
+    // the token in the fragment. Nobody types anything.
+    const fresh = await openDevice(browser, `${ORIGIN}/#token=${encodeURIComponent(TOKEN)}`)
+    try {
+      await fresh.page.waitForFunction(
+        () => {
+          const bar = document.querySelector('.statusbar')?.innerText ?? ''
+          return /note/i.test(bar) && !/demo/i.test(bar) && !document.querySelector('.vault-picker')
+        },
+        null,
+        { timeout: 30_000 },
+      )
+      const status = await fresh.page.locator('.statusbar').innerText()
+      must(!(await fresh.page.locator('.vault-picker').count()), 'it still asked to be paired')
+
+      // The token must not be left in the address for a bookmark to keep.
+      const url = fresh.page.url()
+      must(!url.includes(TOKEN), `the token is still in the address: ${url}`)
+      must(!url.includes('#token'), `the fragment survived: ${url}`)
+
+      // And it is a real pairing, not a one-off: a reload comes straight back.
+      await fresh.page.reload({ waitUntil: 'networkidle' })
+      await fresh.page.waitForTimeout(2500)
+      must(!(await fresh.page.locator('.vault-picker').count()), 'the pairing was not kept')
+      return status.split('\n').slice(0, 2).join(' / ')
+    } finally {
+      await fresh.context.close().catch(() => {})
+    }
+  })
+
   await step('the vault is unreachable without the token', async () => {
     const status = await fetch(`${ORIGIN}/api/files`).then((response) => response.status)
     must(status === 401, `an unauthenticated request got ${status}`)

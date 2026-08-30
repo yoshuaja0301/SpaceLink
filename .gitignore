@@ -4,3 +4,4 @@ coverage/
 .vite/
 *.local
 .DS_Store
+macos/build/

@@ -136,6 +136,13 @@ The installed app remembers which server it is paired with, so it reconnects on
 its own. It still needs to reach the server: your notes live there, not on the
 device.
 
+### On the Mac that holds the notes, there is an app
+
+`./macos/build.sh --install` builds `SpaceFore.app`, which starts a server like
+this one against a folder you pick and shows it in its own window. It serves
+loopback only, so it is for that machine alone — the server described here is
+still what your other devices connect to. See [../macos/README.md](../macos/README.md).
+
 ### Installing needs `localhost` or HTTPS
 
 Browsers only treat a page as an app — and only run a service worker for it — on

@@ -50,6 +50,25 @@ No account, no server, no telemetry. Everything runs in the tab.
 
 ## Installing it
 
+Two ways, depending on whether you want a Mac application or a browser one.
+
+### As a Mac app
+
+```bash
+./macos/build.sh --install
+open /Applications/SpaceFore.app
+```
+
+A real `SpaceFore.app`: double-click it, choose your notes folder, done. It
+starts its own server and shuts it down when you quit; there is no terminal to
+keep open. Needs Xcode's command line tools (`xcode-select --install`) and Node.
+
+The Swift for it has never been compiled — it was written without a Mac — so
+[macos/README.md](macos/README.md) sets out exactly what was verified and what
+was not before you build it.
+
+### As a web app
+
 There is no installer to download. SpaceFore is built from source in about
 fifteen seconds, and then installs itself from the browser — it is a progressive
 web app, so the "install" is your browser's, not a package manager's.

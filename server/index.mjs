@@ -450,17 +450,37 @@ async function main() {
 
   listener.listen(options.port, options.host, () => {
     const scheme = options.tlsCert ? 'https' : 'http'
+    // Never `options.port`: with `--port 0` the operating system chose one, and
+    // the number the caller asked for is not the number anyone can connect to.
+    const address = listener.address()
+    const port = typeof address === 'object' && address ? address.port : options.port
+
+    // One line of JSON, before the banner, for a program that launched this
+    // server and needs to know where it ended up. Printed only when asked, so
+    // the token never appears in a log nobody meant to hold one.
+    if (options.printReady) {
+      process.stdout.write(
+        `${JSON.stringify({
+          spacefore: 'ready',
+          url: `${scheme}://127.0.0.1:${port}/`,
+          port,
+          token: stored.token,
+          vault: server.store.root,
+        })}\n`,
+      )
+    }
+
     const lines = [
       '',
       '  SpaceFore sync server',
       `  vault    ${server.store.root}`,
       `  token    ${stored.file}`,
       '',
-      `  this Mac       ${scheme}://localhost:${options.port}/`,
+      `  this Mac       ${scheme}://localhost:${port}/`,
     ]
     if (options.host === '0.0.0.0' || options.host === '::') {
-      for (const address of localAddresses()) {
-        lines.push(`  same network   ${scheme}://${address}:${options.port}/`)
+      for (const networkAddress of localAddresses()) {
+        lines.push(`  same network   ${scheme}://${networkAddress}:${port}/`)
       }
     } else {
       lines.push('  (bound to loopback — pass --host 0.0.0.0 to reach it from other devices)')
@@ -478,6 +498,16 @@ async function main() {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+
+  // A server started by another program outlives it if that program crashes,
+  // and then sits on a port and a file watcher with nobody to stop it. So when
+  // we were launched by one — which `--print-ready` says — the parent's end of
+  // stdin becomes the leash: the moment it closes, we go too.
+  if (options.printReady) {
+    process.stdin.on('end', shutdown)
+    process.stdin.on('close', shutdown)
+    process.stdin.resume()
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
