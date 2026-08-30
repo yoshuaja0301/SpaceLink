@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build SpaceFore.app.
+# Build SpaceFore.app, without opening Xcode.
 #
-# There is no .xcodeproj on purpose. An Xcode project file is a large generated
-# thing that is tedious to review and easy to break invisibly; this app is one
-# Swift file and a handful of resources, so a script that says exactly what goes
-# into the bundle is easier to trust and easier to change. You need Xcode or the
-# Command Line Tools installed for `swiftc`, which is the only thing this uses.
+# There is an Xcode project beside this — SpaceFore.xcodeproj — and it builds
+# the same app. This script is the one to use from a terminal or a Makefile: it
+# needs only `swiftc`, which comes with the Command Line Tools, and it says in
+# one screen exactly what ends up in the bundle. Both call copy-resources.sh, so
+# neither can quietly diverge from the other.
 #
 #   ./macos/build.sh                 build it
 #   ./macos/build.sh --embed-node    ...and put a copy of Node inside, so the
@@ -46,52 +46,23 @@ command -v node >/dev/null 2>&1 || {
   exit 1
 }
 
-# ---------------------------------------------------------------- the web app
-
-echo "==> Building the web app"
-cd "$ROOT"
-[[ -d node_modules ]] || npm ci
-npm run build
-
-# ------------------------------------------------------------- the app bundle
+# ---------------------------------------------------------- the app bundle
 
 echo "==> Assembling SpaceFore.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 
-# The web app, and the server that serves it. `server/index.mjs` resolves `dist/`
-# relative to its own location, so the two must keep their positions.
-cp -R "$ROOT/dist" "$APP/Contents/Resources/dist"
-mkdir -p "$APP/Contents/Resources/server"
-cp "$ROOT/server/"*.mjs "$APP/Contents/Resources/server/"
-rm -f "$APP/Contents/Resources/server/"*.test.mjs
+# Builds the web app and puts it, the server and the icon into Resources. The
+# Xcode project's script phase calls this same script, so the two ways of
+# building produce the same bundle.
+"$HERE/copy-resources.sh" "$APP/Contents/Resources"
 
 if [[ "$EMBED_NODE" == "1" ]]; then
   NODE_PATH="$(command -v node)"
   echo "==> Embedding $(node --version) from $NODE_PATH"
   cp "$NODE_PATH" "$APP/Contents/Resources/node"
   chmod +x "$APP/Contents/Resources/node"
-fi
-
-# ------------------------------------------------------------------- the icon
-
-if command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
-  echo "==> Drawing the icon"
-  ICONSET="$HERE/build/SpaceFore.iconset"
-  rm -rf "$ICONSET"
-  mkdir -p "$ICONSET"
-  SOURCE="$ROOT/public/icon-512.png"
-  for size in 16 32 64 128 256 512; do
-    sips -z $size $size "$SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z $double $double "$SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/SpaceFore.icns"
-  rm -rf "$ICONSET"
-else
-  echo "==> Skipping the icon (iconutil/sips not available)"
 fi
 
 # ------------------------------------------------------------------ the binary

@@ -4,12 +4,20 @@ A real Mac application: double-click it, choose the folder your notes live in,
 and there they are. No terminal, no browser tab, no `npm` anything after the
 first build.
 
+Two ways to build it, which produce the same app:
+
 ```bash
-./macos/build.sh --install
+open macos/SpaceFore.xcodeproj      # then ⌘R
+```
+
+```bash
+./macos/build.sh --install          # no Xcode needed, just swiftc
 open /Applications/SpaceFore.app
 ```
 
-That takes about a minute the first time and produces an 8 MB app.
+Either takes about a minute the first time and produces an 8 MB app. Both call
+`copy-resources.sh` to fill the bundle, so neither can quietly drift from the
+other — and `pbxproj.test.mjs` fails if one of them tries.
 
 ---
 
@@ -25,10 +33,12 @@ wrong thing to your notes lives in code that *is* tested — the sync server and
 the web app in the rest of this repository, covered by 1,300 unit tests and ten
 end-to-end suites. This folder is only a window and a launcher.
 
-What was verified, on Linux, before writing any of it:
+What was verified, on Linux:
 
 | | |
 | --- | --- |
+| the Xcode project parses, and every reference in it resolves | a plist parser and a reachability walk, in `pbxproj.test.mjs` |
+| the project's script phase actually fills the bundle | ran it for real with Xcode's variables faked |
 | the bundle layout the app expects | assembled it exactly, `Resources/{dist,server}` |
 | the server starting on a system-chosen port and reporting back | real child process, real `--print-ready` line |
 | the app being served from inside that bundle | fetched `index.html` and its JS out of it |
@@ -37,11 +47,18 @@ What was verified, on Linux, before writing any of it:
 | an edit reaching the folder on disk | read the file back with `fs` |
 | the server dying when the app does — **including a crash** | `SIGKILL`ed the parent; server was gone in 2 s, port released |
 
+The project file's checks are not decoration: they were confirmed by breaking
+the file ten different ways — a dangling reference, the App Sandbox creeping
+back in, a renamed source file, the script phase deleted, the scheme pointing at
+the wrong target, a deployment target drifting from `Info.plist`, the executable
+bit lost, test files left in the bundle — and confirming each one fails.
+
 What was **not** verified, and cannot be from here: that `swiftc` accepts the
-file, that the AppKit calls are spelled correctly, that the window looks right,
-and that `iconutil` produces a usable icon. Those are the things to expect
-trouble from. If the compiler complains, the complaint is almost certainly
-right — the shape of the program is sound, the API spellings are from memory.
+Swift, that the AppKit calls are spelled correctly, that the window looks right,
+that Xcode is happy with the project once it opens it, and that `iconutil`
+produces a usable icon. Those are the things to expect trouble from. If the
+compiler complains, the complaint is almost certainly right — the shape of the
+program is sound, the API spellings are from memory.
 
 ---
 
@@ -88,6 +105,20 @@ implementation that could drift.
 ./macos/build.sh --embed-node    # ...with Node inside, so it stands alone
 ./macos/build.sh --install       # ...and move it to /Applications
 ```
+
+From Xcode, `⌘B` and `⌘R` do the same thing, minus `--embed-node` — for that,
+drop a `node` binary into the target's Resources yourself, or use the script.
+
+## What is in here
+
+| | |
+| --- | --- |
+| `Sources/SpaceForeApp.swift` | the whole app — window, folder picker, server |
+| `Info.plist` | shared by both build paths |
+| `copy-resources.sh` | fills the bundle; the single description of what goes in |
+| `build.sh` | builds without Xcode |
+| `SpaceFore.xcodeproj` | builds with it |
+| `pbxproj.test.mjs` | checks the project file, since Xcode cannot be run here |
 
 ---
 

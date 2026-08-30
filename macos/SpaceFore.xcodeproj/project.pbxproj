@@ -1,0 +1,258 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		228C34D683AE0FB06C9E6E2B /* SpaceFore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpaceFore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceForeApp.swift; sourceTree = "<group>"; };
+		151E55719C768F051220F257 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7ED168ADBCA60F913B149558 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C7198C44F635C448084AE601 = {
+			isa = PBXGroup;
+			children = (
+				1D70E3728E36337BE25DD673 /* Sources */,
+				151E55719C768F051220F257 /* Info.plist */,
+				4A7F7F9E1AA13DC0660B558B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1D70E3728E36337BE25DD673 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		4A7F7F9E1AA13DC0660B558B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				228C34D683AE0FB06C9E6E2B /* SpaceFore.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1FF27E2C3F53A1460A29362F /* SpaceFore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceFore" */;
+			buildPhases = (
+				8C664474735A5E6FA7740D56 /* Sources */,
+				7ED168ADBCA60F913B149558 /* Frameworks */,
+				1336FF7DED676A2529C91932 /* Resources */,
+				21E7B8CB81553A7DEB1DE136 /* Build the web app and copy it in */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SpaceFore;
+			productName = SpaceFore;
+			productReference = 228C34D683AE0FB06C9E6E2B /* SpaceFore.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		05A23BF23C7591F8AFC103DE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					1FF27E2C3F53A1460A29362F = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceFore" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C7198C44F635C448084AE601;
+			productRefGroup = 4A7F7F9E1AA13DC0660B558B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1FF27E2C3F53A1460A29362F /* SpaceFore */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1336FF7DED676A2529C91932 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		21E7B8CB81553A7DEB1DE136 /* Build the web app and copy it in */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build the web app and copy it in";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# One script describes what goes into the bundle, and both ways of building\n# the app call it — see macos/copy-resources.sh.\n\"$SRCROOT/copy-resources.sh\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/Resources\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8C664474735A5E6FA7740D56 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2D197439579372E192251F52 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		05521AB0CD6C6C30BDF1589B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C51035688466510BFE3B5D96 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = md.spacefore.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+			};
+			name = Debug;
+		};
+		E493A650BA9164307CD2864F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = md.spacefore.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceFore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2D197439579372E192251F52 /* Debug */,
+				05521AB0CD6C6C30BDF1589B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceFore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C51035688466510BFE3B5D96 /* Debug */,
+				E493A650BA9164307CD2864F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 05A23BF23C7591F8AFC103DE /* Project object */;
+}

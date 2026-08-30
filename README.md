@@ -55,6 +55,12 @@ Two ways, depending on whether you want a Mac application or a browser one.
 ### As a Mac app
 
 ```bash
+open macos/SpaceFore.xcodeproj      # then ⌘R
+```
+
+...or without opening Xcode at all:
+
+```bash
 ./macos/build.sh --install
 open /Applications/SpaceFore.app
 ```
