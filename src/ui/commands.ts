@@ -38,25 +38,7 @@ import {
   reset as resetHistory,
 } from './paneHistory'
 import { formatShortcut } from './useHotkeys'
-import {
-  cycleHeading,
-  duplicateLine,
-  getActiveEditor,
-  insertCodeBlock,
-  insertLink,
-  insertTable,
-  insertWikiLink,
-  moveLineDown,
-  moveLineUp,
-  toggleBlockquote,
-  toggleBold,
-  toggleHighlight,
-  toggleInlineCode,
-  toggleItalic,
-  toggleStrikethrough,
-  toggleTaskCheckbox,
-} from './editor/markdownCommands'
-import type { EditorView } from '@codemirror/view'
+import { getActiveEditor } from './editor/activeEditor'
 
 export const SECTIONS = ['File', 'Navigation', 'Editor', 'View'] as const
 
@@ -217,12 +199,42 @@ function hasEditor(): boolean {
   return getActiveEditor() !== null
 }
 
+/**
+ * The editor commands, named rather than imported.
+ *
+ * Importing them here would pull CodeMirror into the chunk the browser
+ * downloads before it can show anything, for the sake of a table of commands
+ * that cannot run until an editor exists. Naming them instead lets the module
+ * be fetched at the point one is actually invoked — by which time the editor is
+ * on screen and the chunk is already in cache.
+ */
+type EditorCommandName =
+  | 'cycleHeading'
+  | 'duplicateLine'
+  | 'insertCodeBlock'
+  | 'insertLink'
+  | 'insertTable'
+  | 'insertWikiLink'
+  | 'moveLineDown'
+  | 'moveLineUp'
+  | 'toggleBlockquote'
+  | 'toggleBold'
+  | 'toggleHighlight'
+  | 'toggleInlineCode'
+  | 'toggleItalic'
+  | 'toggleStrikethrough'
+  | 'toggleTaskCheckbox'
+
 /** Run a CodeMirror command against whichever editor the user was last in. */
-function runInEditor(command: (view: EditorView) => boolean): void {
+function runInEditor(name: EditorCommandName): void {
   const view = getActiveEditor()
   if (!view) return
-  command(view)
-  view.focus()
+  void import('./editor/markdownCommands').then((commands) => {
+    // The editor may have gone away while the module was in flight.
+    if (getActiveEditor() !== view) return
+    commands[name](view)
+    view.focus()
+  })
 }
 
 function cycleTab(delta: number): void {
@@ -270,7 +282,7 @@ interface CommandContext {
 function editorCommand(
   id: string,
   title: string,
-  command: (view: EditorView) => boolean,
+  command: EditorCommandName,
   shortcut?: string,
 ): CommandSpec {
   return {
@@ -554,21 +566,21 @@ export function buildCommands(context: CommandContext): Command[] {
     },
 
     /* -------------------------------------------------------- Editor */
-    editorCommand('toggle-bold', 'Toggle bold', toggleBold, 'Mod+B'),
-    editorCommand('toggle-italic', 'Toggle italic', toggleItalic, 'Mod+I'),
-    editorCommand('toggle-strikethrough', 'Toggle strikethrough', toggleStrikethrough),
-    editorCommand('toggle-inline-code', 'Toggle inline code', toggleInlineCode),
-    editorCommand('toggle-highlight', 'Toggle highlight', toggleHighlight),
-    editorCommand('toggle-blockquote', 'Toggle blockquote', toggleBlockquote),
-    editorCommand('toggle-task', 'Toggle task checkbox', toggleTaskCheckbox, 'Mod+Enter'),
-    editorCommand('insert-link', 'Insert link', insertLink, 'Mod+K'),
-    editorCommand('insert-wiki-link', 'Insert wiki link', insertWikiLink, 'Mod+Shift+K'),
-    editorCommand('cycle-heading', 'Cycle heading level', cycleHeading),
-    editorCommand('insert-table', 'Insert table', insertTable),
-    editorCommand('insert-code-block', 'Insert code block', insertCodeBlock),
-    editorCommand('move-line-up', 'Move line up', moveLineUp),
-    editorCommand('move-line-down', 'Move line down', moveLineDown),
-    editorCommand('duplicate-line', 'Duplicate line', duplicateLine),
+    editorCommand('toggle-bold', 'Toggle bold', 'toggleBold', 'Mod+B'),
+    editorCommand('toggle-italic', 'Toggle italic', 'toggleItalic', 'Mod+I'),
+    editorCommand('toggle-strikethrough', 'Toggle strikethrough', 'toggleStrikethrough'),
+    editorCommand('toggle-inline-code', 'Toggle inline code', 'toggleInlineCode'),
+    editorCommand('toggle-highlight', 'Toggle highlight', 'toggleHighlight'),
+    editorCommand('toggle-blockquote', 'Toggle blockquote', 'toggleBlockquote'),
+    editorCommand('toggle-task', 'Toggle task checkbox', 'toggleTaskCheckbox', 'Mod+Enter'),
+    editorCommand('insert-link', 'Insert link', 'insertLink', 'Mod+K'),
+    editorCommand('insert-wiki-link', 'Insert wiki link', 'insertWikiLink', 'Mod+Shift+K'),
+    editorCommand('cycle-heading', 'Cycle heading level', 'cycleHeading'),
+    editorCommand('insert-table', 'Insert table', 'insertTable'),
+    editorCommand('insert-code-block', 'Insert code block', 'insertCodeBlock'),
+    editorCommand('move-line-up', 'Move line up', 'moveLineUp'),
+    editorCommand('move-line-down', 'Move line down', 'moveLineDown'),
+    editorCommand('duplicate-line', 'Duplicate line', 'duplicateLine'),
 
     /* ---------------------------------------------------------- View */
     {

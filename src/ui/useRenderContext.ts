@@ -22,6 +22,7 @@ import { useEffect, useMemo, useReducer } from 'react'
 
 import type { Note, NotePath, VaultAdapter, VaultFile, VaultIndex } from '../types'
 import type { RenderContext } from '../core/markdown/render'
+import { onMathReady } from '../core/markdown/render'
 import { resolveLinkTarget } from '../core/graph/index'
 import { useAppStore } from '../state/store'
 
@@ -330,6 +331,11 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
       listeners.delete(bumpAssetTick)
     }
   }, [])
+
+  // The same idea for mathematics: KaTeX is fetched the first time a note
+  // actually contains a `$…$`, and its arrival has to reach the preview that
+  // rendered the TeX as text a moment ago.
+  useEffect(() => onMathReady(bumpAssetTick), [])
 
   const attachmentIndex = useMemo(() => buildAttachmentIndex(attachments), [attachments])
 

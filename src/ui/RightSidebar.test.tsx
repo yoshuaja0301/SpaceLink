@@ -81,7 +81,7 @@ afterEach(() => {
 })
 
 describe('RightSidebar tablist', () => {
-  it('moves selection and focus together, so every tab is reachable', () => {
+  it('moves selection and focus together, so every tab is reachable', async () => {
     render(<RightSidebar />)
     expect(tabState()).toEqual([
       'Backlinks:true:0',
@@ -101,7 +101,8 @@ describe('RightSidebar tablist', () => {
     fireEvent.keyDown(tabs()[1]!, { key: 'ArrowRight' })
     expect(tabState()[2]).toBe('Local graph:true:0')
     expect(document.activeElement).toBe(tabs()[2])
-    expect(screen.getByTestId('graph')).not.toBeNull()
+    // A separate chunk, so it lands a tick after the tab is selected.
+    expect(await screen.findByTestId('graph')).not.toBeNull()
 
     fireEvent.keyDown(tabs()[2]!, { key: 'ArrowRight' })
     expect(tabState()[3]).toBe('Info:true:0')
@@ -140,24 +141,24 @@ describe('RightSidebar tablist', () => {
 })
 
 describe('RightSidebar local graph', () => {
-  it('renders the local graph for the active note', () => {
+  it('renders the local graph for the active note', async () => {
     render(<RightSidebar />)
     fireEvent.click(screen.getByRole('tab', { name: 'Local graph' }))
 
-    const graph = screen.getByTestId('graph')
+    const graph = await screen.findByTestId('graph')
     expect(graph.getAttribute('data-focus')).toBe('A.md')
     expect(graph.getAttribute('data-local')).toBe('true')
     expect(graph.getAttribute('data-compact')).toBe('true')
   })
 
-  it('opens on the tab a command asked for, sidebar already on screen', () => {
+  it('opens on the tab a command asked for, sidebar already on screen', async () => {
     render(<RightSidebar />)
     expect(screen.getByTestId('backlinks')).not.toBeNull()
 
     act(() => openRightSidebarTab('graph'))
 
     expect(screen.getByRole('tab', { name: 'Local graph' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('graph')).not.toBeNull()
+    expect(await screen.findByTestId('graph')).not.toBeNull()
   })
 
   it('opens the folded-away sidebar on that tab when it mounts', () => {

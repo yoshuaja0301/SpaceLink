@@ -214,6 +214,21 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
 /* ---- images ------------------------------------------------------------ */
 
 .markdown-preview img { max-width: 100%; height: auto; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+
+/* Mathematics. KaTeX brings its own stylesheet with it when it is fetched;
+   these two cover the moments before and instead of that. */
+.math-pending {
+  /* The TeX as the author typed it, until KaTeX arrives — readable, and
+     deliberately not styled as an error, because nothing is wrong. */
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--text-muted);
+}
+.math-error {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--text-error);
+}
 .markdown-preview figure { margin: 0 0 1.2em; }
 .markdown-preview figcaption { margin-top: var(--space-2); color: var(--text-faint); font-size: 0.86em; text-align: center; }
 

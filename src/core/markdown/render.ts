@@ -47,7 +47,6 @@ import type {
 } from 'markdown-it'
 import DOMPurify from 'dompurify'
 import type { Config as PurifyConfig } from 'dompurify'
-import { renderToString } from 'katex'
 
 import type { NoteFrontmatter, NotePath } from '../../types'
 import { parseFrontmatter, slugifyHeading } from './parse'
@@ -482,11 +481,66 @@ function renderTag(tokens: Token[], idx: number): string {
  * Math ($inline$ / $$block$$)
  * ------------------------------------------------------------------ */
 
+/**
+ * KaTeX, and the fonts and stylesheet that come with it, is the largest single
+ * thing this app could ship — a third of the bundle — and most vaults contain
+ * no mathematics at all. So it is not shipped up front: the first `$…$` that
+ * anything actually renders fetches it, and until it lands the expression is
+ * shown as the TeX its author typed, which is at least readable. `onMathReady`
+ * is how the preview learns to render again.
+ */
+type KatexRender = (tex: string, options: Record<string, unknown>) => string
+
+let katexRender: KatexRender | null = null
+let katexLoading: Promise<void> | null = null
+const mathListeners = new Set<() => void>()
+
+/** Called once KaTeX has arrived, so anything already rendered can render again. */
+export function onMathReady(listener: () => void): () => void {
+  mathListeners.add(listener)
+  return () => {
+    mathListeners.delete(listener)
+  }
+}
+
+/** True once math renders as mathematics rather than as its source. */
+export function isMathReady(): boolean {
+  return katexRender !== null
+}
+
+/**
+ * Fetch KaTeX. Safe to call repeatedly — the work happens once — and awaited
+ * by callers that would rather wait than show the TeX briefly.
+ */
+export function loadMath(): Promise<void> {
+  if (katexRender) return Promise.resolve()
+  katexLoading ??= (async () => {
+    const [katex] = await Promise.all([import('katex'), import('katex/dist/katex.min.css')])
+    // KaTeX ships as CommonJS, and whether the named export or the default one
+    // carries `renderToString` depends on the bundler's interop. Both are read.
+    const shapes = katex as unknown as { renderToString?: KatexRender; default?: { renderToString?: KatexRender } }
+    const render = shapes.renderToString ?? shapes.default?.renderToString
+    if (!render) throw new Error('KaTeX loaded without a renderer')
+    katexRender = render
+    // Copied first: a listener may unsubscribe while we iterate.
+    for (const listener of [...mathListeners]) listener()
+  })().catch(() => {
+    // A failed fetch must not poison every later attempt — a reader who comes
+    // back online should get their equations.
+    katexLoading = null
+  })
+  return katexLoading
+}
+
 function katexHtml(tex: string, displayMode: boolean, raw: string): string {
+  if (!katexRender) {
+    void loadMath()
+    return `<span class="math-pending">${escapeHtml(raw)}</span>`
+  }
   try {
     // `throwOnError: false` already renders malformed TeX in red; the try/catch
     // covers the cases KaTeX still escalates (e.g. unrecoverable internals).
-    return renderToString(tex, {
+    return katexRender(tex, {
       throwOnError: false,
       displayMode,
       output: 'html',

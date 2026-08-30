@@ -451,20 +451,26 @@ describe('editor commands', () => {
     for (const command of editorCommands) expect(command.enabled?.()).toBe(false)
   })
 
-  it('delegate to the focused editor', () => {
+  it('delegate to the focused editor', async () => {
     const editor = fakeEditor('hello')
     registerEditor(EDITOR_PANE, editor.view)
     const list = commands().current
 
+    // The implementations live in the editor's own chunk, so a command reaches
+    // them a microtask later than it used to. Whether one is *enabled* is still
+    // answered synchronously — the palette asks that while it renders.
     expect(find(list, 'editor:toggle-bold').enabled?.()).toBe(true)
-    find(list, 'editor:toggle-bold').run()
-    expect(editor.doc()).toBe('**hello**')
 
-    find(list, 'editor:cycle-heading').run()
-    expect(editor.doc()).toBe('# **hello**')
+    const run = async (id: string, expected: string): Promise<void> => {
+      find(list, id).run()
+      await vi.waitFor(() => {
+        expect(editor.doc()).toBe(expected)
+      })
+    }
 
-    find(list, 'editor:duplicate-line').run()
-    expect(editor.doc()).toBe('# **hello**\n# **hello**')
+    await run('editor:toggle-bold', '**hello**')
+    await run('editor:cycle-heading', '# **hello**')
+    await run('editor:duplicate-line', '# **hello**\n# **hello**')
   })
 
   it('do nothing at all once the editor unregisters', () => {

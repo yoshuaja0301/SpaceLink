@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '../state/store'
 import { BacklinksPanel } from './BacklinksPanel'
-import { GraphView } from './GraphView'
+import { GraphView } from './lazy'
 import { Icon } from './Icon'
 import { NoteInfo } from './NoteInfo'
 import { OutlinePanel } from './OutlinePanel'

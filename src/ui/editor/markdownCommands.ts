@@ -22,39 +22,10 @@ import type { Command, EditorView } from '@codemirror/view'
  * The focused editor
  * ------------------------------------------------------------------ */
 
-const editors = new Map<string, EditorView>()
-let lastRegisteredPane: string | null = null
-
-/**
- * Attach (or detach, with `null`) the editor belonging to a pane. `Editor.tsx`
- * calls this on mount, on focus and on unmount.
- */
-export function registerEditor(paneId: string, view: EditorView | null): void {
-  if (view === null) {
-    editors.delete(paneId)
-    if (lastRegisteredPane === paneId) lastRegisteredPane = null
-    return
-  }
-  editors.set(paneId, view)
-  lastRegisteredPane = paneId
-}
-
-/**
- * The editor a command should act on: whichever one has DOM focus, falling back
- * to the most recently registered/focused pane (the palette steals focus while
- * it is open, so "has focus" is usually false by the time a command runs).
- */
-export function getActiveEditor(): EditorView | null {
-  for (const view of editors.values()) {
-    if (view.hasFocus) return view
-  }
-  if (lastRegisteredPane !== null) {
-    const view = editors.get(lastRegisteredPane)
-    if (view) return view
-  }
-  const first = editors.values().next()
-  return first.done === true ? null : first.value
-}
+// Lives in its own module so that asking *whether* there is an editor does not
+// drag CodeMirror into the first chunk the browser downloads. Re-exported here
+// because this is where callers have always looked for it.
+export { getActiveEditor, registerEditor } from './activeEditor'
 
 /* ------------------------------------------------------------------ *
  * Shared helpers

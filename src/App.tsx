@@ -28,6 +28,7 @@ import { Workspace } from './ui/Workspace'
 import { useCommands } from './ui/commands'
 import { useHotkeys } from './ui/useHotkeys'
 import { useTheme } from './ui/useTheme'
+import { usePrefetchHeavyViews } from './ui/lazy'
 
 export function App(): React.JSX.Element {
   const adapter = useAppStore((s) => s.adapter)
@@ -45,6 +46,7 @@ export function App(): React.JSX.Element {
   const [booting, setBooting] = useState(true)
 
   useTheme()
+  usePrefetchHeavyViews()
   const commands = useCommands()
   useHotkeys(commands)
 

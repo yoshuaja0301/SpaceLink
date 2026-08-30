@@ -1,4 +1,6 @@
-import { renderInline, renderMarkdown } from './render'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+
+import { loadMath, renderInline, renderMarkdown } from './render'
 import type { RenderContext } from './render'
 import { extractHeadings, slugifyHeading } from './parse'
 
@@ -532,7 +534,52 @@ describe('task checkbox ownership', () => {
  * Math
  * ------------------------------------------------------------------ */
 
+describe('math before KaTeX has been fetched', () => {
+  const SOURCE = 'Einstein wrote $E = mc^2$ once.'
+
+  it('shows the TeX its author typed, and renders it once KaTeX lands', async () => {
+    // A fresh copy of the module, so its KaTeX really is unloaded — this is the
+    // first frame of the first note with mathematics in it, which no other test
+    // in this file can see once the library has been fetched.
+    vi.resetModules()
+    const fresh = await import('./render')
+    expect(fresh.isMathReady()).toBe(false)
+
+    const before = dom(fresh.renderMarkdown(SOURCE, ctx()))
+    expect(before.querySelector('.katex')).toBeNull()
+    expect(before.querySelector('.math-pending')?.textContent).toBe('$E = mc^2$')
+    // Readable prose either way: nothing around the expression is disturbed.
+    expect(before.textContent).toContain('Einstein wrote')
+
+    await fresh.loadMath()
+    expect(fresh.isMathReady()).toBe(true)
+    const after = dom(fresh.renderMarkdown(SOURCE, ctx()))
+    expect(after.querySelector('.math-inline')?.querySelector('.katex')).not.toBeNull()
+  })
+
+  it('tells the preview when to render again', async () => {
+    vi.resetModules()
+    const fresh = await import('./render')
+    const told: number[] = []
+    const stop = fresh.onMathReady(() => told.push(1))
+
+    fresh.renderMarkdown(SOURCE, ctx()) // this is what starts the fetch
+    await fresh.loadMath()
+    expect(told).toHaveLength(1)
+
+    stop()
+    await fresh.loadMath()
+    expect(told).toHaveLength(1)
+  })
+})
+
 describe('math', () => {
+  // KaTeX is fetched on demand rather than bundled, so a test that wants to see
+  // rendered mathematics has to wait for it the way the preview does.
+  beforeAll(async () => {
+    await loadMath()
+  })
+
   it('renders inline math with katex', () => {
     const el = render('Einstein wrote $E = mc^2$ once.')
     const math = el.querySelector('.math-inline')!
@@ -593,6 +640,9 @@ describe('math', () => {
     }))
     try {
       const mod = await import('./render')
+      // The library is fetched on demand, so it has to be there before its
+      // renderer can be the thing that fails.
+      await mod.loadMath()
       const html = mod.renderMarkdown('before $a<b$ after', ctx())
       const el = dom(html)
       expect(el.querySelector('.math-error')).not.toBeNull()

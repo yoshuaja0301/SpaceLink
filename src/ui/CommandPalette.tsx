@@ -21,7 +21,7 @@ import type { AppState } from '../state/store'
 import { dirname, useAppStore } from '../state/store'
 import { fuzzyMatch, highlight } from '../core/search/fuzzy'
 import { quickSwitch } from '../core/search/engine'
-import { getActiveEditor } from './editor/markdownCommands'
+import { getActiveEditor } from './editor/activeEditor'
 import { selectActivePath, useCommands } from './commands'
 import { runCommand } from './useHotkeys'
 

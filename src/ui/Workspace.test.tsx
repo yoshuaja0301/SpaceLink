@@ -206,11 +206,12 @@ describe('Workspace routing', () => {
     seedNotes({ 'a.md': '# A\n\nalpha', 'b.md': '# B\n\n[[a]]' })
   })
 
-  it('renders the editor for a note tab in edit mode', () => {
+  it('renders the editor for a note tab in edit mode', async () => {
     setPanes([pane(PANE_A, [tab('t1', { path: 'a.md', mode: 'edit' })])])
     render(<Workspace />)
 
-    const editor = screen.getByTestId('editor')
+    // The editor is a separate chunk now, so it arrives a tick after the pane.
+    const editor = await screen.findByTestId('editor')
     expect(editor.getAttribute('data-path')).toBe('a.md')
     expect(editor.getAttribute('data-pane')).toBe(PANE_A)
     expect(screen.queryByTestId('preview')).toBeNull()
@@ -235,11 +236,11 @@ describe('Workspace routing', () => {
     expect(screen.getByTestId('preview').getAttribute('data-scroll-sync')).toBe('true')
   })
 
-  it('routes graph and search tabs to their views', () => {
+  it('routes graph and search tabs to their views', async () => {
     setPanes([pane(PANE_A, [tab('g', { kind: 'graph' }), tab('s', { kind: 'search' })], 'g')])
     const { rerender } = render(<Workspace />)
 
-    expect(screen.getByTestId('graph')).not.toBeNull()
+    expect(await screen.findByTestId('graph')).not.toBeNull()
 
     act(() => useAppStore.getState().setActiveTab(PANE_A, 's'))
     rerender(<Workspace />)

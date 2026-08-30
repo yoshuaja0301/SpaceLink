@@ -110,6 +110,19 @@ ul, ol { margin: 0; padding: 0; }
   transition: width 120ms linear;
 }
 
+/* While a lazily fetched view is in flight. Usually never seen: the chunks are
+   prefetched as soon as the browser is idle. */
+.view-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: var(--space-6);
+  color: var(--text-faint, var(--text-muted));
+  font-size: 13px;
+}
+
 /* ======================================================================= *
  * 3. Ribbon
  * ======================================================================= */
