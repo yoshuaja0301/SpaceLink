@@ -50,6 +50,48 @@ rewritten on the way in.
 machine can reach it. That is deliberate: exposing a folder of your writing to a
 network should be a decision, not an accident.
 
+### Try it on a copy first
+
+Before pointing the server at notes you care about, spend five minutes proving
+to yourself that it only touches what you touch.
+
+```bash
+cp -R ~/Notes ~/Notes-trial                       # work on a copy
+cd ~/Notes && find . -type f -exec shasum -a 256 {} \; | sort -k2 > /tmp/before.txt
+
+npm run server -- --vault ~/Notes-trial           # open it, edit a few notes, quit
+```
+
+Then check that the folder you care about never moved:
+
+```bash
+cd ~/Notes && find . -type f -exec shasum -a 256 {} \; | sort -k2 > /tmp/after.txt
+diff /tmp/before.txt /tmp/after.txt && echo "untouched"
+```
+
+And see exactly what the trial run did change:
+
+```bash
+diff -rq ~/Notes ~/Notes-trial
+```
+
+You should see only the notes you actually edited, plus any you created.
+Attachments, `.obsidian`, and anything else in the folder should be absent from
+that list.
+
+This was rehearsed against a deliberately awkward vault — folder names with
+spaces and an em dash, four levels of nesting, an 800 KB note, CRLF line
+endings, binary attachments, an existing `.obsidian` — and it is what turned up
+the line-ending bug described below.
+
+### Line endings
+
+A vault written on Windows, or shared through git with CRLF, keeps its line
+endings. The app normalises to `\n` internally, because that is what the
+parser's offsets and the editor assume, and restores the file's own separator on
+the way back to disk. Opening a CRLF note and typing one character does not
+rewrite every line in the file.
+
 ### Other devices on the same Wi-Fi
 
 ```bash

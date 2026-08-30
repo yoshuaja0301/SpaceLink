@@ -45,7 +45,7 @@ function makeNote(path: NotePath, content: string, over: Partial<ParsedNote> = {
     ...over,
   }
 
-  return { path, name, content, mtime: 0, parsed }
+  return { path, name, content, lineEnding: '\n', mtime: 0, parsed }
 }
 
 function vault(...notes: Note[]): Map<NotePath, Note> {

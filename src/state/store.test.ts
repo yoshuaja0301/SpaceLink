@@ -749,3 +749,64 @@ describe('a fallback vault does not overwrite the remembered choice', () => {
     expect(JSON.parse(localStorage.getItem(LAST_VAULT_KEY)!)).toEqual({ kind: 'demo' })
   })
 })
+
+describe('line endings survive editing', () => {
+  const CRLF = '# Rapat\r\n\r\nDitulis di Windows.\r\n'
+
+  it('normalises to \\n in memory but remembers what the file uses', async () => {
+    await useAppStore.getState().openVault(createMemoryVault({ 'Rapat.md': CRLF }, { name: 'CRLF' }))
+    const note = useAppStore.getState().notes.get('Rapat.md')!
+    expect(note.lineEnding).toBe('\r\n')
+    // Everything downstream — offsets, search, the editor — works in \n.
+    expect(note.content).toBe('# Rapat\n\nDitulis di Windows.\n')
+    expect(note.content).not.toMatch(/\r/)
+  })
+
+  it('writes the file back with its own line endings', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = createMemoryVault({ 'Rapat.md': CRLF }, { name: 'CRLF' })
+      await useAppStore.getState().openVault(adapter)
+      useAppStore.getState().updateSettings({ autosaveDelay: 300 })
+
+      const note = useAppStore.getState().notes.get('Rapat.md')!
+      useAppStore.getState().setNoteContent('Rapat.md', `${note.content}\nBaris baru.\n`)
+      await vi.advanceTimersByTimeAsync(500)
+
+      const onDisk = await adapter.read('Rapat.md')
+      expect(onDisk).toBe('# Rapat\r\n\r\nDitulis di Windows.\r\n\r\nBaris baru.\r\n')
+      expect(onDisk).not.toMatch(/[^\r]\n/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves an LF file alone', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = createMemoryVault({ 'Catatan.md': '# Catatan\n\nUnix.\n' }, { name: 'LF' })
+      await useAppStore.getState().openVault(adapter)
+      useAppStore.getState().updateSettings({ autosaveDelay: 300 })
+      expect(useAppStore.getState().notes.get('Catatan.md')!.lineEnding).toBe('\n')
+
+      useAppStore.getState().setNoteContent('Catatan.md', '# Catatan\n\nUnix.\nDitambah.\n')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await adapter.read('Catatan.md')).toBe('# Catatan\n\nUnix.\nDitambah.\n')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the file’s endings through a rename that rewrites links', async () => {
+    const adapter = createMemoryVault(
+      { 'A.md': '# A\r\n\r\nLihat [[B]].\r\n', 'B.md': '# B\r\n' },
+      { name: 'CRLF' },
+    )
+    await useAppStore.getState().openVault(adapter)
+    await useAppStore.getState().renameNote('B.md', 'C.md')
+
+    expect(useAppStore.getState().notes.get('A.md')!.lineEnding).toBe('\r\n')
+    expect(await adapter.read('A.md')).toBe('# A\r\n\r\nLihat [[C]].\r\n')
+    expect(await adapter.read('C.md')).toBe('# B\r\n')
+  })
+})

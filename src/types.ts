@@ -117,7 +117,17 @@ export interface Note {
   path: NotePath
   /** Basename without `.md`. */
   name: string
+  /**
+   * The note's text, always with `\n` line endings. Everything downstream —
+   * the parser's offsets, search, the editor — assumes that.
+   */
   content: string
+  /**
+   * How the file on disk separates its lines. The app works in `\n` internally
+   * and restores this on save, so a vault written on Windows, or shared through
+   * git with CRLF, is not silently rewritten by opening a note in it.
+   */
+  lineEnding: '\n' | '\r\n'
   mtime: number
   parsed: ParsedNote
 }

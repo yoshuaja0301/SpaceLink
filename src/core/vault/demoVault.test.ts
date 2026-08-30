@@ -23,7 +23,7 @@ function buildNotes(): Map<NotePath, Note> {
   for (const path of PATHS) {
     const name = basenameOf(path)
     const content = DEMO_NOTES[path]!
-    notes.set(path, { path, name, content, mtime: 0, parsed: parseNote(content, name) })
+    notes.set(path, { path, name, content, lineEnding: '\n', mtime: 0, parsed: parseNote(content, name) })
   }
   return notes
 }

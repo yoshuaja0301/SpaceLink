@@ -85,9 +85,27 @@ function saveJSON(key: string, value: unknown): void {
 let tabSeq = 0
 const newId = (prefix: string): string => `${prefix}-${(tabSeq += 1).toString(36)}`
 
-export function makeNote(path: NotePath, content: string, mtime: number): Note {
+/**
+ * Build a note from a file's text.
+ *
+ * The text is normalised to `\n` and the original separator is remembered, so
+ * a CRLF vault survives being edited: without this, opening a note written on
+ * Windows and typing one character rewrites every line in the file.
+ *
+ * `lineEnding` is passed explicitly when the text has already been normalised —
+ * an edit coming back from the editor, for one — because detection on LF text
+ * would forget what the file actually uses.
+ */
+export function makeNote(path: NotePath, text: string, mtime: number, lineEnding?: Note['lineEnding']): Note {
   const name = basename(path)
-  return { path, name, content, mtime, parsed: parseNote(content, name) }
+  const ending = lineEnding ?? (text.includes('\r\n') ? '\r\n' : '\n')
+  const content = text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text
+  return { path, name, content, lineEnding: ending, mtime, parsed: parseNote(content, name) }
+}
+
+/** The note's text as it should land on disk. */
+export function toFileText(note: Note): string {
+  return note.lineEnding === '\r\n' ? note.content.replace(/\n/g, '\r\n') : note.content
 }
 
 export function basename(path: NotePath): string {
@@ -441,7 +459,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!note) return {}
         const notes = new Map(s.notes)
         notes.delete(from)
-        notes.set(to, makeNote(to, note.content, note.mtime))
+        notes.set(to, makeNote(to, note.content, note.mtime, note.lineEnding))
         return {
           notes,
           index: buildIndex(notes),
@@ -509,7 +527,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const previous = state.notes.get(path)
     if (!previous || previous.content === content) return
 
-    const note = makeNote(path, content, previous.mtime)
+    const note = makeNote(path, content, previous.mtime, previous.lineEnding)
     const notes = new Map(state.notes)
     notes.set(path, note)
     const dirty = new Set(state.dirty)
@@ -587,7 +605,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
     try {
-      await adapter.write(path, written)
+      // Restored to the file's own line endings on the way out; the app works
+      // in `\n` everywhere inside.
+      await adapter.write(path, toFileText(note))
       set((s) => {
         const dirty = new Set(s.dirty)
         // Only this write's text is saved: anything typed since is still dirty,
@@ -719,13 +739,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (path === from) continue
       const updated = rewriteLinksTo(current, from, target, before)
       if (updated !== current.content) {
-        next.set(path, makeNote(path, updated, current.mtime))
+        next.set(path, makeNote(path, updated, current.mtime, current.lineEnding))
         rewritten.push(path)
       } else {
         next.set(path, current)
       }
     }
-    next.set(target, makeNote(target, note.content, note.mtime))
+    next.set(target, makeNote(target, note.content, note.mtime, note.lineEnding))
 
     const index = buildIndex(next)
     clearPendingIndex()

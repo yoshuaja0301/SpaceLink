@@ -68,6 +68,7 @@ function fixture(path: string, content = '', frontmatter: NoteFrontmatter = {}):
     path,
     name,
     content,
+    lineEnding: '\n' as const,
     mtime: 0,
     parsed: {
       frontmatter,
