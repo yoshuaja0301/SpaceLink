@@ -1369,8 +1369,11 @@ kbd {
 .vault-picker-option:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .vault-picker-option:disabled { opacity: 0.5; cursor: not-allowed; }
 .vault-picker-option .icon { flex: none; margin-top: 2px; color: var(--accent); }
-.vault-picker-option-title { font-size: 14px; font-weight: 650; }
-.vault-picker-option-description { margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+/* The title and its description are two lines, not one run-on sentence: as
+ * inline spans they rendered as "Try the demo vaultRecommended — 22 notes…". */
+.vault-picker-option > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.vault-picker-option-title { display: block; font-size: 14px; font-weight: 650; }
+.vault-picker-option-description { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
 
 /* ======================================================================= *
  * 18. Icons
