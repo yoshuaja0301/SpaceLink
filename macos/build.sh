@@ -68,12 +68,17 @@ fi
 # ------------------------------------------------------------------ the binary
 
 echo "==> Compiling"
+# `-parse-as-library` is what Xcode passes for an application target, and under
+# it a statement at the top of a file is an error rather than a program. Passing
+# it here too means both ways of building agree about what they are compiling.
 swiftc \
   -O \
+  -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" \
   -framework AppKit \
   -framework WebKit \
   -o "$APP/Contents/MacOS/SpaceFore" \
+  "$HERE/Sources/SyncServer.swift" \
   "$HERE/Sources/SpaceForeApp.swift"
 
 # An ad-hoc signature is enough to run it on the Mac that built it, and keeps

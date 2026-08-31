@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3679B7A1EDE7952244DAB882 /* SyncServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6C401784CA25A1E7775FA1 /* SyncServer.swift */; };
 		CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		228C34D683AE0FB06C9E6E2B /* SpaceFore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpaceFore.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceForeApp.swift; sourceTree = "<group>"; };
+		AE6C401784CA25A1E7775FA1 /* SyncServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncServer.swift; sourceTree = "<group>"; };
 		151E55719C768F051220F257 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -40,6 +42,7 @@
 			isa = PBXGroup;
 			children = (
 				EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */,
+				AE6C401784CA25A1E7775FA1 /* SyncServer.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -144,6 +147,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */,
+				3679B7A1EDE7952244DAB882 /* SyncServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

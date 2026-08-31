@@ -212,8 +212,10 @@ describe('the app it builds', () => {
     const sources = target.buildPhases.map((id) => objects[id]).find((phase) => phase.isa === 'PBXSourcesBuildPhase')
     expect(sources).toBeDefined()
     const compiled = sources.files.map((id) => objects[objects[id].fileRef].path)
-    expect(compiled).toEqual(['SpaceForeApp.swift'])
-    expect(existsSync(join(HERE, 'Sources', 'SpaceForeApp.swift'))).toBe(true)
+    // Both of them: a target missing SyncServer.swift compiles the app against
+    // a type that is not there, and fails with "cannot find SyncServer in scope".
+    expect(compiled.slice().sort()).toEqual(['SpaceForeApp.swift', 'SyncServer.swift'])
+    for (const name of compiled) expect(existsSync(join(HERE, 'Sources', name)), name).toBe(true)
   })
 
   it('points at files that exist', () => {
@@ -298,6 +300,23 @@ describe('the app it builds', () => {
     // build.sh must delegate too, rather than growing its own copy.
     expect(standalone).toMatch(/copy-resources\.sh/)
     expect(standalone).not.toMatch(/npm run build/)
+  })
+
+  it('compiles the app the same way Xcode does', () => {
+    const standalone = readFileSync(join(HERE, 'build.sh'), 'utf8')
+    const app = readFileSync(join(HERE, 'Sources', 'SpaceForeApp.swift'), 'utf8')
+
+    // Xcode builds an application target with `-parse-as-library`, and under
+    // that flag a statement at the top of a file is an error rather than a
+    // program — so the entry point has to be `@main`, and build.sh has to pass
+    // the same flag or the two paths disagree about what compiles. Both halves
+    // of this were confirmed against a real Swift compiler.
+    expect(app).toMatch(/^@main$/m)
+    expect(standalone).toMatch(/-parse-as-library/)
+    // Every source in the target, in the order the project lists them.
+    for (const name of ['SyncServer.swift', 'SpaceForeApp.swift']) {
+      expect(standalone).toMatch(new RegExp(`Sources/${name.replace('.', '\\.')}`))
+    }
   })
 
   it('runs the script after the app bundle exists to copy into', () => {

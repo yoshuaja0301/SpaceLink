@@ -69,9 +69,11 @@ A real `SpaceFore.app`: double-click it, choose your notes folder, done. It
 starts its own server and shuts it down when you quit; there is no terminal to
 keep open. Needs Xcode's command line tools (`xcode-select --install`) and Node.
 
-The Swift for it has never been compiled — it was written without a Mac — so
-[macos/README.md](macos/README.md) sets out exactly what was verified and what
-was not before you build it.
+It was written without a Mac, so the app is split: the half that starts and
+stops the notes server is compiled and run against the real server by
+`macos/Tests/run.sh`, and the AppKit half is only syntax-checked.
+[macos/README.md](macos/README.md) sets out exactly which is which before you
+build it.
 
 ### As a web app
 

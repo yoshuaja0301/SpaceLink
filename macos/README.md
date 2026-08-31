@@ -21,44 +21,92 @@ other — and `pbxproj.test.mjs` fails if one of them tries.
 
 ---
 
-## Please read this before you build it
+## What has been checked, and what has not
 
-**The Swift in this folder has never been compiled.** It was written in a Linux
-container with no Swift toolchain, no AppKit, no WebKit and no Mac — so the
-first time it is compiled will be on your machine, and it may well not compile
-on the first try.
+This was written in a Linux container with no Mac. That shaped the whole
+design: the app is split so that the half which can be tested anywhere is
+tested, and the half that needs a Mac is as small as possible.
 
-That is why the app is built the way it is. Everything that could quietly do the
-wrong thing to your notes lives in code that *is* tested — the sync server and
-the web app in the rest of this repository, covered by 1,300 unit tests and ten
-end-to-end suites. This folder is only a window and a launcher.
+### `SyncServer.swift` — compiled and run
 
-What was verified, on Linux:
+It imports nothing but Foundation, so a Swift compiler on any platform will
+build it. `macos/Tests/run.sh` does exactly that, then launches the real
+`server/index.mjs` against a real folder and checks what comes back:
+
+```
+  ok    prefers a copy inside the app bundle over anything on the system
+  ok    falls back to the system when the bundle has no copy
+  ok    returns nothing rather than a wrong guess when there is no Node
+  ok    starts the server and reads back where it is listening
+  ok    reports the vault it was actually given
+  ok    the server is genuinely answering at that address
+  ok    the token it reported is the one the server actually wants
+  ok    stopping it releases the port
+  ok    says so, rather than hanging, when the server cannot start
+  ok    says so when Node itself is not where it was told
+```
+
+Confirmed to be worth something by breaking it three ways — the wrong
+`--print-ready` argument, an impossible port, the stdin leash removed — and
+watching each one fail.
+
+This is the half where a mistake is expensive: it is what makes the app open
+to your notes rather than to an error.
+
+### `SpaceForeApp.swift` — parsed, not compiled
+
+The AppKit and WebKit half. Its syntax is checked by the same compiler, but
+nothing can resolve `NSOpenPanel` or `WKWebView` off a Mac, so the API
+spellings are still from memory. **This is where to expect trouble.** If the
+compiler complains, it is almost certainly right.
+
+### One real bug this found
+
+The first version had its entry point as statements at the bottom of the file.
+That compiles as a single-file `swiftc` invocation — which is what `build.sh`
+did — and fails under `-parse-as-library`, which is what **Xcode** passes for an
+application target:
+
+```
+error: expressions are not allowed at the top level
+```
+
+So `build.sh` would have worked and ⌘R would not have, which is the worst shape
+a bug like that can take. The entry point is `@main` now and `build.sh` passes
+`-parse-as-library` too, so both paths compile the same thing. Verified against
+a real compiler, both before and after.
+
+### The rest
 
 | | |
 | --- | --- |
 | the Xcode project parses, and every reference in it resolves | a plist parser and a reachability walk, in `pbxproj.test.mjs` |
 | the project's script phase actually fills the bundle | ran it for real with Xcode's variables faked |
 | the bundle layout the app expects | assembled it exactly, `Resources/{dist,server}` |
-| the server starting on a system-chosen port and reporting back | real child process, real `--print-ready` line |
 | the app being served from inside that bundle | fetched `index.html` and its JS out of it |
 | opening with the token in the fragment, nobody typing anything | real Chromium, real vault, paired with no picker |
 | the token not being left in the address afterwards | asserted on the live URL |
 | an edit reaching the folder on disk | read the file back with `fs` |
 | the server dying when the app does — **including a crash** | `SIGKILL`ed the parent; server was gone in 2 s, port released |
 
-The project file's checks are not decoration: they were confirmed by breaking
-the file ten different ways — a dangling reference, the App Sandbox creeping
-back in, a renamed source file, the script phase deleted, the scheme pointing at
-the wrong target, a deployment target drifting from `Info.plist`, the executable
-bit lost, test files left in the bundle — and confirming each one fails.
+The project file's checks were confirmed by breaking it ten different ways — a
+dangling reference, the App Sandbox creeping back in, a renamed source file, the
+script phase deleted, the scheme pointing at the wrong target, a deployment
+target drifting from `Info.plist`, the executable bit lost, test files left in
+the bundle — and confirming each one fails.
 
-What was **not** verified, and cannot be from here: that `swiftc` accepts the
-Swift, that the AppKit calls are spelled correctly, that the window looks right,
-that Xcode is happy with the project once it opens it, and that `iconutil`
-produces a usable icon. Those are the things to expect trouble from. If the
-compiler complains, the complaint is almost certainly right — the shape of the
-program is sound, the API spellings are from memory.
+Still unverified: that the AppKit calls are spelled correctly, that the window
+looks right, that Xcode is happy with the project once it opens it, and that
+`iconutil` produces a usable icon.
+
+### Running the Swift checks yourself
+
+```bash
+./macos/Tests/run.sh
+```
+
+Needs `swiftc` and `node`. It skips rather than fails when Swift is absent, so
+it is safe to wire into anything.
 
 ---
 
@@ -113,7 +161,9 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 
 | | |
 | --- | --- |
-| `Sources/SpaceForeApp.swift` | the whole app — window, folder picker, server |
+| `Sources/SpaceForeApp.swift` | the window, the folder picker, the menus — AppKit |
+| `Sources/SyncServer.swift` | starting and stopping Node — Foundation only, and tested |
+| `Tests/` | compiles and runs SyncServer.swift against the real server |
 | `Info.plist` | shared by both build paths |
 | `copy-resources.sh` | fills the bundle; the single description of what goes in |
 | `build.sh` | builds without Xcode |
