@@ -12,6 +12,7 @@ import type { ChangeEvent, JSX, ReactNode } from 'react'
 
 import type { NotePath, ThemeName } from '../types'
 import { dirname, formatDate, joinPath, sanitizeFileName, useAppStore } from '../state/store'
+import { buildExport, parseImport } from '../core/vault/transfer'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 import { formatShortcut } from './useHotkeys'
@@ -90,30 +91,6 @@ export function vaultFolders(paths: Iterable<NotePath>): string[] {
  * value is not a string is skipped rather than throwing, so one bad entry does
  * not lose the rest of the import.
  */
-export function parseImport(data: unknown): [NotePath, string][] {
-  const source =
-    data !== null && typeof data === 'object' && 'notes' in data ? (data as { notes: unknown }).notes : data
-  if (source === null || typeof source !== 'object') return []
-
-  const out: [NotePath, string][] = []
-  const push = (path: unknown, content: unknown): void => {
-    if (typeof path !== 'string' || path.trim() === '') return
-    if (typeof content !== 'string') return
-    out.push([path.trim(), content])
-  }
-
-  if (Array.isArray(source)) {
-    for (const entry of source) {
-      if (entry === null || typeof entry !== 'object') continue
-      const record = entry as { path?: unknown; content?: unknown }
-      push(record.path, record.content)
-    }
-    return out
-  }
-  for (const [path, content] of Object.entries(source as Record<string, unknown>)) push(path, content)
-  return out
-}
-
 /** Read a picked file as text, with a FileReader fallback for older engines. */
 function readFileText(file: File): Promise<string> {
   if (typeof file.text === 'function') return file.text()
@@ -144,8 +121,14 @@ function downloadFile(fileName: string, content: string, mime: string): boolean 
   } catch {
     return false
   } finally {
-    // Revoking synchronously can cancel the download in some browsers.
-    if (url && typeof URL.revokeObjectURL === 'function') setTimeout(() => URL.revokeObjectURL(url), 0)
+    // Revoking synchronously can cancel the download in some browsers, so it
+    // waits a tick — and the check for the method belongs on the tick that
+    // calls it, not on the one that schedules it.
+    if (url) {
+      setTimeout(() => {
+        if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
+      }, 0)
+    }
   }
   return true
 }
@@ -205,6 +188,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const adapter = useAppStore((s) => s.adapter)
   const vaultName = useAppStore((s) => s.vaultName)
   const createNote = useAppStore((s) => s.createNote)
+  const restoreAttachments = useAppStore((s) => s.restoreAttachments)
   const pushToast = useAppStore((s) => s.pushToast)
 
   const ids = useId()
@@ -227,31 +211,37 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     onClose()
   }, [onClose])
 
-  const exportVault = useCallback(() => {
+  const exportVault = useCallback(async () => {
     const state = useAppStore.getState()
-    const payload = {
-      vault: state.vaultName || 'SpaceFore',
-      exportedAt: new Date().toISOString(),
-      notes: Object.fromEntries([...state.notes].map(([path, note]) => [path, note.content])),
-    }
+    const { payload, skipped } = await buildExport(state)
     const fileName = `${sanitizeFileName(state.vaultName || 'spacefore-vault')}.json`
-    if (downloadFile(fileName, JSON.stringify(payload, null, 2), 'application/json')) {
-      pushToast(`Exported ${plural(state.notes.size, 'note')}`, 'success')
-    } else {
+    if (!downloadFile(fileName, JSON.stringify(payload, null, 2), 'application/json')) {
       pushToast('Downloads are not available in this browser', 'error')
+      return
     }
+    const included = Object.keys(payload.attachments ?? {}).length
+    const what = included ? `${plural(state.notes.size, 'note')} and ${plural(included, 'attachment')}` : plural(state.notes.size, 'note')
+    // Naming what was left out matters more than the success: an export is only
+    // worth having if you know what is in it.
+    if (skipped.length > 0) pushToast(`Exported ${what}; could not read ${skipped.join(', ')}`, 'error')
+    else pushToast(`Exported ${what}`, 'success')
   }, [pushToast])
 
   const importVault = useCallback(
     async (file: File) => {
       setImporting(true)
       try {
-        const entries = parseImport(JSON.parse(await readFileText(file)) as unknown)
-        if (entries.length === 0) throw new Error('No notes found in that file.')
+        const { notes, attachments, unreadable } = parseImport(JSON.parse(await readFileText(file)) as unknown)
+        if (notes.length === 0 && attachments.length === 0) throw new Error('No notes found in that file.')
         // Sequential: `createNote` de-duplicates against the notes already in
         // the store, and that check has to see the previous write.
-        for (const [path, content] of entries) await createNote(path, content)
-        pushToast(`Imported ${plural(entries.length, 'note')}`, 'success')
+        for (const [path, content] of notes) await createNote(path, content)
+        const restored = await restoreAttachments(attachments)
+        const parts = [plural(notes.length, 'note')]
+        if (restored > 0) parts.push(plural(restored, 'attachment'))
+        pushToast(`Imported ${parts.join(' and ')}`, 'success')
+        const lost = unreadable.length + (attachments.length - restored)
+        if (lost > 0) pushToast(`${plural(lost, 'attachment')} could not be restored`, 'error')
       } catch (error) {
         pushToast(`Could not import: ${describeError(error)}`, 'error')
       } finally {
@@ -260,7 +250,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         if (importInputRef.current) importInputRef.current.value = ''
       }
     },
-    [createNote, pushToast],
+    [createNote, restoreAttachments, pushToast],
   )
 
   const noteCount = notes.size

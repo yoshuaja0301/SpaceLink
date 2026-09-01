@@ -9,7 +9,14 @@
  * assertion about "what is on disk" reads through a *fresh* handle, never the
  * adapter's cache, so a write that never landed cannot pass.
  */
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { boot, step, report, must } from './lib.mjs'
+
+/** The parsed export file, handed from the export step to the import step. */
+let exported = null
 
 /** Seeds a vault directory and returns the file list, run inside the page. */
 const SEED = async () => {
@@ -350,6 +357,85 @@ await step('a folder whose permission is re-granted opens again', async () => {
   const status = await page.locator('.statusbar').innerText()
   must(/my-notes/i.test(status), 'the folder did not reopen after the grant: ' + status)
   return status.split('\n').slice(0, 2).join(' / ')
+})
+
+await step('exporting the vault carries the attachment, not just the notes', async () => {
+  // "Export vault as JSON" is what someone reaches for to keep a copy. It used
+  // to write `state.notes` and nothing else, so a folder of notes *and images*
+  // came back as a folder of notes and broken links — silently, from the one
+  // button whose whole purpose is not losing anything.
+  const download = page.waitForEvent('download', { timeout: 30_000 })
+  await page.keyboard.press('Control+Shift+P')
+  await page.waitForSelector('.palette-input', { timeout: 15_000 })
+  await page.keyboard.type('Export vault')
+  await page.waitForTimeout(500)
+  await page.keyboard.press('Enter')
+
+  const file = await (await download).path()
+  exported = JSON.parse(await readFile(file, 'utf8'))
+
+  must(Object.keys(exported.notes ?? {}).length === 4, `notes: ${JSON.stringify(Object.keys(exported.notes ?? {}))}`)
+  const encoded = exported.attachments?.['diagram.png']
+  must(typeof encoded === 'string', `no attachment in the export: ${JSON.stringify(Object.keys(exported))}`)
+  // The exact bytes the seed wrote, not merely something of the right length.
+  must(
+    Buffer.from(encoded, 'base64').equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    `the bytes came back wrong: ${Buffer.from(encoded, 'base64').toString('hex')}`,
+  )
+  return `4 notes + diagram.png (${Buffer.from(encoded, 'base64').length} bytes)`
+})
+
+await step('importing it into an empty vault brings the attachment back', async () => {
+  must(exported !== null, 'the export step did not run')
+
+  // A browser vault is a different backend entirely, which is the point: the
+  // export has to be enough on its own.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.waitForTimeout(800)
+  await page.locator('.vault-picker button').filter({ hasText: /browser/i }).first().click()
+  await page.waitForTimeout(2500)
+
+  const carrier = join(tmpdir(), `spacefore-export-${Date.now()}.json`)
+  await writeFile(carrier, JSON.stringify(exported))
+  try {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-settings')))
+    await page.waitForSelector('.modal input[type="file"]', { timeout: 15_000 })
+    await page.locator('.modal input[type="file"]').setInputFiles(carrier)
+    await page.waitForTimeout(3500)
+
+    // Read it straight out of IndexedDB, the way the rest of this suite reads
+    // straight off disk: what the app believes is not evidence.
+    const landed = await page.evaluate(async () => {
+      // The browser vault names its database after the vault, so ask rather
+      // than assume — and say which ones exist if the expected one is missing.
+      const names = (await indexedDB.databases()).map((entry) => entry.name)
+      const chosen = names.includes('SpaceFore') ? 'SpaceFore' : names[0]
+      if (!chosen) return { paths: [], bytes: [], databases: names }
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(chosen)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const records = await new Promise((resolve, reject) => {
+        const request = db.transaction('files', 'readonly').objectStore('files').getAll()
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const picture = records.find((record) => record.path === 'diagram.png')
+      const bytes = picture?.binary ? [...new Uint8Array(await picture.binary.arrayBuffer())] : []
+      return { paths: records.map((record) => record.path).sort(), bytes, databases: names }
+    })
+
+    must(landed.paths.includes('Home.md'), `notes did not import: ${JSON.stringify(landed)}`)
+    must(landed.paths.includes('diagram.png'), `attachment did not import: ${JSON.stringify(landed.paths)}`)
+    must(
+      landed.bytes.join(',') === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].join(','),
+      `the restored bytes are wrong: ${JSON.stringify(landed.bytes)}`,
+    )
+    return landed.paths.join(', ')
+  } finally {
+    await rm(carrier, { force: true })
+  }
 })
 
 process.exitCode = report(problems, 'directory vault') > 0 ? 1 : 0

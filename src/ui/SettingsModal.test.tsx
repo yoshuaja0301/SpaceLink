@@ -9,7 +9,8 @@ import { buildIndex, emptyIndex } from '../core/graph/index'
 import { createMemoryVault } from '../core/vault/memoryVault'
 import { DEFAULT_SETTINGS, formatDate, makeNote, useAppStore } from '../state/store'
 import { Modal } from './Modal'
-import { SettingsModal, parseImport, vaultFolders } from './SettingsModal'
+import { SettingsModal, vaultFolders } from './SettingsModal'
+import { parseImport } from '../core/vault/transfer'
 import { Toasts } from './Toasts'
 import { resolveTheme, useTheme } from './useTheme'
 
@@ -362,23 +363,23 @@ describe('vaultFolders', () => {
 
 describe('parseImport', () => {
   it('reads the shape the export button writes', () => {
-    expect(parseImport({ vault: 'v', notes: { 'a.md': 'A', 'b/c.md': 'C' } })).toEqual([
+    expect(parseImport({ vault: 'v', notes: { 'a.md': 'A', 'b/c.md': 'C' } }).notes).toEqual([
       ['a.md', 'A'],
       ['b/c.md', 'C'],
     ])
   })
 
   it('reads a bare path→content map and an array of records', () => {
-    expect(parseImport({ 'a.md': 'A' })).toEqual([['a.md', 'A']])
-    expect(parseImport([{ path: 'a.md', content: 'A' }])).toEqual([['a.md', 'A']])
-    expect(parseImport({ notes: [{ path: 'a.md', content: 'A' }] })).toEqual([['a.md', 'A']])
+    expect(parseImport({ 'a.md': 'A' }).notes).toEqual([['a.md', 'A']])
+    expect(parseImport([{ path: 'a.md', content: 'A' }]).notes).toEqual([['a.md', 'A']])
+    expect(parseImport({ notes: [{ path: 'a.md', content: 'A' }] }).notes).toEqual([['a.md', 'A']])
   })
 
   it('skips junk entries instead of throwing, and rejects non-objects', () => {
-    expect(parseImport({ 'a.md': 'A', 'b.md': 42, '': 'x', '  ': 'y' })).toEqual([['a.md', 'A']])
-    expect(parseImport([{ path: 'a.md' }, null, 7, { path: 'b.md', content: 'B' }])).toEqual([['b.md', 'B']])
-    expect(parseImport(null)).toEqual([])
-    expect(parseImport('nope')).toEqual([])
+    expect(parseImport({ 'a.md': 'A', 'b.md': 42, '': 'x', '  ': 'y' }).notes).toEqual([['a.md', 'A']])
+    expect(parseImport([{ path: 'a.md' }, null, 7, { path: 'b.md', content: 'B' }]).notes).toEqual([['b.md', 'B']])
+    expect(parseImport(null).notes).toEqual([])
+    expect(parseImport('nope').notes).toEqual([])
   })
 })
 
@@ -517,7 +518,7 @@ describe('SettingsModal', () => {
     window.removeEventListener('spacefore:open-vault-picker', heard)
   })
 
-  it('disables the export button for an empty vault and downloads otherwise', () => {
+  it('disables the export button for an empty vault and downloads otherwise', async () => {
     open()
     const button = () => screen.getByRole('button', { name: /export/i }) as HTMLButtonElement
     expect(button().disabled).toBe(true)
@@ -534,7 +535,9 @@ describe('SettingsModal', () => {
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL })
     open()
 
-    fireEvent.click(button())
+    await act(async () => {
+      fireEvent.click(button())
+    })
     expect(createObjectURL).toHaveBeenCalledTimes(1)
     expect(clicks).toHaveLength(1)
     expect(clicks[0]!.download).toBe('My Vault.json')
@@ -542,11 +545,13 @@ describe('SettingsModal', () => {
     vi.unstubAllGlobals()
   })
 
-  it('reports an error when the browser refuses downloads', () => {
+  it('reports an error when the browser refuses downloads', async () => {
     seed()
     vi.stubGlobal('URL', {})
     open()
-    fireEvent.click(screen.getByRole('button', { name: /export/i }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /export/i }))
+    })
     expect(useAppStore.getState().toasts.map((toast) => toast.kind)).toEqual(['error'])
     vi.unstubAllGlobals()
   })

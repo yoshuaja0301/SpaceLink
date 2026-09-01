@@ -24,6 +24,7 @@ import { useEffect, useMemo } from 'react'
 
 import type { Command, NotePath, ThemeName } from '../types'
 import type { AppState } from '../state/store'
+import { buildExport } from '../core/vault/transfer'
 import { basename, dirname, joinPath, sanitizeFileName, useAppStore } from '../state/store'
 import { openRightSidebarTab } from './RightSidebar'
 import { isReopenable, reopenClosedTab } from './TabBar'
@@ -436,17 +437,18 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Export vault as JSON',
       section: 'File',
       enabled: () => store().notes.size > 0,
-      run: () => {
+      run: async () => {
         const state = store()
-        const payload = {
-          vault: state.vaultName || 'SpaceFore',
-          exportedAt: new Date().toISOString(),
-          notes: Object.fromEntries([...state.notes].map(([path, note]) => [path, note.content])),
-        }
+        // Shared with the Settings button on purpose: these were two copies of
+        // the same object literal, and only one of them would ever have been
+        // remembered when the shape changed.
+        const { payload, skipped } = await buildExport(state)
         const name = `${sanitizeFileName(state.vaultName || 'spacefore-vault')}.json`
         if (!downloadFile(name, JSON.stringify(payload, null, 2), 'application/json')) {
           state.pushToast('Downloads are not available in this browser', 'error')
+          return
         }
+        if (skipped.length > 0) state.pushToast(`Could not read ${skipped.join(', ')}`, 'error')
       },
     },
 

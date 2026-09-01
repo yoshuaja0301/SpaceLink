@@ -237,7 +237,7 @@ describe('file commands', () => {
       expect(this.download).toBe('My Vault.json')
     })
 
-    find(commands().current, 'file:export-vault').run()
+    await find(commands().current, 'file:export-vault').run()
     expect(click).toHaveBeenCalledTimes(1)
     const payload = JSON.parse(await (exported as unknown as Blob).text()) as { notes: Record<string, string> }
     expect(payload.notes).toEqual({ 'A.md': '# A', 'sub/B.md': 'body' })

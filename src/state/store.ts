@@ -26,6 +26,7 @@ import type {
 } from '../types'
 import { parseNote } from '../core/markdown/parse'
 import { buildIndex, emptyIndex, getBacklinks, resolveLinkTarget } from '../core/graph/index'
+import { toVaultFile } from '../core/vault/paths'
 
 const AUTOSAVE_MS_MIN = 200
 
@@ -235,6 +236,8 @@ export interface AppState {
   createNote: (path: NotePath, content?: string) => Promise<NotePath>
   createNoteFromTitle: (title: string, folder?: string) => Promise<NotePath>
   deleteNote: (path: NotePath) => Promise<void>
+  /** Write attachment bytes into the vault; returns how many landed. */
+  restoreAttachments: (entries: readonly [NotePath, Blob][]) => Promise<number>
   renameNote: (from: NotePath, to: NotePath) => Promise<void>
   openDailyNote: () => Promise<void>
 
@@ -833,6 +836,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     const path = await get().createNote(joinPath(dir, `${name}.md`), `# ${name}\n\n`)
     get().openPath(path, { mode: 'edit' })
     return path
+  },
+
+  async restoreAttachments(entries) {
+    const { adapter } = get()
+    if (!adapter?.writable || entries.length === 0) return 0
+
+    const written: VaultFile[] = []
+    for (const [path, blob] of entries) {
+      try {
+        await adapter.writeBinary(path, blob)
+        written.push(toVaultFile(path, blob.size, Date.now()))
+      } catch (error) {
+        // Named, not swallowed: an attachment that did not land looks exactly
+        // like one the export never had.
+        get().pushToast(`Could not write ${path}: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      }
+    }
+    if (written.length === 0) return 0
+
+    // The listing is what the preview resolves `![[diagram.png]]` against, so a
+    // restored file that is not in it stays a broken image until the next load.
+    set((s) => {
+      const byPath = new Map(s.attachments.map((file) => [file.path, file]))
+      for (const file of written) byPath.set(file.path, file)
+      return { attachments: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) }
+    })
+    return written.length
   },
 
   async deleteNote(path) {
