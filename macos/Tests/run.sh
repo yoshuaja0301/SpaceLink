@@ -42,3 +42,31 @@ swiftc \
 
 echo "==> Running"
 "$OUT/SyncServerTests" "$(command -v node)" "$REPO/server/index.mjs"
+
+# ---------------------------------------------------------------- the AppKit half
+
+echo
+echo "==> Typechecking SpaceForeApp.swift against the API as Apple documents it"
+
+# The AppKit half cannot run off a Mac, but it can be typechecked against stubs
+# whose every declaration was copied from Apple's documentation for that symbol.
+# That makes it a check against an independent description of the API rather
+# than against itself: a wrong label, a wrong type, a wrong enum case or a
+# delegate signature that does not match will not compile.
+#
+# What this does NOT check is in Stubs/AppKitStub.swift, and worth knowing:
+# `#selector` and the responder chain, and availability on older macOS.
+swiftc -emit-module -module-name AppKit -emit-module-path "$OUT/AppKit.swiftmodule" \
+  "$HERE/Stubs/AppKitStub.swift"
+swiftc -emit-module -module-name WebKit -emit-module-path "$OUT/WebKit.swiftmodule" -I "$OUT" \
+  "$HERE/Stubs/WebKitStub.swift"
+
+# Objective-C interop does not exist here, so `#selector(…)` and `@objc` — and
+# only those — are rewritten first. Everything else is the real source.
+node "$HERE/Stubs/rewrite.mjs" "$HERE/../Sources/SpaceForeApp.swift" "$OUT/SpaceForeApp.swift"
+
+swiftc -typecheck -parse-as-library -I "$OUT" \
+  "$HERE/../Sources/SyncServer.swift" \
+  "$OUT/SpaceForeApp.swift"
+
+echo "  ok    SpaceForeApp.swift typechecks against the documented API"

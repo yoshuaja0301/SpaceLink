@@ -53,12 +53,49 @@ watching each one fail.
 This is the half where a mistake is expensive: it is what makes the app open
 to your notes rather than to an error.
 
-### `SpaceForeApp.swift` — parsed, not compiled
+### `SpaceForeApp.swift` — typechecked against the documented API
 
-The AppKit and WebKit half. Its syntax is checked by the same compiler, but
-nothing can resolve `NSOpenPanel` or `WKWebView` off a Mac, so the API
-spellings are still from memory. **This is where to expect trouble.** If the
-compiler complains, it is almost certainly right.
+The AppKit and WebKit half. Nothing off a Mac can resolve `NSOpenPanel` or
+`WKWebView`, so it is typechecked against stubs instead — and the stubs were
+not written from memory. Every declaration in them was fetched from Apple's own
+documentation for that symbol, and each one carries the path it came from:
+
+```swift
+/// appkit/nssavepanel/runmodal()
+open func runModal() -> NSApplication.ModalResponse { .OK }
+```
+
+That makes it a check against an independent description of the API rather than
+against itself. A wrong property name, a wrong enum case, a missing argument, a
+delegate signature that does not match — none of them compile. Confirmed by
+breaking eight of them on purpose:
+
+```
+  nama                                                  caught
+  ----------------------------------------------------  ------
+  canChooseDirectory instead of canChooseDirectories       yes
+  .ok instead of .OK                                       yes
+  wrong type on a delegate parameter                       yes
+  WKWebsiteDataStore.standard() instead of .default()      yes
+  makeKeyAndOrderFront() with no argument                  yes
+  .fatal instead of .critical on NSAlert.Style             yes
+  .titleBar instead of .titled on StyleMask                yes
+  NSWorkspace.openURL(_:) instead of open(_:)              yes
+```
+
+**What this still cannot tell you.** That a symbol exists at all beyond the ones
+declared — anything the app uses has to be in the stub, and that is where a
+wrong memory could slip back in, which is why each declaration cites its source.
+Nor availability on older macOS. Nor, of course, whether the window looks right.
+
+Objective-C interop does not exist off Apple's platforms, so `#selector` and
+`@objc` are rewritten before the typecheck — and only those; the rest is the
+real source. That gap is smaller than it sounds: on a Mac `#selector` is checked
+by the compiler, so a wrong one will not build. All ten the app uses point at
+methods confirmed to exist (`NSApplication.terminate(_:)`, `NSText.cut(_:)`,
+`NSWindow.toggleFullScreen(_:)`, and so on). The two written as strings —
+`undo:` and `redo:` — are the standard responder-chain names and are not
+checked by anything.
 
 ### One real bug this found
 
@@ -95,9 +132,9 @@ script phase deleted, the scheme pointing at the wrong target, a deployment
 target drifting from `Info.plist`, the executable bit lost, test files left in
 the bundle — and confirming each one fails.
 
-Still unverified: that the AppKit calls are spelled correctly, that the window
-looks right, that Xcode is happy with the project once it opens it, and that
-`iconutil` produces a usable icon.
+Still unverified: that the window looks right, that Xcode is happy with the
+project once it opens it, that the real SDK agrees with its own documentation,
+and that `iconutil` produces a usable icon.
 
 ### Running the Swift checks yourself
 
@@ -163,7 +200,8 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 | --- | --- |
 | `Sources/SpaceForeApp.swift` | the window, the folder picker, the menus — AppKit |
 | `Sources/SyncServer.swift` | starting and stopping Node — Foundation only, and tested |
-| `Tests/` | compiles and runs SyncServer.swift against the real server |
+| `Tests/` | compiles and runs SyncServer.swift; typechecks the AppKit half |
+| `Tests/Stubs/` | AppKit and WebKit as Apple documents them, for that typecheck |
 | `Info.plist` | shared by both build paths |
 | `copy-resources.sh` | fills the bundle; the single description of what goes in |
 | `build.sh` | builds without Xcode |
