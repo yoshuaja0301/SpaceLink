@@ -99,7 +99,11 @@ access token your other devices will need. Open that address, and install it:
 - **Android** — Chrome, menu, *Install app*
 
 Installed, it opens in its own window, keeps working with the network down, and
-remembers which vault it was on.
+remembers which vault it was on. What survives losing the network is the app
+itself and any vault held on the device — the demo vault, and a browser vault in
+IndexedDB. A vault that lives on a **sync server** still needs the server:
+`/api/` is deliberately never cached, because a cached note could be one the
+vault no longer has, and a cached response could carry an access token.
 
 The vault folder is created if it is not there. Point it at notes you already
 have and it reads every `.md` file in the folder — nothing is converted, moved
@@ -132,14 +136,14 @@ npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1332 unit and component tests
+npm test         # vitest — 1353 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens a real browser and walks 133 real
-user flows — 101 of them in Chromium alone, the rest in the other two engines.
+`npm run e2e` starts the preview server, opens a real browser and walks 140 real
+user flows — 108 of them in Chromium alone, the rest in the other two engines.
 They expand folders, type, format, complete wiki-links, click links and tags,
 tick a task inside a transclusion, use the search operators and the command
 palette, open the graph, rename a note and watch the links follow it, delete,
@@ -175,14 +179,24 @@ past its stated budget — one ordinary looking import would otherwise undo the
 code splitting silently. It then opens a note for editing, opens the graph, and
 renders an equation, each of which has to wait for a chunk to arrive.
 
-The last two suites leave Chromium. One runs the core journey in **Firefox and
-WebKit**, because the paragraph on browser support below was a claim with
-nothing behind it. The other runs at **phone metrics with touch** — an iPhone 14
-in WebKit, a Pixel 7 in Chromium — which is how the narrow layout turned out to
-be broken: both sidebars opened as overlays over the note, one on top of the
-other, so the first thing a reader met was a panel they could not dismiss
-covering a note they could not reach. Neither suite fails when its engine is
-absent; it says so and moves on.
+Two suites leave Chromium. One runs the core journey in **Firefox and WebKit**,
+because the paragraph on browser support below was a claim with nothing behind
+it. The other runs at **phone metrics with touch** — an iPhone 14 in WebKit, a
+Pixel 7 in Chromium — which is how the narrow layout turned out to be broken:
+both sidebars opened as overlays over the note, one on top of the other, so the
+first thing a reader met was a panel they could not dismiss covering a note they
+could not reach. Neither suite fails when its engine is absent; it says so and
+moves on.
+
+The last one pulls the network out. It checks the manifest and its icons, that a
+service worker takes charge, and then — with the network genuinely off — that
+the app opens from cache, the vault is there, a note opens and takes keystrokes,
+and that nothing from `/api/` was ever cached, since a stale note or a cached
+token would both be worse than no cache at all. This one found that the offline
+promise below was false: a worker is not in charge of the page that installs it,
+so on a first visit it cached precisely nothing and the app needed three visits
+before it survived losing the network. It now precaches during `install`, from a
+list `build/precache.mjs` writes out of the finished build.
 
 Playwright needs its browsers once:
 

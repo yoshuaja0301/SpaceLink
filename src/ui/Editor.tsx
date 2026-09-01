@@ -30,6 +30,7 @@ import { EditorView } from '@codemirror/view'
 import { resolveLinkTarget } from '../core/graph/index'
 import { useAppStore } from '../state/store'
 import type { NotePath } from '../types'
+import { mayTakeFocusOnMount } from './focus'
 import { registerEditor } from './editor/markdownCommands'
 import { flashLine, refreshDecorations } from './editor/markdownDecorations'
 import {
@@ -201,7 +202,8 @@ export function Editor({ path, paneId }: { path: NotePath; paneId: string }): Re
     loadedRef.current = initial
     registerEditor(paneId, view)
     restore(view, initial)
-    if (activeRef.current) view.focus()
+    // Not if the reader is in the quick switcher: see ui/focus.ts.
+    if (activeRef.current && mayTakeFocusOnMount()) view.focus()
 
     return () => {
       remember(view, loadedRef.current)

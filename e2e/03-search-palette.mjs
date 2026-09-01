@@ -124,5 +124,34 @@ await step('Ctrl+B toggles the sidebar only outside the editor', async () => {
   await page.waitForTimeout(400)
 })
 
+await step('the quick switcher survives the editor arriving late', async () => {
+  // The editor is a lazily loaded chunk, so its mount can land a second after
+  // the app has painted — after a reader has opened the switcher and started
+  // typing. It used to take the focus back at that moment: the palette went on
+  // filtering, because it reads its own input, and Enter went to CodeMirror.
+  // Nothing opened. This races it on a fresh page on purpose.
+  const racer = await browser.newPage()
+  const noise = []
+  racer.on('pageerror', (error) => noise.push('PAGEERROR: ' + error.message))
+  try {
+    await racer.goto(page.url(), { waitUntil: 'load' })
+    await racer.waitForSelector('.statusbar', { timeout: 40_000 })
+    // Deliberately no settling time — that is the whole point.
+    await racer.keyboard.press('Control+p')
+    await racer.waitForSelector('.palette-input', { timeout: 15_000 })
+    await racer.keyboard.type('Markdown')
+    await racer.waitForTimeout(700)
+    await racer.keyboard.press('Enter')
+    await racer.waitForTimeout(1800)
+
+    const tabs = await racer.locator('.tab-title').allInnerTexts()
+    must(tabs.some((title) => /Markdown/i.test(title)), `Enter opened nothing: ${JSON.stringify(tabs)}`)
+    must(noise.length === 0, noise.join('; '))
+    return tabs.join(', ')
+  } finally {
+    await racer.close()
+  }
+})
+
 process.exitCode = report(problems, 'search/palette') > 0 ? 1 : 0
 await browser.close()
