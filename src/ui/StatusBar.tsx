@@ -64,18 +64,21 @@ export function StatusBar(): JSX.Element {
         <Icon name="folder" size={12} />
         <span>{vaultName || 'No vault'}</span>
       </button>
-      <span className="statusbar-item">{plural(notes.size, 'note')}</span>
+      <span className="statusbar-item is-secondary">{plural(notes.size, 'note')}</span>
 
       <span className="statusbar-spacer" />
 
       {note && tab && (
         <>
-          <span className="statusbar-item" title="Current view mode">
+          {/* Everything from here to the save state is `is-secondary`: on a
+              phone the bar cannot hold it all, and what must survive is
+              whether the note is saved. See the media query in app.css. */}
+          <span className="statusbar-item is-secondary" title="Current view mode">
             {MODE_LABELS[tab.mode]}
           </span>
-          <span className="statusbar-item">{plural(note.parsed.wordCount, 'word')}</span>
-          <span className="statusbar-item">{plural(note.content.length, 'character')}</span>
-          <span className="statusbar-item" title="Links pointing at this note">
+          <span className="statusbar-item is-secondary">{plural(note.parsed.wordCount, 'word')}</span>
+          <span className="statusbar-item is-secondary">{plural(note.content.length, 'character')}</span>
+          <span className="statusbar-item is-secondary" title="Links pointing at this note">
             {plural(backlinks, 'backlink')}
           </span>
           <span

@@ -12,37 +12,90 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { boot, must, openDevice, report, step } from './lib.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOKEN = 'e2e-token-'.padEnd(48, 'x')
-const PORT = Number(process.env.SPACEFORE_SYNC_PORT ?? 4901)
-const ORIGIN = `http://127.0.0.1:${PORT}`
 
 const vault = await mkdtemp(join(tmpdir(), 'spacefore-sync-e2e-'))
 await mkdir(join(vault, 'Ideas'), { recursive: true })
 await writeFile(join(vault, 'Home.md'), '# Home\n\nStart at [[Ideas/Seed]].\n')
 await writeFile(join(vault, 'Ideas/Seed.md'), '# Seed\n\nBack to [[Home]].\n')
 
+/*
+ * The server picks its own port and says which one, rather than this suite
+ * naming one.
+ *
+ * A fixed port is a trap. When an earlier run died before its cleanup — a
+ * browser that would not launch is enough — its server stays up holding that
+ * port. The next run's server then cannot bind, exits, and the app happily
+ * pairs with the *stranger*, which is serving somebody else's folder. Every
+ * assertion that reads the folder on disk then fails, and it reads exactly
+ * like the app has stopped writing notes. It cost an hour to learn that once.
+ *
+ * `--port 0` means no two runs can collide, and the ready line names the vault
+ * the server is actually serving, so pairing with a stranger is caught here
+ * instead of being reported as a broken app. `--print-ready` also arms the
+ * server's stdin leash: hold the pipe open and it dies with this process, even
+ * if this process is killed outright.
+ */
 const server = spawn(
   process.execPath,
-  [join(HERE, '..', 'server', 'index.mjs'), '--vault', vault, '--port', String(PORT), '--token', TOKEN],
-  { stdio: 'ignore' },
+  [
+    join(HERE, '..', 'server', 'index.mjs'),
+    '--vault', vault,
+    '--port', String(process.env.SPACEFORE_SYNC_PORT ?? 0),
+    '--token', TOKEN,
+    '--print-ready',
+  ],
+  { stdio: ['pipe', 'pipe', 'pipe'] },
 )
 
-/** Wait for the server to answer, so the first navigation is not a race. */
-for (let attempt = 0; attempt < 60; attempt += 1) {
-  try {
-    const response = await fetch(`${ORIGIN}/api/health`)
-    if (response.ok) break
-  } catch {
-    /* not up yet */
-  }
-  await new Promise((resolve) => setTimeout(resolve, 250))
+/** The server's first line of stdout: where it ended up, and over what. */
+const ready = await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('the server never reported itself ready')), 30_000)
+  let buffered = ''
+  server.stdout.setEncoding('utf8')
+  server.stdout.on('data', (chunk) => {
+    buffered += chunk
+    const newline = buffered.indexOf('\n')
+    if (newline < 0) return
+    clearTimeout(timer)
+    try {
+      resolve(JSON.parse(buffered.slice(0, newline)))
+    } catch (error) {
+      reject(new Error(`the ready line was not JSON: ${buffered.slice(0, newline)} (${error.message})`))
+    }
+  })
+  // Kept so a server that dies on startup can say why. `EADDRINUSE` here means
+  // something is already on the port, which is the whole reason for `--port 0`.
+  let complaint = ''
+  server.stderr.setEncoding('utf8')
+  server.stderr.on('data', (chunk) => {
+    complaint += chunk
+    process.stderr.write(chunk)
+  })
+
+  server.once('error', reject)
+  server.once('exit', (code) => {
+    clearTimeout(timer)
+    const why = /EADDRINUSE/.test(complaint)
+      ? `something else is already listening on port ${process.env.SPACEFORE_SYNC_PORT}. ` +
+        'Leave SPACEFORE_SYNC_PORT unset and the server will pick a free one.'
+      : complaint.trim().split('\n').slice(-3).join(' ') || 'it said nothing'
+    reject(new Error(`the server exited with ${code} before reporting ready: ${why}`))
+  })
+})
+
+// Whatever we are about to talk to must be serving the folder we just made.
+if (resolve(ready.vault) !== resolve(vault)) {
+  throw new Error(`reached a server serving ${ready.vault}, not ${vault}`)
 }
+
+const ORIGIN = `http://127.0.0.1:${ready.port}`
 
 const onDisk = (name) => readFile(join(vault, name), 'utf8')
 const listDisk = async () => {

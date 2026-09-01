@@ -132,20 +132,21 @@ npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1290+ unit and component tests
+npm test         # vitest — 1332 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens Chromium and walks 100 real user
-flows — expanding folders, typing, formatting, wiki-link autocomplete, clicking
-links and tags, ticking a task inside a transclusion, search operators, the
-command palette, the graph, renaming with link rewriting, deleting, switching
-vaults, reloading, and keyboard navigation. Any step that fails, and any error
-the page logs, fails the run.
+`npm run e2e` starts the preview server, opens a real browser and walks 133 real
+user flows — 101 of them in Chromium alone, the rest in the other two engines.
+They expand folders, type, format, complete wiki-links, click links and tags,
+tick a task inside a transclusion, use the search operators and the command
+palette, open the graph, rename a note and watch the links follow it, delete,
+switch vaults, reload, and navigate by keyboard alone. Any step that fails, and
+any error the page logs, fails the run.
 
-The last suite covers the folder-on-disk vault against the browser's **real**
+One suite covers the folder-on-disk vault against the browser's **real**
 File System Access implementation. `showDirectoryPicker()` opens a native dialog
 no automation can click, so that one call is stubbed — but it hands back a
 genuine `FileSystemDirectoryHandle` from the origin private file system, and
@@ -157,7 +158,7 @@ changed by another editor is picked up on reload, that switching vaults mid-edit
 leaves the folder untouched, and that a dropped directory permission falls back
 without losing the folder.
 
-The suite after it starts a real sync server over a real folder and pairs **two
+Another starts a real sync server over a real folder and pairs **two
 independent browser contexts** with it — a stand-in for a laptop and a phone —
 then checks that an edit on one appears on the other without a reload, that
 creating and deleting propagate, that a file changed on the host reaches both,
@@ -168,14 +169,31 @@ breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
 that never receives a height, a dialog the browser blocks outright. Each of
 those was found here, not by the unit suite.
 
-A last suite reads the built bundle off disk and fails if the editor, KaTeX or
+One reads the built bundle off disk and fails if the editor, KaTeX or
 the graph reappear in the chunk the first screen has to download, or if it grows
 past its stated budget — one ordinary looking import would otherwise undo the
 code splitting silently. It then opens a note for editing, opens the graph, and
 renders an equation, each of which has to wait for a chunk to arrive.
 
-Playwright needs a browser once: `npx playwright install chromium` (or point
-`PLAYWRIGHT_CHROMIUM_PATH` at one you already have).
+The last two suites leave Chromium. One runs the core journey in **Firefox and
+WebKit**, because the paragraph on browser support below was a claim with
+nothing behind it. The other runs at **phone metrics with touch** — an iPhone 14
+in WebKit, a Pixel 7 in Chromium — which is how the narrow layout turned out to
+be broken: both sidebars opened as overlays over the note, one on top of the
+other, so the first thing a reader met was a panel they could not dismiss
+covering a note they could not reach. Neither suite fails when its engine is
+absent; it says so and moves on.
+
+Playwright needs its browsers once:
+
+```bash
+npx playwright install chromium          # suites 1-9
+npx playwright install firefox webkit    # suites 10-11, optional
+```
+
+Point `PLAYWRIGHT_CHROMIUM_PATH` at a Chromium you already have to skip the
+first. A container that ships one at the root of `PLAYWRIGHT_BROWSERS_PATH` is
+found without being told.
 
 ## Keyboard shortcuts
 
@@ -265,8 +283,16 @@ Installing it as an app needs `https://` or `http://localhost`, which is a
 browser rule rather than one of ours. Over plain HTTP on a local network the app
 runs and syncs normally but stays a page.
 
-Only Chromium has actually been exercised, by the test suites above. Firefox and
-Safari are untested, and nothing here has been run on macOS itself.
+All three engines are exercised by the suites above: the core journey — loading,
+the quick switcher, typing, preview, mathematics, search and the graph — runs in
+Chromium, Gecko and WebKit, and the phone layout runs at real device metrics
+with touch on an iPhone 14 (WebKit) and a Pixel 7 (Chromium).
+
+Two caveats worth stating plainly. Playwright's WebKit is the engine behind
+Safari, not Safari itself, so it will not catch everything Safari does — it does
+catch the class of thing that actually differs between engines. And the macOS
+app has never been built on a Mac; what has and has not been checked there is
+set out in [macos/README.md](macos/README.md).
 
 ## Licence
 

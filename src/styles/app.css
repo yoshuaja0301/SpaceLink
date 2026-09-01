@@ -1426,6 +1426,10 @@ kbd {
  * 19. Mobile — the sidebars become overlays over the workspace.
  * ======================================================================= */
 
+/* Sits behind an open sidebar so it can be dismissed by tapping the note.
+   Off entirely where the sidebars are columns rather than overlays. */
+.sidebar-scrim { display: none; }
+
 @media (max-width: 800px) {
   .app { grid-template-columns: auto minmax(0, 1fr); }
   .workspace-area, .workspace { grid-column: 2; }
@@ -1440,10 +1444,27 @@ kbd {
   .sidebar { left: var(--ribbon-width); }
   .right-sidebar { right: 0; max-width: calc(100vw - var(--ribbon-width) - var(--space-8)); }
   .sidebar-resizer { display: none; }
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: var(--statusbar-height);
+    left: var(--ribbon-width);
+    z-index: 49; /* under the drawer at 50, over everything else */
+    border: 0;
+    padding: 0;
+    background: var(--bg-overlay);
+    backdrop-filter: blur(2px);
+    cursor: default;
+  }
   .tab { flex-basis: 150px; }
   .graph-controls { width: 170px; }
   .palette-backdrop { padding-top: 6vh; }
   .editor-host .cm-content, .preview-host { padding-left: var(--space-4); padding-right: var(--space-4); }
+  /* The bar cannot hold seven items at this width, and the one that gets
+     pushed off the end is the save state — the only one that matters. */
+  .statusbar-item.is-secondary { display: none; }
 }
 
 /* ======================================================================= *

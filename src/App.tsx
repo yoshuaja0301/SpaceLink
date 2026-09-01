@@ -29,6 +29,7 @@ import { useCommands } from './ui/commands'
 import { useHotkeys } from './ui/useHotkeys'
 import { useTheme } from './ui/useTheme'
 import { usePrefetchHeavyViews } from './ui/lazy'
+import { useNarrowLayout } from './ui/useNarrowLayout'
 
 export function App(): React.JSX.Element {
   const adapter = useAppStore((s) => s.adapter)
@@ -47,6 +48,7 @@ export function App(): React.JSX.Element {
 
   useTheme()
   usePrefetchHeavyViews()
+  useNarrowLayout()
   const commands = useCommands()
   useHotkeys(commands)
 
@@ -224,6 +226,22 @@ export function App(): React.JSX.Element {
         <div className="right-sidebar" style={{ width: `${rightSidebarWidth}px` }}>
           <RightSidebar />
         </div>
+      )}
+
+      {/* Only ever visible under the narrow-width media query, where a sidebar
+          floats over the note. Tapping the note is how you dismiss a drawer on
+          a phone, and without this there is nothing to tap. */}
+      {(sidebarPanel !== null || rightSidebarOpen) && (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="Close the sidebar"
+          onClick={() => {
+            const state = useAppStore.getState()
+            if (state.rightSidebarOpen) state.toggleRightSidebar(false)
+            else if (state.sidebarPanel !== null) state.setSidebarPanel(state.sidebarPanel)
+          }}
+        />
       )}
 
       <StatusBar />
