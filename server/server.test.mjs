@@ -850,6 +850,38 @@ describe('a folder that vanishes while the watcher is scanning it', () => {
   })
 })
 
+describe('a device that goes away half-way through the bundle', () => {
+  it('releases the handler instead of waiting forever for a drain', async () => {
+    // A response whose buffer is always full and whose socket then closes:
+    // the `drain` the handler used to wait for is never coming.
+    const { EventEmitter } = await import('node:events')
+    const response = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      destroyed: false,
+      writableEnded: false,
+      writeHead() {
+        this.headersSent = true
+      },
+      write() {
+        return false
+      },
+      end() {
+        this.writableEnded = true
+      },
+    })
+    const request = { method: 'GET', url: '/api/bundle', headers: { authorization: `Bearer ${TOKEN}` } }
+
+    const handled = sync.handle(request, response)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    response.destroyed = true
+    response.emit('close')
+
+    const outcome = await Promise.race([handled.then(() => 'released'), new Promise((resolve) => setTimeout(() => resolve('stuck'), 2_000))])
+    expect(outcome).toBe('released')
+    expect(response.writableEnded).toBe(false) // nothing was written to a closed socket
+  })
+})
+
 describe('a request that is not an address', () => {
   it('survives GET /%ZZ without a token, and keeps serving', async () => {
     // Nothing checks the token before the static file server, so anyone on

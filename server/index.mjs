@@ -291,14 +291,28 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
         'transfer-encoding': 'chunked',
       })
       const files = await store.list()
+      // A device that goes away half-way through — a tab closed, a phone that
+      // lost its signal — must release this handler: waiting on a `drain`
+      // that a closed socket will never send would keep the vault's files
+      // being read for nobody, once per such device, for as long as the
+      // server runs.
+      let gone = response.destroyed || response.writableEnded
+      response.once('close', () => {
+        gone = true
+      })
       response.write(JSON.stringify({ type: 'head', files: files.length, notes: files.filter((f) => f.isMarkdown).length }) + '\n')
       for await (const note of store.readAllMarkdown()) {
+        if (gone) return
         // Back-pressure: a fast disk must not outrun a slow connection into an
         // unbounded write buffer.
         if (!response.write(JSON.stringify({ type: 'note', ...note }) + '\n')) {
-          await new Promise((resolve) => response.once('drain', resolve))
+          await new Promise((resolve) => {
+            response.once('drain', resolve)
+            response.once('close', resolve)
+          })
         }
       }
+      if (gone) return
       for (const file of files) {
         if (file.isMarkdown) continue
         response.write(JSON.stringify({ type: 'attachment', ...file }) + '\n')

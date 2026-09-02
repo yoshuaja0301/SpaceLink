@@ -18,7 +18,7 @@
  */
 import type { NotePath, VaultAdapter, VaultFile } from '../../types'
 
-import { mimeTypeOf } from './paths'
+import { mimeTypeOf, normalizePath } from './paths'
 
 /** The file the export button writes. */
 export interface VaultExport {
@@ -125,10 +125,18 @@ export function parseImport(data: unknown): ParsedImport {
   const source = object && 'notes' in object ? object.notes : data
 
   const notes: [NotePath, string][] = []
+  const unreadable: NotePath[] = []
   const pushNote = (path: unknown, content: unknown): void => {
     if (typeof path !== 'string' || path.trim() === '') return
     if (typeof content !== 'string') return
-    notes.push([path.trim(), content])
+    // The file may have been written by anything. A path the vault cannot
+    // hold (`../outside.md`) would become a note that shows as unsaved and can
+    // never be saved; it is named as lost instead, like an unreadable image.
+    try {
+      notes.push([normalizePath(path.trim()), content])
+    } catch {
+      unreadable.push(path.trim())
+    }
   }
 
   if (Array.isArray(source)) {
@@ -142,7 +150,6 @@ export function parseImport(data: unknown): ParsedImport {
   }
 
   const attachments: [NotePath, Blob][] = []
-  const unreadable: NotePath[] = []
   const raw = object?.attachments
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const [path, encoded] of Object.entries(raw as Record<string, unknown>)) {

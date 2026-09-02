@@ -131,6 +131,16 @@ describe('parseImport', () => {
     expect(parsed.attachments.map(([path]) => path)).toEqual(['ok.png'])
   })
 
+  it('names a note whose path the vault cannot hold, instead of importing it as a phantom', () => {
+    const parsed = parseImport({ notes: { '../outside.md': 'x', 'ok.md': 'y', 'a//b.md': 'z', ' padded.md ': 'p' } })
+    expect(parsed.notes).toEqual([
+      ['ok.md', 'y'],
+      ['a/b.md', 'z'],
+      ['padded.md', 'p'],
+    ])
+    expect(parsed.unreadable).toEqual(['../outside.md'])
+  })
+
   it('ignores a malformed attachments block', () => {
     for (const attachments of [null, 'nope', 42, ['a.png']]) {
       expect(parseImport({ notes: { 'a.md': 'A' }, attachments }).attachments).toEqual([])
