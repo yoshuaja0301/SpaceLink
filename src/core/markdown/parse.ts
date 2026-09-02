@@ -70,24 +70,50 @@ function indexOfSeq(chars: string[], needle: string, from: number): number {
   return -1
 }
 
-/** True when `[start, end)` contains a blank line (code spans may not). */
-function containsBlankLine(chars: string[], start: number, end: number): boolean {
-  let sawNewline = false
-  let blankSoFar = true
-  for (let i = start; i < end; i += 1) {
-    const c = chars[i]
-    if (c === '\n') {
-      if (sawNewline && blankSoFar) return true
-      sawNewline = true
-      blankSoFar = true
-    } else if (sawNewline && c !== ' ' && c !== '\t' && c !== '\r') {
-      blankSoFar = false
-    }
+/** Is the character at `k` whitespace, or is `k` past the end? */
+function blankAt(chars: string[], k: number): boolean {
+  return k >= chars.length || chars[k] === ' ' || chars[k] === '\t' || chars[k] === '\n' || chars[k] === '\r'
+}
+
+/** Does the text starting at `j` (first non-blank of a line) open a new block? */
+function startsBlock(chars: string[], j: number): boolean {
+  const c = chars[j]
+  if (c === '>') return true
+  if (c === '-' || c === '+' || c === '*') return blankAt(chars, j + 1)
+  if (c === '`' || c === '~') return chars[j + 1] === c && chars[j + 2] === c
+  if (c === '#') {
+    let k = j
+    while (k < chars.length && chars[k] === '#' && k - j < 6) k += 1
+    return blankAt(chars, k)
+  }
+  if (c !== undefined && c >= '0' && c <= '9') {
+    let k = j
+    while (k < chars.length && (chars[k] as string) >= '0' && (chars[k] as string) <= '9' && k - j < 9) k += 1
+    return (chars[k] === '.' || chars[k] === ')') && blankAt(chars, k + 1)
   }
   return false
 }
 
-const FENCE_OPEN = /^([ \t]*)(`{3,}|~{3,})(.*)$/
+/**
+ * True when a code span from `start` to `end` would cross into a line that
+ * starts a new block: a blank line, a heading, a list item, a blockquote or a
+ * fence. A span may run on to the next line of its own paragraph, but not out
+ * of the paragraph — `- use ` for code` and `- and ` there` are two list items
+ * with a backtick each, not one code span hiding everything between them.
+ */
+function crossesBlockBoundary(chars: string[], start: number, end: number): boolean {
+  for (let i = start; i < end; i += 1) {
+    if (chars[i] !== '\n') continue
+    let j = i + 1
+    while (j < chars.length && (chars[j] === ' ' || chars[j] === '\t')) j += 1
+    if (blankAt(chars, j) || startsBlock(chars, j)) return true
+  }
+  return false
+}
+
+// The optional list marker: `- ```js` opens a fence on the bullet line, and the
+// reading view shows a code block for it. Its indent is the fence's column.
+const FENCE_OPEN = /^([ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?)(`{3,}|~{3,})(.*)$/
 const FENCE_CLOSE = /^([ \t]*)(`{3,}|~{3,})[ \t]*$/
 
 interface Fence {
@@ -196,7 +222,7 @@ function buildMask(body: string): string {
           j += 1
         }
       }
-      if (close !== -1 && !containsBlankLine(out, i, close)) {
+      if (close !== -1 && !crossesBlockBoundary(out, i, close)) {
         blank(out, i, close)
         i = close
       } else {
@@ -287,6 +313,13 @@ function wikiLinkRegex(): RegExp {
   return /(!?)\[\[([^[\]\n]*)\]\]/g
 }
 
+/** Is the character at `at` preceded by an odd run of backslashes? */
+function isEscaped(text: string, at: number): boolean {
+  let backslashes = 0
+  for (let i = at - 1; i >= 0 && text[i] === '\\'; i -= 1) backslashes += 1
+  return backslashes % 2 === 1
+}
+
 export function extractWikiLinks(body: string, bodyOffset: number): WikiLink[] {
   const { mask, lineStarts } = getContext(body)
   const re = wikiLinkRegex()
@@ -294,6 +327,9 @@ export function extractWikiLinks(body: string, bodyOffset: number): WikiLink[] {
   let m: RegExpExecArray | null
 
   while ((m = re.exec(mask)) !== null) {
+    // `\[[Not A Link]]` is literal text in the reading view: the backslash
+    // escapes the bracket. (An escaped backslash, `\\[[x]]`, escapes nothing.)
+    if (isEscaped(mask, m.index + m[1]!.length)) continue
     const inner = m[2]!
     const pipe = inner.indexOf('|')
     const linkPart = pipe === -1 ? inner : inner.slice(0, pipe)
@@ -581,16 +617,56 @@ const ATX = /^( {0,3})(#{1,6})(?:[ \t]+(.*))?$/
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/
 const LIST_MARKER = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/
 
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
+
+function decodeEntity(code: string): string {
+  if (code[0] !== '#') return NAMED_ENTITIES[code.toLowerCase()] ?? ''
+  const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10)
+  return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''
+}
+
+/**
+ * The id-safe form of a heading's text. This is *the* slug: the renderer puts
+ * it on the heading (see `headingElementId`), the outline and the palette look
+ * headings up by it, and `[[Note#Heading]]` resolves through it — so it works
+ * from the heading's source text, not from what it renders to, and strips the
+ * inline syntax a reader would not think of as part of the heading's name.
+ */
 export function slugifyHeading(text: string): string {
   return text
     .replace(/!?\[\[([^[\]\n]*)\]\]/g, (_m, inner: string) => wikiDisplay(inner))
     .replace(/!?\[([^[\]\n]*)\]\([^[)\n]*\)/g, '$1')
+    // Inline HTML is not heading text, and an entity stands for one character.
+    .replace(/<\/?[a-zA-Z][^<>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (_m, code: string) => decodeEntity(code))
+    // Emphasis underscores: `_em_ text` is "em text". The underscores inside a
+    // word (snake_case) stay.
+    .replace(/(^|\s)_+/g, '$1')
+    .replace(/_+(?=\s|$)/g, '')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s_-]+/gu, '')
     .trim()
     .replace(/\s+/g, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '')
+}
+
+/**
+ * The `id` the renderer puts on the heading with `slug`. It is not the bare
+ * slug: DOMPurify drops an id that names a property of `document` or of a form
+ * (`links`, `body`, `title`, `images`, `style`, …), so `## Links` would render
+ * with no id at all and nothing could scroll to it — and any id becomes a
+ * global on `window`, where `## Process` would shadow the `process` that
+ * bundled libraries test for. A prefix keeps every heading reachable and no
+ * heading a name.
+ */
+export function headingElementId(slug: string): string {
+  return `h-${slug}`
+}
+
+/** The slug behind an id `headingElementId` produced; '' for any other id. */
+export function slugOfHeadingId(id: string): string {
+  return id.startsWith('h-') ? id.slice(2) : ''
 }
 
 /** Could `line` be the text of a setext heading? */
@@ -611,7 +687,8 @@ export function extractHeadings(body: string, bodyOffset: number): HeadingRef[] 
   const slugCounts = new Map<string, number>()
 
   const push = (level: number, rawText: string, start: number, line: number): void => {
-    const text = rawText.trim()
+    // A setext heading's text can run over several lines.
+    const text = rawText.trim().replace(/[ \t]*\r?\n[ \t]*/g, ' ')
     const base = slugifyHeading(text)
     // A heading with no slug gets no id from the renderer, so it stays out of
     // the `-2`/`-3` numbering too.
@@ -626,8 +703,13 @@ export function extractHeadings(body: string, bodyOffset: number): HeadingRef[] 
     })
   }
 
-  /** Previous line: masked text drives the structural tests, `start`/`length` slice the real text. */
-  let previous: { masked: string; start: number; length: number; line: number; isHeading: boolean } | null = null
+  /**
+   * The run of lines above the current one that an underline would turn into
+   * a setext heading — all of them, since a paragraph of several lines is one
+   * heading. The masked text drove the structural tests; `start`/`end` slice
+   * the real text.
+   */
+  let run: { start: number; end: number; line: number } | null = null
 
   for (let li = 0; li < lineStarts.length; li += 1) {
     const lineStart = lineStarts[li]!
@@ -637,26 +719,33 @@ export function extractHeadings(body: string, bodyOffset: number): HeadingRef[] 
 
     const atx = ATX.exec(line)
     if (atx) {
-      // `atx[0] === line`, so the text capture ends the line: take the same
-      // span out of the *original* body so masked inline code survives.
-      const captured = atx[3] ?? ''
-      const textStart = lineStart + line.length - captured.length
+      // The text is sliced out of the *original* body so masked inline code
+      // survives — from the first non-blank after the `#`s, found in the body
+      // rather than in the mask, where a code span at the start of the heading
+      // is blanks the regex would have skipped along with the real ones.
+      const lineLimit = lineStart + line.length
+      let textStart = lineStart + atx[1]!.length + atx[2]!.length
+      while (textStart < lineLimit && (body[textStart] === ' ' || body[textStart] === '\t')) textStart += 1
       // Drop an optional closing sequence: `## Title ##`.
-      const raw = body.slice(textStart, lineStart + line.length).replace(/(^|[ \t])#+[ \t]*$/, '$1')
+      const raw = body.slice(textStart, lineLimit).replace(/(^|[ \t])#+[ \t]*$/, '$1')
       push(atx[2]!.length, raw, lineStart + atx[1]!.length, lineNo)
-      previous = { masked: line, start: lineStart, length: line.length, line: lineNo, isHeading: true }
+      run = null
       continue
     }
 
     const setext = SETEXT.exec(line)
-    if (setext && previous && !previous.isHeading && isSetextCandidate(previous.masked)) {
-      const text = body.slice(previous.start, previous.start + previous.length)
-      push(setext[1]!.startsWith('=') ? 1 : 2, text, previous.start, previous.line)
-      previous = { masked: line, start: lineStart, length: line.length, line: lineNo, isHeading: true }
+    if (setext && run) {
+      push(setext[1]!.startsWith('=') ? 1 : 2, body.slice(run.start, run.end), run.start, run.line)
+      run = null
       continue
     }
 
-    previous = { masked: line, start: lineStart, length: line.length, line: lineNo, isHeading: false }
+    if (isSetextCandidate(line)) {
+      if (run) run.end = lineStart + line.length
+      else run = { start: lineStart, end: lineStart + line.length, line: lineNo }
+    } else {
+      run = null
+    }
   }
 
   return out

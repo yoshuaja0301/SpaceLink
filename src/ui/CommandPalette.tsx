@@ -14,6 +14,7 @@
  * from ever disagreeing.
  */
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import { headingElementId } from '../core/markdown/parse'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Command, HeadingRef, MatchRange, Note, NotePath } from '../types'
@@ -157,7 +158,7 @@ function quickSwitchRows(query: string, notes: Map<NotePath, Note>): Row[] {
 
 /**
  * Put the caret on the heading in the editor and scroll the preview to the
- * matching anchor (`render.ts` gives every heading `id="slug"`).
+ * matching anchor (`render.ts` gives every heading `headingElementId(slug)` as its id).
  */
 function goToHeading(path: NotePath, heading: HeadingRef): void {
   const state = useAppStore.getState()
@@ -171,7 +172,7 @@ function goToHeading(path: NotePath, heading: HeadingRef): void {
   }
 
   if (typeof document === 'undefined') return
-  const anchor = document.getElementById(heading.slug)
+  const anchor = document.getElementById(headingElementId(heading.slug))
   if (anchor && typeof anchor.scrollIntoView === 'function') anchor.scrollIntoView({ block: 'start' })
 }
 

@@ -34,7 +34,8 @@
  * Heading ids follow the same "must agree with the other module" discipline:
  * they are `slugifyHeading(text)` de-duplicated per note exactly the way
  * `extractHeadings` in ./parse numbers repeats (`log`, `log-2`, `log-3`), so
- * `document.getElementById(heading.slug)` finds the heading the parser meant.
+ * `document.getElementById(headingElementId(heading.slug))` finds the heading
+ * the parser meant. (The id is prefixed: see `headingElementId`.)
  */
 import MarkdownIt from 'markdown-it'
 import type {
@@ -49,7 +50,7 @@ import DOMPurify from 'dompurify'
 import type { Config as PurifyConfig } from 'dompurify'
 
 import type { NoteFrontmatter, NotePath } from '../../types'
-import { parseFrontmatter, slugifyHeading } from './parse'
+import { headingElementId, parseFrontmatter, slugifyHeading } from './parse'
 
 export interface RenderContext {
   currentPath: NotePath
@@ -422,14 +423,32 @@ function extractHeadingSection(body: string, heading: string): BodySlice {
   return { text: lines.slice(startIdx, endIdx).join('\n'), line: startIdx }
 }
 
-/** `![[Note#^id]]` — the block (paragraph / list) tagged with `^id`. */
+/** A line that is a block of its own: a heading, a fence or a thematic break. */
+const OWN_BLOCK = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|```|~~~|(?:[-*_][ \t]*){3,}$)/
+const LIST_ITEM_START = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/
+
+/**
+ * `![[Note#^id]]` — the block (paragraph / list item) tagged with `^id`: the
+ * lines above the marker back to the start of *that* block, not back to the
+ * previous blank line. A heading, a fence or a rule is never part of it, and a
+ * list item begins it — `- item\nmore ^id` is one item, the second line its
+ * continuation, and the item is what gets embedded.
+ */
 function extractBlock(body: string, blockId: string): BodySlice {
   const lines = body.split('\n')
   const marker = new RegExp(`\\s\\^${blockId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`)
   for (let i = 0; i < lines.length; i += 1) {
     if (!marker.test(lines[i] as string)) continue
     let from = i
-    while (from > 0 && (lines[from - 1] as string).trim() !== '') from -= 1
+    const own = lines[i] as string
+    if (!OWN_BLOCK.test(own) && !LIST_ITEM_START.test(own)) {
+      while (from > 0) {
+        const above = lines[from - 1] as string
+        if (above.trim() === '' || OWN_BLOCK.test(above)) break
+        from -= 1
+        if (LIST_ITEM_START.test(above)) break
+      }
+    }
     const block = lines.slice(from, i + 1)
     block[block.length - 1] = (block[block.length - 1] as string).replace(marker, '')
     return { text: block.join('\n'), line: from }
@@ -840,7 +859,8 @@ function calloutRule(state: StateCore): void {
     tokens.splice(i + 1, 3, ...replacement)
     const shift = replacement.length - 3
     tokens.splice(closeIdx + shift, 0, bodyClose)
-    i = closeIdx + shift
+    // Not skipped to the close: a callout can hold another callout, and the
+    // inner one's `blockquote_open` is up ahead inside this one's body.
   }
 }
 
@@ -986,12 +1006,32 @@ function inlineText(token: Token): string {
   return out
 }
 
+const ATX_SOURCE = /^ {0,3}#{1,6}(?:[ \t]+(.*))?$/
+
+/**
+ * The heading's text as written in the source — what `extractHeadings` slugs.
+ * Null when the heading sits inside a container (`> # Quoted`), which the
+ * parser does not index either.
+ */
+function headingSourceText(lines: string[], open: Token): string | null {
+  const map = open.map
+  if (!map) return null
+  if (open.markup.startsWith('#')) {
+    const m = ATX_SOURCE.exec(lines[map[0]] ?? '')
+    if (!m) return null
+    return (m[1] ?? '').replace(/(^|[ \t])#+[ \t]*$/, '$1')
+  }
+  // Setext: every line above the underline is the heading.
+  return lines.slice(map[0], map[1] - 1).join('\n')
+}
+
 function headingRule(state: StateCore): void {
   const tokens = state.tokens
   // Repeats are numbered per note, exactly as `extractHeadings` numbers them —
   // core rules run once per `render`, and an embed renders through its own
   // `renderBody`, so this counter never leaks across a note boundary.
   const slugCounts = new Map<string, number>()
+  let lines: string[] | null = null
   for (let i = 0; i < tokens.length - 1; i += 1) {
     const open = tokens[i] as Token
     if (open.type !== 'heading_open') continue
@@ -1001,12 +1041,16 @@ function headingRule(state: StateCore): void {
     // The outline panel and the command palette look the heading up by the slug
     // `extractHeadings` reported, so the id has to match that one exactly —
     // numbering included, and duplicate ids would break `getElementById` anyway.
-    const base = slugifyHeading(inlineText(inline))
+    // It is slugged from the same source text the parser read: `_em_`, `&amp;`,
+    // inline HTML and a wiki link all render to something other than their
+    // spelling, and the parser never sees the rendering.
+    lines ??= state.src.split('\n')
+    const base = slugifyHeading(headingSourceText(lines, open) ?? inlineText(inline))
     if (!base) continue
     const seen = slugCounts.get(base) ?? 0
     slugCounts.set(base, seen + 1)
     const slug = seen === 0 ? base : `${base}-${seen + 1}`
-    open.attrSet('id', slug)
+    open.attrSet('id', headingElementId(slug))
 
     const anchor = new state.Token('sf_heading_anchor', '', 0)
     anchor.meta = { slug }

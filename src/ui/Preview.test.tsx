@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { headingElementId } from '../core/markdown/parse'
 import { act } from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
@@ -224,7 +225,22 @@ describe('Preview — navigation', () => {
     fireEvent.click(anchor)
 
     expect(window.location.hash).toBe('#second-part')
-    expect(container.querySelector('h2')?.id).toBe('second-part')
+    expect(container.querySelector('h2')?.id).toBe(headingElementId('second-part'))
+  })
+
+  it('scrolls to the footnote a footnote ref points at, whose id is not a heading id', () => {
+    seed({ 'A.md': 'Text[^1] here.\n\n[^1]: The note.\n' })
+
+    const { container } = render(<Preview path="A.md" paneId={PANE_ID} />)
+    const ref = container.querySelector<HTMLAnchorElement>('a[href="#fn-1"]')!
+    const footnote = container.querySelector<HTMLElement>('#fn-1')!
+    const spy = vi.fn() // jsdom does not implement scrollIntoView
+    Object.defineProperty(footnote, 'scrollIntoView', { configurable: true, value: spy })
+
+    fireEvent.click(ref)
+
+    expect(window.location.hash).toBe('#fn-1')
+    expect(spy).toHaveBeenCalled()
   })
 
   it('leaves external links to the browser', () => {

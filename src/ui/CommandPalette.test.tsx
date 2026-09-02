@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { headingElementId } from '../core/markdown/parse'
 import { act } from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
@@ -340,8 +341,20 @@ describe('CommandPalette — headings', () => {
 
     type('mid')
     expect(titles()).toEqual(['Middle bit'])
-    key('Enter')
-    expect(openPath).toHaveBeenCalledWith('Structure.md', { heading: 'middle-bit' })
+    // The reading view's heading carries the prefixed id; that is what the
+    // palette has to scroll to.
+    const rendered = document.createElement('h2')
+    rendered.id = headingElementId('middle-bit')
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(rendered, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    document.body.appendChild(rendered)
+    try {
+      key('Enter')
+      expect(openPath).toHaveBeenCalledWith('Structure.md', { heading: 'middle-bit' })
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    } finally {
+      rendered.remove()
+    }
     expect(useAppStore.getState().palette).toBe(null)
   })
 

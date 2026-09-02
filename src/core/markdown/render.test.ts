@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { loadMath, renderInline, renderMarkdown } from './render'
 import type { RenderContext } from './render'
-import { extractHeadings, slugifyHeading } from './parse'
+import { extractHeadings, headingElementId, parseNote, slugOfHeadingId, slugifyHeading } from './parse'
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -776,7 +776,9 @@ describe('headings', () => {
     const el = render('## Hello, World!\n\ntext')
     const slug = slugifyHeading('Hello, World!')
     const h2 = el.querySelector('h2')!
-    expect(h2.getAttribute('id')).toBe(slug)
+    // The id is prefixed (see `headingElementId`); the anchor's href is the bare
+    // slug, which is what the address bar shows.
+    expect(h2.getAttribute('id')).toBe(headingElementId(slug))
     const anchor = h2.querySelector('a.heading-anchor')!
     expect(anchor.getAttribute('href')).toBe(`#${slug}`)
   })
@@ -784,13 +786,13 @@ describe('headings', () => {
   it('slugs headings containing wiki links and tags', () => {
     const el = render('# Notes on [[Known|Topic]] and #meta')
     const h1 = el.querySelector('h1')!
-    expect(h1.getAttribute('id')).toBe(slugifyHeading('Notes on Topic and #meta'))
+    expect(h1.getAttribute('id')).toBe(headingElementId(slugifyHeading('Notes on Topic and #meta')))
   })
 
   it('numbers repeated headings exactly as extractHeadings does', () => {
     const source = '# Daily\n\n## Log\n\nfirst\n\n## Log\n\nsecond\n\n## Log\n\nthird'
     const el = render(source)
-    const ids = Array.from(el.querySelectorAll('h1, h2')).map((h) => h.getAttribute('id'))
+    const ids = Array.from(el.querySelectorAll('h1, h2')).map((h) => slugOfHeadingId(h.getAttribute('id') ?? ''))
 
     expect(ids).toEqual(['daily', 'log', 'log-2', 'log-3'])
     // The outline panel and the palette look headings up by the parser's slug.
@@ -800,7 +802,7 @@ describe('headings', () => {
 
     for (const h of Array.from(el.querySelectorAll('h2'))) {
       const anchor = h.querySelector('a.heading-anchor')!
-      expect(anchor.getAttribute('href')).toBe(`#${h.getAttribute('id')}`)
+      expect(anchor.getAttribute('href')).toBe(`#${slugOfHeadingId(h.getAttribute('id') ?? '')}`)
     }
   })
 
@@ -809,12 +811,12 @@ describe('headings', () => {
     const el = render(source, { ...vaultCtx, currentPath: 'Host.md' })
     const hostIds = Array.from(el.querySelectorAll('h2'))
       .filter((h) => h.closest('.embed-body') === null)
-      .map((h) => h.getAttribute('id'))
+      .map((h) => slugOfHeadingId(h.getAttribute('id') ?? ''))
 
     expect(hostIds).toEqual(extractHeadings(source, 0).map((h) => h.slug))
     expect(hostIds).toEqual(['log', 'log-2'])
     // The embed numbers from its own file, so its slugs match its own parse.
-    expect(el.querySelector('.embed-body h2')!.getAttribute('id')).toBe('log')
+    expect(el.querySelector('.embed-body h2')!.getAttribute('id')).toBe(headingElementId('log'))
   })
 })
 
@@ -972,5 +974,139 @@ describe('repeated rendering', () => {
     const el = dom(renderMarkdown('b[^one] plain', ctx()))
     expect(el.querySelector('section.footnotes')).toBeNull()
     expect(el.textContent).toContain('[^one]')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * What the reading view shows has to be what the index saw
+ * ------------------------------------------------------------------ */
+
+describe('heading ids the outline can always find', () => {
+  for (const heading of ['Links', 'Body', 'Title', 'Children', 'Location', 'Images', 'Style', 'Forms']) {
+    it(`## ${heading} keeps an id, although the sanitizer would strip the bare slug`, () => {
+      const src = `# Note\n\n## ${heading}\n\ntext`
+      const slug = parseNote(src, 'A.md').headings[1]!.slug
+      const el = render(src)
+      expect(el.querySelector('h2')!.getAttribute('id')).toBe(headingElementId(slug))
+    })
+  }
+
+  it('never puts a bare name on the page that a bundled library could mistake for a global', () => {
+    // `typeof process` is tested somewhere in every bundle; an element with
+    // `id="process"` would answer "object".
+    const el = render('## Process\n\n## Module\n\n## Exports')
+    for (const h of Array.from(el.querySelectorAll('h2'))) expect(h.id.startsWith('h-')).toBe(true)
+    expect(el.querySelector('#process')).toBeNull()
+  })
+})
+
+describe('the rendered id matches the parser slug for every heading spelling', () => {
+  const cases = [
+    '## _em_ text',
+    '## __bold__ text',
+    '## [[Note#Head]]',
+    '## A &amp; B',
+    '## <b>x</b> y',
+    '## `code` and *stars*',
+    '## Title ##',
+    'line one\nline two\n===',
+  ]
+  for (const src of cases) {
+    it(JSON.stringify(src), () => {
+      const slug = parseNote(src, 'A.md').headings[0]!.slug
+      const el = render(src)
+      expect(el.querySelector('h1, h2')!.getAttribute('id')).toBe(headingElementId(slug))
+    })
+  }
+
+  it('an image in one heading does not renumber a later duplicate', () => {
+    const src = '## ![alt](i.png) Title\n\n## Title'
+    const slugs = parseNote(src, 'A.md').headings.map((h) => h.slug)
+    const ids = Array.from(render(src).querySelectorAll('h2')).map((h) => h.id)
+    expect(ids).toEqual(slugs.map(headingElementId))
+  })
+
+  it('falls back to the rendered text for a heading the parser does not index', () => {
+    // `> # Quoted` lives inside a container; the parser lists no heading for it,
+    // and the renderer still gives it a usable id.
+    expect(render('> # Quoted').querySelector('h1')!.id).toBe(headingElementId('quoted'))
+  })
+})
+
+describe('nested callouts', () => {
+  it('renders an inner [!warning] inside an outer [!note] as a callout too', () => {
+    const el = render('> [!note] Outer\n> text\n> > [!warning] Inner\n> > inner text')
+    const outer = el.querySelector('div.callout[data-callout="note"]')!
+    const inner = outer.querySelector('.callout-body div.callout[data-callout="warning"]')!
+    expect(inner).not.toBeNull()
+    expect(inner.querySelector('.callout-title')!.textContent).toBe('Inner')
+    expect(el.textContent).not.toContain('[!warning]')
+  })
+})
+
+describe('![[Note#^id]] embeds the block that carries the id, and nothing above it', () => {
+  const B = '# Intro\nfirst paragraph\n## Log\n- a list item\nthe block ^blk\n\n- x\n- y\nalone ^al\n\npara one\npara two ^p2\n## Head ^hd\ntext\n## Under\nright under ^ru'
+  const embedCtx: Partial<RenderContext> = {
+    currentPath: 'A.md',
+    resolveLink: (t) => (t === 'B' ? 'B.md' : null),
+    getEmbedContent: (p) => (p === 'B.md' ? B : null),
+  }
+  const body = (id: string): string => render(`![[B#^${id}]]`, embedCtx).querySelector('.embed-body')!.innerHTML
+
+  it('stops at the heading above, not at the previous blank line', () => {
+    const html = body('blk')
+    expect(html).toContain('the block')
+    expect(html).not.toContain('<h1')
+    expect(html).not.toContain('<h2')
+    expect(html).not.toContain('first paragraph')
+    // `the block` is a lazy continuation of the list item, so the item is the
+    // block — the way the reading view lays it out.
+    expect(html).toContain('a list item')
+  })
+
+  it('a lazy continuation of a later item embeds that item alone', () => {
+    const html = body('al')
+    expect(html).toContain('alone')
+    expect(html).toContain('<li>y')
+    expect(html).not.toContain('<li>x')
+  })
+
+  it('a paragraph of two lines is embedded whole', () => {
+    const html = body('p2')
+    expect(html).toContain('para one')
+    expect(html).toContain('para two')
+    expect(html).not.toContain('alone')
+  })
+
+  it('a paragraph directly under a heading does not take the heading with it', () => {
+    const html = body('ru')
+    expect(html).toContain('right under')
+    expect(html).not.toContain('<h2')
+    expect(html).not.toContain('Under')
+  })
+
+  it('a heading carrying the id is a block of its own', () => {
+    const html = body('hd')
+    expect(html).toContain('<h2')
+    expect(html).not.toContain('para two')
+  })
+})
+
+describe('a fence opened on the bullet line', () => {
+  it('is a code block in the reading view — and the parser masks it the same way', () => {
+    const src = '- ```js\n  [[InCode]] #intag\n  ```\n'
+    const el = render(src)
+    expect(el.querySelector('pre.code-block')).not.toBeNull()
+    expect(el.querySelector('.internal-link')).toBeNull()
+    expect(parseNote(src, 'A.md').links).toEqual([])
+  })
+})
+
+describe('a backslash-escaped [[link]]', () => {
+  it('is literal text in the reading view, and no link in the index', () => {
+    const el = render('see \\[[Not A Link]] here')
+    expect(el.querySelector('.internal-link')).toBeNull()
+    expect(el.textContent).toContain('[[Not A Link]]')
+    expect(parseNote('see \\[[Not A Link]] here', 'A.md').links).toEqual([])
   })
 })

@@ -33,6 +33,9 @@ export function extractTags(body: string, bodyOffset: number): TagRef[]
 export function extractHeadings(body: string, bodyOffset: number): HeadingRef[]
 export function extractTasks(body: string, bodyOffset: number): TaskRef[]
 export function slugifyHeading(text: string): string
+/** The `id` the renderer puts on the heading with `slug` (prefixed: `h-<slug>`), and its inverse. */
+export function headingElementId(slug: string): string
+export function slugOfHeadingId(id: string): string
 /** Strip markdown syntax down to readable prose (used for excerpts + search context). */
 export function toPlainText(markdown: string): string
 ```
@@ -360,7 +363,7 @@ rather than by threading props through the workspace. Both sides are binding.
 | Event | `detail` | Emitted by | Handled by |
 | --- | --- | --- | --- |
 | `spacefore:reveal-line` | `{ path: NotePath; line: number }` (0-based) | SearchPanel result rows, BacklinksPanel context lines | **Editor** — if its `path` matches, scroll the line into view and put the cursor on it. **Preview** — scroll to the rendered block carrying that line. |
-| `spacefore:reveal-heading` | `{ path: NotePath; slug: string; line: number }` | OutlinePanel | **Editor** — scroll to `line`. **Preview** — scroll `#slug` into view. |
+| `spacefore:reveal-heading` | `{ path: NotePath; slug: string; line: number }` | OutlinePanel | **Editor** — scroll to `line`. **Preview** — scroll the heading whose id is `headingElementId(slug)` into view. |
 | `spacefore:editor-scroll` | `{ paneId: string; ratio: number }` (0–1) | Editor, on scroll | **Preview** in the same pane, when `scrollSync` is on. |
 | `spacefore:preview-scroll` | `{ path: NotePath; slug: string }` | Preview, as a heading crosses the top of the viewport | **OutlinePanel** — highlights the current heading. |
 | `spacefore:open-vault-picker` | — | StatusBar, SettingsModal, commands | **App** |

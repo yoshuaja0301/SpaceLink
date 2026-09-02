@@ -13,7 +13,7 @@ import type { JSX, MouseEvent as ReactMouseEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type { NotePath } from '../types'
-import { slugifyHeading } from '../core/markdown/parse'
+import { headingElementId, slugOfHeadingId, slugifyHeading } from '../core/markdown/parse'
 import { renderMarkdown } from '../core/markdown/render'
 import { useAppStore } from '../state/store'
 import { useRenderContext } from './useRenderContext'
@@ -59,7 +59,7 @@ function asElement(target: EventTarget | null): Element | null {
 
 /** Attribute selector rather than `#id`: heading slugs are not CSS identifiers. */
 function idSelector(slug: string): string {
-  return `[id="${slug.replace(/["\\]/g, '\\$&')}"]`
+  return `[id="${headingElementId(slug).replace(/["\\]/g, '\\$&')}"]`
 }
 
 /** `CustomEvent.detail` narrowed to the loose record the window event contract describes. */
@@ -360,7 +360,7 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       // Headings of a transcluded note belong to that note, not to this one.
       if (heading.closest('.embed')) continue
       if (heading.getBoundingClientRect().top - top > HEADING_TOP_SLACK) break
-      slug = heading.id
+      slug = slugOfHeadingId(heading.id)
     }
     if (slug === reportedSlug.current) return
     reportedSlug.current = slug
@@ -393,9 +393,8 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
   }, [paneId, scrollSync])
 
   /** Bring a heading into view. The note may still be mounting, so retry once. */
-  const scrollToHeading = useCallback((slug: string) => {
-    if (!slug) return
-    const selector = idSelector(slug)
+  /** Scroll the first element `selector` finds into view — here, or in another pane's preview. */
+  const scrollToSelector = useCallback((selector: string) => {
     const find = (): boolean => {
       const local = hostRef.current?.querySelector(selector) ?? null
       // Opening in another pane renders the heading in a different Preview.
@@ -408,6 +407,13 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
     }
     if (!find()) nextFrame(() => void find())
   }, [])
+
+  const scrollToHeading = useCallback(
+    (slug: string) => {
+      if (slug) scrollToSelector(idSelector(slug))
+    },
+    [scrollToSelector],
+  )
 
   /**
    * Reveal a source line. The reading view has no per-line anchors, so the
@@ -564,11 +570,14 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
             /* a malformed escape is used verbatim */
           }
           updateHash(slug)
-          scrollToHeading(slug)
+          // A heading's `#` carries the bare slug and the heading's id is the
+          // prefixed form of it; a footnote ref names its target's id as is.
+          if (anchor.classList.contains('heading-anchor')) scrollToHeading(slug)
+          else scrollToSelector(`[id="${slug.replace(/["\\]/g, '\\$&')}"]`)
         }
       }
     },
-    [hideHover, ownerOf, paneId, scrollToHeading, toggleTask],
+    [hideHover, ownerOf, paneId, scrollToHeading, scrollToSelector, toggleTask],
   )
 
   /* ---- output ------------------------------------------------------- */

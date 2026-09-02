@@ -1,11 +1,13 @@
 import {
   extractHeadings,
+  headingElementId,
   extractMarkdownLinks,
   extractTags,
   extractTasks,
   extractWikiLinks,
   parseFrontmatter,
   parseNote,
+  slugOfHeadingId,
   slugifyHeading,
   toPlainText,
 } from './parse'
@@ -782,5 +784,78 @@ describe('excerpt does not repeat the title', () => {
   it('leaves an excerpt alone when the body does not open with the title', () => {
     const note = parseNote('# Alpha\n\nBeta gamma delta.\n', 'Alpha.md')
     expect(note.excerpt).toBe('Beta gamma delta.')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * What the index sees has to be what the reading view shows
+ * ------------------------------------------------------------------ */
+
+describe('the parser agrees with the reading view', () => {
+  it('does not count a backslash-escaped [[link]], which renders as literal text', () => {
+    expect(parseNote('see \\[[Not A Link]] here', 'A.md').links).toEqual([])
+    // An escaped backslash escapes nothing: `\\[[x]]` is a backslash then a link.
+    expect(parseNote('a \\\\[[Real]] b', 'A.md').links.map((l) => l.target)).toEqual(['Real'])
+    expect(parseNote('\\![[Embed]]', 'A.md').links.map((l) => l.target)).toEqual(['Embed'])
+  })
+
+  it('does not let a stray backtick in one list item swallow the items after it', () => {
+    // Each item is its own paragraph; a code span cannot run from one into
+    // the next, so the reading view shows the link, the tag and the task.
+    const src = '- use ` for code\n- [[Link]] here #tag\n- [ ] a task\n- and ` there'
+    const p = parseNote(src, 'A.md')
+    expect(p.links.map((l) => l.target)).toEqual(['Link'])
+    expect(p.tags.map((t) => t.tag)).toEqual(['tag'])
+    expect(p.tasks.map((t) => t.text)).toEqual(['a task'])
+  })
+
+  it('does not let a stray backtick hide a heading or a blockquote', () => {
+    const p = parseNote('Use ` in text\n# Heading [[x]]\nand ` here', 'A.md')
+    expect(p.headings.map((h) => h.slug)).toEqual(['heading-x'])
+    expect(p.links.map((l) => l.target)).toEqual(['x'])
+    expect(parseNote('a ` b\n> [[Quoted]] `', 'A.md').links.map((l) => l.target)).toEqual(['Quoted'])
+    expect(parseNote('a ` b\n1. [[Numbered]] `', 'A.md').links.map((l) => l.target)).toEqual(['Numbered'])
+  })
+
+  it('still lets a code span run on to the next line of its own paragraph', () => {
+    expect(parseNote('`multi\nline [[NotALink]]` span', 'A.md').links).toEqual([])
+    // A `#` that is not a heading, and a `-` that is not a bullet, do not end it either.
+    expect(parseNote('`code\n#hashtag [[x]]`', 'A.md').links).toEqual([])
+    expect(parseNote('`code\n-dash [[x]]`', 'A.md').links).toEqual([])
+  })
+
+  it('masks a fence opened on the bullet line', () => {
+    const p = parseNote('- ```js\n  [[InCode]] #intag\n  ```\n- [[After]]', 'A.md')
+    expect(p.links.map((l) => l.target)).toEqual(['After'])
+    expect(p.tags).toEqual([])
+    expect(parseNote('1. ```\n   [[in]]\n   ```', 'A.md').links).toEqual([])
+  })
+
+  it('takes every line of a multi-line setext heading, as the reading view does', () => {
+    const headings = extractHeadings('line one\nline two\n===\n\nafter', 0)
+    expect(headings).toEqual([{ level: 1, text: 'line one line two', slug: 'line-one-line-two', start: 0, line: 1 }])
+  })
+})
+
+describe('slugifyHeading strips what a reader would not call part of the name', () => {
+  it('drops emphasis underscores but keeps snake_case', () => {
+    expect(slugifyHeading('_em_ text')).toBe('em-text')
+    expect(slugifyHeading('__bold__ text')).toBe('bold-text')
+    expect(slugifyHeading('snake_case stays')).toBe('snake_case-stays')
+  })
+
+  it('drops inline HTML and decodes entities', () => {
+    expect(slugifyHeading('<b>x</b> y')).toBe('x-y')
+    expect(slugifyHeading('A &amp; B')).toBe('a-b')
+    expect(slugifyHeading('caf&#233; &#x41;')).toBe('café-a')
+    expect(slugifyHeading('a &lt;b&gt; c')).toBe('a-b-c')
+  })
+})
+
+describe('heading element ids', () => {
+  it('prefix the slug, so no heading can lose its id to the sanitizer or become a global', () => {
+    expect(headingElementId('links')).toBe('h-links')
+    expect(slugOfHeadingId('h-links')).toBe('links')
+    expect(slugOfHeadingId('fn-1')).toBe('')
   })
 })
