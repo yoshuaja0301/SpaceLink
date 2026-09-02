@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -434,6 +434,72 @@ describe('change events', () => {
     expect(events.some((event) => String(event.path ?? '').endsWith('.tmp'))).toBe(false)
   })
 
+  it('notices a note the server itself saved being deleted, and put back, outside the app', async () => {
+    // Every save the server makes is an atomic replace; Node's emulated
+    // recursive watch on Linux reports nothing more about a file after one.
+    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacefore-client': 'device-a' }, body: '# Home\n\nsaved\n' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    const gone = await waitFor(
+      (event) => event.type === 'remove' && event.path === 'Home.md',
+      async () => {
+        await unlink(join(vault, 'Home.md'))
+      },
+    )
+    expect(gone.found, `saw ${JSON.stringify(gone.events)}`).toBe(true)
+
+    const back = await waitFor(
+      (event) => event.type === 'upsert' && event.path === 'Home.md',
+      async () => {
+        await writeFile(join(vault, 'Home.md'), '# Home\n\nsaved\n')
+      },
+    )
+    expect(back.found, `saw ${JSON.stringify(back.events)}`).toBe(true)
+  })
+
+  it('announces the notes inside a folder that arrived whole', async () => {
+    const staging = await mkdtemp(join(tmpdir(), 'spacefore-moved-'))
+    await mkdir(join(staging, 'Deeper'), { recursive: true })
+    await writeFile(join(staging, 'Inside.md'), '# Inside\n')
+    await writeFile(join(staging, 'Deeper/Further.md'), '# Further\n')
+    try {
+      // Both notes, in whatever order the folder is read.
+      const wanted = new Set(['Moved/Inside.md', 'Moved/Deeper/Further.md'])
+      const { found, events } = await waitFor(
+        (event) => {
+          if (event.type === 'upsert') wanted.delete(event.path)
+          return wanted.size === 0
+        },
+        async () => {
+          await rename(staging, join(vault, 'Moved'))
+        },
+      )
+      expect(found, `saw ${JSON.stringify(events)}`).toBe(true)
+    } finally {
+      await rm(join(vault, 'Moved'), { recursive: true, force: true })
+      await rm(staging, { recursive: true, force: true })
+    }
+  })
+
+  it('announces the notes of a folder that was moved out whole', async () => {
+    // Deleting a folder file by file is seen by that folder's own watch;
+    // moving the folder away is seen only by its parent, which says nothing
+    // about what was inside.
+    await call('/api/files') // so the store has seen Ideas/Seed.md
+    const parked = await mkdtemp(join(tmpdir(), 'spacefore-parked-'))
+    try {
+      const { found, events } = await waitFor(
+        (event) => event.type === 'remove' && event.path === 'Ideas/Seed.md',
+        async () => {
+          await rename(join(vault, 'Ideas'), join(parked, 'Ideas'))
+        },
+      )
+      expect(found, `saw ${JSON.stringify(events)}`).toBe(true)
+    } finally {
+      await rm(parked, { recursive: true, force: true })
+    }
+  })
+
   it('tags an API write with the device that made it, so it can ignore its own echo', async () => {
     const { events } = await waitFor(
       (event) => event.path === 'Home.md' && event.origin === 'device-a',
@@ -670,6 +736,40 @@ describe('the change stream accepts a query token', () => {
   })
 })
 
+
+describe('a vault with folders in it from the start', () => {
+  it('notices a note inside one of them changing in place', async () => {
+    // The root is watched before the tree is walked; the walk must still
+    // reach the folders that were already there.
+    const root = await mkdtemp(join(tmpdir(), 'spacefore-tree-'))
+    await mkdir(join(root, 'Ideas/Deeper'), { recursive: true })
+    await writeFile(join(root, 'Ideas/Seed.md'), '# Seed\n')
+    await writeFile(join(root, 'Ideas/Deeper/Leaf.md'), '# Leaf\n')
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(root, '__no_dist__') })
+    const controller = new AbortController()
+    /** @type {any[]} */
+    const seen = []
+    server.listeners.add({
+      write: (chunk) => {
+        for (const line of String(chunk).split('\n')) if (line.startsWith('data: ')) seen.push(JSON.parse(line.slice(6)))
+      },
+    })
+    const watcher = server.startWatching(controller.signal)
+    try {
+      expect(watcher).not.toBeNull()
+      await new Promise((resolve) => setTimeout(resolve, 300)) // the walk
+      await writeFile(join(root, 'Ideas/Seed.md'), '# Seed\n\nchanged in place\n')
+      await writeFile(join(root, 'Ideas/Deeper/Leaf.md'), '# Leaf\n\nchanged too\n')
+      const started = Date.now()
+      const wanted = () => ['Ideas/Seed.md', 'Ideas/Deeper/Leaf.md'].every((path) => seen.some((event) => event.type === 'upsert' && event.path === path))
+      while (!wanted() && Date.now() - started < 8_000) await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(wanted(), `saw ${JSON.stringify(seen)}`).toBe(true)
+    } finally {
+      controller.abort()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('a folder that vanishes while the watcher is scanning it', () => {
   /** A server of its own, so emitting an error here cannot disturb the rest. */

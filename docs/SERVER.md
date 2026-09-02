@@ -240,6 +240,12 @@ run `launchctl load ~/Library/LaunchAgents/com.spacefore.server.plist`.
 `which node` gives you the right path for the first string. The Mac still has to
 be awake for other devices to sync — check *Energy Saver* if it sleeps.
 
+On a Linux host, a `systemd` user service with the same command line does the
+same job. Linux has no folder watch that covers subfolders, so the server watches
+each folder of the vault on its own; a vault with tens of thousands of folders
+can run past the kernel's default allowance, in which case the server says so on
+stderr and `sysctl fs.inotify.max_user_watches=524288` raises it.
+
 ---
 
 ## When two devices edit the same note

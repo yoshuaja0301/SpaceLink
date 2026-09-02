@@ -16,7 +16,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 /** Prefix for the scratch file an atomic write moves into place. */
 export const TEMP_PREFIX = '.spacefore-tmp-'
 
-/** Directories never walked, written to, or served. */
+/** Directories never walked, watched, written to, or served. */
 const SKIP_DIRECTORIES = new Set(['.git', '.obsidian', '.spacefore', 'node_modules', '.trash', '.DS_Store'])
 
 /** @typedef {{ path: string, size: number, mtime: number, hash: string, isMarkdown: boolean }} VaultEntry */

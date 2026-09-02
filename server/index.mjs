@@ -20,16 +20,17 @@
  *    watcher's echo for the same content is dropped, so a device does not get
  *    told about its own save.
  */
+import { EventEmitter } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { watch as watchDirectory } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
-import { extname, join, resolve } from 'node:path'
+import { extname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { HELP, loadOrCreateToken, parseArgs, tokensMatch } from './config.mjs'
-import { TEMP_PREFIX, VaultConflictError, VaultNotFoundError, VaultPathError, VaultStore, hashOf } from './vaultStore.mjs'
+import { SKIP_DIRECTORIES, TEMP_PREFIX, VaultConflictError, VaultNotFoundError, VaultPathError, VaultStore, hashOf } from './vaultStore.mjs'
 
 /**
  * Where this file lives, used only to find `dist/`.
@@ -415,29 +416,31 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
   /**
    * Watch the folder so edits made outside the app reach every device.
    *
-   * The callback form rather than `fs/promises.watch`, because it hands back
-   * the watcher itself and that is the only place an `error` can be listened
-   * for. On Linux a recursive watch is emulated in JavaScript, and when a
-   * folder disappears while it is being scanned the resulting ENOENT is
-   * *emitted* as an error rather than surfacing through the iterator. An
-   * EventEmitter with no `error` listener rethrows what it was given, so with
-   * the promise form that ENOENT became an uncaught exception: deleting a
-   * folder inside your vault at the wrong moment could take the server with
-   * it. A `for await` around it cannot catch that, because it never travels
-   * through the iterator.
+   * On macOS and Windows the operating system offers a recursive watch and
+   * `fs.watch` uses it. Linux offers none, and Node emulates one in
+   * JavaScript — an emulation that, once a file has been replaced by an
+   * atomic save (which is every save this server makes), reports nothing
+   * more about that file: its later deletion and return go unseen, and the
+   * other devices are never told the note is gone, or back. So on Linux every
+   * folder is watched on its own. inotify on a folder reports each entry that
+   * appears, changes or goes, and a folder that appears is watched as it comes.
    *
-   * Returns the watcher so a test can put an error through it; nothing else
-   * needs it.
+   * Either way what comes back is one emitter with `change` (the event type
+   * and a path relative to the vault) and `error` events, and a `close()`.
+   * Its `error` listener matters: a folder deleted while it is being scanned
+   * is reported by *emitting* ENOENT, and an emitter with no listener rethrows
+   * what it is given — deleting a folder inside your vault at the wrong moment
+   * used to take the server with it. A test puts an error through the emitter
+   * to prove the listener is there; nothing else needs the return value.
+   *
+   * @param {AbortSignal} [signal]
+   * @param {'folders' | 'recursive'} [mode]
    */
-  function startWatching(signal) {
+  function startWatching(signal, mode = process.platform === 'linux' ? 'folders' : 'recursive') {
     if (signal?.aborted) return null
-    let watcher
-    try {
-      watcher = watchDirectory(store.root, { recursive: true })
-    } catch (error) {
-      process.stderr.write(`SpaceFore: could not watch the vault (${error?.message ?? error}).\n`)
-      return null
-    }
+    const watcher = new EventEmitter()
+    let stop = () => {}
+    watcher.close = () => stop()
 
     watcher.on('error', (error) => {
       // A folder that went away mid-scan. There is nothing to do about it and
@@ -447,8 +450,8 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
       watcher.close()
     })
 
-    // One at a time, in order, as the `for await` loop used to do: two events
-    // for the same file processed together would race over `isOwnEcho`.
+    // One at a time, in order: two events for the same file processed
+    // together would race over `isOwnEcho`.
     let queue = Promise.resolve()
     watcher.on('change', (_eventType, filename) => {
       queue = queue.then(() => announceChange(filename)).catch((error) => {
@@ -456,11 +459,153 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
       })
     })
 
+    try {
+      stop = mode === 'recursive' ? watchRecursively(store.root, watcher) : watchEachFolder(store.root, watcher, store)
+    } catch (error) {
+      process.stderr.write(`SpaceFore: could not watch the vault (${error?.message ?? error}).\n`)
+      return null
+    }
+
     signal?.addEventListener('abort', () => watcher.close(), { once: true })
     return watcher
   }
 
   return { store, handle, startWatching, listeners }
+}
+
+/**
+ * The operating system's own recursive watch, relayed. Returns what stops it.
+ * @param {string} root
+ * @param {EventEmitter} facade
+ */
+function watchRecursively(root, facade) {
+  const native = watchDirectory(root, { recursive: true })
+  native.on('error', (error) => facade.emit('error', error))
+  native.on('change', (type, name) => facade.emit('change', type, name))
+  return () => native.close()
+}
+
+/**
+ * One plain watch per folder, folders that appear included. Returns what
+ * stops them all.
+ *
+ * A folder that goes takes its notes with it, and inotify says nothing about
+ * those: the ones the store has seen are announced as gone from here, one by
+ * one. A folder that appears whole — moved in from elsewhere — has its notes
+ * announced the same way, since no watch was there to see them arrive.
+ *
+ * @param {string} root
+ * @param {EventEmitter} facade
+ * @param {VaultStore} store
+ */
+function watchEachFolder(root, facade, store) {
+  /** @type {Map<string, import('node:fs').FSWatcher>} */
+  const watchers = new Map()
+  let closed = false
+
+  /** @param {string} name */
+  const skipped = (name) => name.startsWith('.') || SKIP_DIRECTORIES.has(name)
+
+  /** Stop watching `folder` and everything under it. @param {string} folder */
+  const forget = (folder) => {
+    for (const [watched, native] of watchers) {
+      if (watched === folder || watched.startsWith(`${folder}${sep}`)) {
+        native.close()
+        watchers.delete(watched)
+      }
+    }
+  }
+
+  /**
+   * Start watching one folder. False when it is already watched, or when the
+   * system has run out of watches — that folder is then reported and skipped
+   * rather than costing the rest of the vault its watch.
+   * @param {string} folder
+   */
+  const watchFolder = (folder) => {
+    if (closed || watchers.has(folder)) return false
+    let native
+    try {
+      native = watchDirectory(folder)
+    } catch (error) {
+      if (error?.code === 'ENOSPC') {
+        process.stderr.write(
+          `SpaceFore: too many folders to watch; changes under ${folder} will not be noticed (raise fs.inotify.max_user_watches).\n`,
+        )
+        return false
+      }
+      throw error
+    }
+    native.on('error', (error) => {
+      // The folder itself went away: its watch is done, the others carry on.
+      if (error?.code === 'ENOENT') forget(folder)
+      else facade.emit('error', error)
+    })
+    native.on('change', (type, name) => {
+      if (name) void onEntry(folder, type, String(name))
+    })
+    watchers.set(folder, native)
+    return true
+  }
+
+  /**
+   * Watch `folder` and every folder below it; with `announce`, report every
+   * file found as well.
+   * @param {string} folder
+   * @param {boolean} announce
+   */
+  const walk = async (folder, announce) => {
+    // The root is watched before the walk starts; everything below it is
+    // watched here, and a folder the system cannot watch is not walked.
+    if (!watchers.has(folder) && !watchFolder(folder)) return
+    /** @type {import('node:fs').Dirent[]} */
+    let entries = []
+    try {
+      entries = await readdir(folder, { withFileTypes: true })
+    } catch {
+      return // gone again already
+    }
+    for (const entry of entries) {
+      if (skipped(entry.name)) continue
+      const child = join(folder, entry.name)
+      if (entry.isDirectory()) await walk(child, announce)
+      else if (announce && entry.isFile()) facade.emit('change', 'rename', relative(root, child))
+    }
+  }
+
+  /**
+   * @param {string} folder
+   * @param {string} type
+   * @param {string} name
+   */
+  const onEntry = async (folder, type, name) => {
+    const absolute = join(folder, name)
+    if (!skipped(name)) {
+      const info = await stat(absolute).catch(() => null)
+      if (info?.isDirectory()) {
+        if (!watchers.has(absolute)) await walk(absolute, true)
+        return
+      }
+      if (!info && watchers.has(absolute)) {
+        forget(absolute)
+        for (const known of store.hashes.keys()) {
+          if (known.startsWith(`${absolute}${sep}`)) facade.emit('change', 'rename', relative(root, known))
+        }
+        return
+      }
+    }
+    facade.emit('change', type, relative(root, absolute))
+  }
+
+  // The root is watched now, so a failure there is a failure to start; the
+  // rest of the tree follows as fast as it can be read.
+  watchFolder(root)
+  void walk(root, false).catch((error) => facade.emit('error', error))
+  return () => {
+    closed = true
+    for (const native of watchers.values()) native.close()
+    watchers.clear()
+  }
 }
 
 /**
