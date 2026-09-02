@@ -207,8 +207,13 @@ function cachedParse(spec: string): ParsedShortcut {
  */
 function eventKey(event: KeyboardEvent): string {
   const key = event.key
+  const code = event.code || ''
+  // With Option held, macOS reports the Option-layer character — `∫` for
+  // ⌥B — so no Alt+letter binding could ever match by `key`. The physical
+  // key is what the binding names.
+  if (event.altKey && /^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase()
+  if (event.altKey && /^Digit\d$/.test(code)) return code.slice(5)
   if (!key || key === 'Unidentified' || key === 'Dead' || key === 'Process') {
-    const code = event.code || ''
     if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase()
     if (/^Digit\d$/.test(code)) return code.slice(5)
     return ''
@@ -270,6 +275,12 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return element.closest('[contenteditable=""], [contenteditable="true"]') !== null
 }
 
+/** Is `target` inside a CodeMirror editor, as opposed to some other input? */
+function isInsideEditor(target: EventTarget | null): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false
+  return (target as Element).closest('.cm-editor') !== null
+}
+
 type PaletteMode = NonNullable<AppState['palette']>
 
 function openPalette(mode: PaletteMode): boolean {
@@ -321,7 +332,14 @@ export function useHotkeys(commands: Command[]): void {
         return
       }
 
+      // The palette owns the keyboard while it is open: its own keys were
+      // handled above, and what it does not claim (⌘↩ to open in a new tab,
+      // for one) must not fall through to a command aimed at the note behind
+      // it — which still has an editor registered, with no focus.
+      if (useAppStore.getState().palette !== null) return
+
       const typing = isEditableTarget(event.target)
+      const inEditor = typing && isInsideEditor(event.target)
 
       for (const command of commandsRef.current) {
         if (!command.shortcut) continue
@@ -329,6 +347,9 @@ export function useHotkeys(commands: Command[]): void {
         // While the caret is in an editor, only chorded shortcuts fire: a bare
         // key (or a plain Shift+key) belongs to whatever is being typed into.
         if (typing && !parsed.mod && !parsed.alt) continue
+        // An editor command aimed from another input — a search box, a rename
+        // field — would land in an editor that is not where the caret is.
+        if (typing && !inEditor && command.id.startsWith('editor:')) continue
         if (!matchesShortcut(event, parsed)) continue
         if (command.enabled && !command.enabled()) continue
         event.preventDefault()

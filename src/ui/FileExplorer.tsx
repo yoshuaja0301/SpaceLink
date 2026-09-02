@@ -186,6 +186,11 @@ function flattenTree(root: ExplorerFolderNode, openFolders: ReadonlySet<string>)
  * Small helpers
  * ------------------------------------------------------------------ */
 
+/** A typed note name without a trailing `.md`, however it was cased. */
+function noteStem(raw: string): string {
+  return raw.trim().replace(/\.md$/i, '').trim()
+}
+
 /** `a/b/c.md` -> `['a', 'a/b']`. */
 function ancestorsOf(path: string): string[] {
   const out: string[] = []
@@ -628,7 +633,9 @@ export function FileExplorer(): JSX.Element {
    */
   const validateName = useCallback(
     (raw: string, kind: 'file' | 'folder', parent: string, selfPath: string | null): string | null => {
-      const name = raw.trim()
+      // The box shows a note's name without its extension, so one typed in
+      // is the same name, not a note called "B.md.md".
+      const name = kind === 'file' ? noteStem(raw) : raw.trim()
       if (name === '') return 'Name cannot be empty'
       if (name.includes('/') || name.includes('\\')) return 'Name cannot contain "/"'
       if (name === '.' || name === '..') return 'That name is not allowed'
@@ -685,7 +692,7 @@ export function FileExplorer(): JSX.Element {
       setRenaming({ ...renaming, error })
       return
     }
-    const name = renaming.value.trim()
+    const name = renaming.kind === 'file' ? noteStem(renaming.value) : renaming.value.trim()
     setRenaming(null)
     if (name === renaming.original) {
       focusRow(renaming.path)

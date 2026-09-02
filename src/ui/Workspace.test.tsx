@@ -9,9 +9,9 @@ import { makeNote, useAppStore } from '../state/store'
 import { Ribbon } from './Ribbon'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
-import { TabBar, dropSlotFor, tabTitle } from './TabBar'
+import { TabBar, dropSlotFor, isReopenable, tabTitle } from './TabBar'
 import { Workspace, MIN_PANE_WIDTH, PANE_KEY_STEP, PANE_SIZES_KEY, loadPaneSizes, resizePanes } from './Workspace'
-import { reset as resetHistory } from './paneHistory'
+import { canReopen, reset as resetHistory } from './paneHistory'
 
 /*
  * The heavy leaves are stubbed: CodeMirror, the markdown renderer and the
@@ -419,6 +419,23 @@ describe('Workspace navigation history', () => {
     expect((screen.getByRole('button', { name: 'Navigate forward' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Navigate back' }))
     expect(activePath()).toBe('a.md')
+  })
+
+  it('treats a rename of the note on screen as a rename, not as a step in the history', async () => {
+    render(<Workspace />)
+    act(() => useAppStore.getState().openPath('b.md'))
+    act(() => useAppStore.getState().openPath('c.md'))
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate back' })) // on b.md, c.md ahead
+
+    await act(() => useAppStore.getState().renameNote('b.md', 'b2.md'))
+
+    expect(activePath()).toBe('b2.md')
+    const forwardButton = screen.getByRole('button', { name: 'Navigate forward' }) as HTMLButtonElement
+    expect(forwardButton.disabled).toBe(false)
+    fireEvent.click(forwardButton)
+    expect(activePath()).toBe('c.md')
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate back' }))
+    expect(activePath()).toBe('b2.md')
   })
 
   it('keeps a separate history per pane', () => {
@@ -848,5 +865,33 @@ describe('Sidebar', () => {
 
     fireEvent.mouseMove(window, { clientX: 2000 })
     expect(useAppStore.getState().sidebarWidth).toBe(520)
+  })
+})
+
+describe('a pinned tab, against every way of closing it', () => {
+  it('survives its close button and a middle click', () => {
+    seedNotes({ 'a.md': '# a', 'b.md': '# b' })
+    setPanes([pane(PANE_A, [tab('t1', { path: 'a.md', pinned: true }), tab('t2', { path: 'b.md' })])])
+    render(<TabBar pane={panesNow()[0]!} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close a' }))
+    expect(panesNow()[0]!.tabs.map((t) => t.path)).toEqual(['a.md', 'b.md'])
+
+    fireEvent(screen.getByRole('tab', { name: /^a\b/ }), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }))
+    expect(panesNow()[0]!.tabs.map((t) => t.path)).toEqual(['a.md', 'b.md'])
+
+    // The store itself is the guard, whatever the caller.
+    useAppStore.getState().closeTab(PANE_A, 't1')
+    expect(panesNow()[0]!.tabs.map((t) => t.path)).toEqual(['a.md', 'b.md'])
+    // And none of those attempts put the pinned tab on the reopen stack.
+    expect(canReopen()).toBe(false)
+  })
+
+  it('never counts a blank placeholder as something to reopen', () => {
+    const notes = new Map<NotePath, Note>([['a.md', makeNote('a.md', '# a', 1)]])
+    expect(isReopenable(tab('blank', { path: null }), notes)).toBe(false)
+    expect(isReopenable(tab('t1', { path: 'a.md' }), notes)).toBe(true)
+    expect(isReopenable(tab('gone', { path: 'zzz.md' }), notes)).toBe(false)
+    expect(isReopenable({ ...tab('graph'), kind: 'graph' } as Tab, notes)).toBe(true)
   })
 })

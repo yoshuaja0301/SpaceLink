@@ -89,7 +89,8 @@ export function openBlankTab(paneId: string): void {
  * deleted while its tab was closed must not be resurrected as an empty buffer.
  */
 export function isReopenable(tab: Tab, notes: Map<NotePath, Note>): boolean {
-  return tab.kind !== 'note' || tab.path === null || notes.has(tab.path)
+  // A blank placeholder is nothing to bring back.
+  return tab.kind !== 'note' || (tab.path !== null && notes.has(tab.path))
 }
 
 /**
@@ -155,7 +156,8 @@ export function TabBar({ pane }: { pane: Pane }): JSX.Element {
 
   /** Close one tab, remembering it so it can be reopened. */
   const closeOne = (tab: Tab): void => {
-    pushClosed(tab)
+    if (tab.pinned) return // pinned against every way of closing
+    if (tab.kind !== 'note' || tab.path) pushClosed(tab)
     useAppStore.getState().closeTab(pane.id, tab.id)
   }
 

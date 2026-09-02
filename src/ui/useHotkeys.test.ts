@@ -312,3 +312,74 @@ describe('capture-phase precedence', () => {
     host.remove()
   })
 })
+
+describe('what the third bug hunt found', () => {
+  it('matches ⌥⌘B although macOS reports the Option-layer character', () => {
+    setPlatform('MacIntel')
+    const run = vi.fn()
+    const commands: Command[] = [command({ id: 'view:toggle-left-sidebar', shortcut: formatShortcut('Mod+Alt+B'), run })]
+    expect(commands[0]!.shortcut).toBe('⌥⌘B')
+    renderHook(() => useHotkeys(commands))
+    press({ key: 'b', code: 'KeyB', metaKey: true, altKey: true })
+    expect(run).toHaveBeenCalledTimes(1)
+    // What every browser on macOS delivers for ⌥B on a US layout.
+    press({ key: '∫', code: 'KeyB', metaKey: true, altKey: true })
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets nothing through to the commands while the palette is open', () => {
+    const run = vi.fn()
+    renderHook(() => useHotkeys([command({ id: 'editor:toggle-task', shortcut: 'Ctrl+Enter', run })]))
+    useAppStore.setState({ palette: 'quickswitch' })
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    press({ key: 'Enter', ctrlKey: true }, input)
+    expect(run).not.toHaveBeenCalled()
+    useAppStore.setState({ palette: null })
+    press({ key: 'Enter', ctrlKey: true }, input)
+    // Still not: an editor command from a plain input would land in an
+    // editor that is not where the caret is.
+    expect(run).not.toHaveBeenCalled()
+    input.remove()
+  })
+
+  it('holds back every command while the palette is open, not only editor ones', () => {
+    const run = vi.fn()
+    renderHook(() => useHotkeys([command({ id: 'view:toggle-left-sidebar', shortcut: 'Ctrl+B', run })]))
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    useAppStore.setState({ palette: 'commands' })
+    press({ key: 'b', ctrlKey: true }, input)
+    expect(run).not.toHaveBeenCalled()
+    useAppStore.setState({ palette: null })
+    press({ key: 'b', ctrlKey: true }, input)
+    expect(run).toHaveBeenCalledTimes(1)
+    input.remove()
+  })
+
+  it('runs an editor command from inside the editor, and any other command from an input', () => {
+    const editorCommand = vi.fn()
+    const other = vi.fn()
+    renderHook(() =>
+      useHotkeys([
+        command({ id: 'editor:toggle-task', shortcut: 'Ctrl+Enter', run: editorCommand }),
+        command({ id: 'view:something', shortcut: 'Ctrl+Shift+Y', run: other }),
+      ]),
+    )
+    const editor = document.createElement('div')
+    editor.className = 'cm-editor'
+    const content = document.createElement('div')
+    content.setAttribute('contenteditable', 'true')
+    editor.appendChild(content)
+    document.body.appendChild(editor)
+    press({ key: 'Enter', ctrlKey: true }, content)
+    expect(editorCommand).toHaveBeenCalledTimes(1)
+
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    press({ key: 'y', ctrlKey: true, shiftKey: true }, input)
+    expect(other).toHaveBeenCalledTimes(1)
+    editor.remove()
+    input.remove()
+  })
+})

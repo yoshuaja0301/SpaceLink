@@ -550,3 +550,98 @@ describe('view commands', () => {
     window.removeEventListener('spacefore:open-settings', listener)
   })
 })
+
+describe('what the third bug hunt found', () => {
+  function setPanes(tabs: Array<{ id: string; path: NotePath | null; pinned?: boolean }>, activeTabId = tabs[0]!.id): void {
+    useAppStore.setState({
+      panes: [{ id: 'pane-a', tabs: tabs.map((t) => ({ id: t.id, kind: 'note' as const, path: t.path, mode: 'edit' as const, pinned: t.pinned ?? false })), activeTabId }],
+      activePaneId: 'pane-a',
+    })
+  }
+  const activePath = (): NotePath | null => {
+    const state = useAppStore.getState()
+    const pane = state.panes.find((p) => p.id === state.activePaneId)!
+    return pane.tabs.find((t) => t.id === pane.activeTabId)?.path ?? null
+  }
+
+  it('Ctrl+W on the blank placeholder does not bury the note that was closed before it', () => {
+    seed({ 'a.md': '# a' })
+    setPanes([{ id: 't1', path: 'a.md' }])
+    const list = commands()
+    find(list.current, 'nav:close-tab').run() // a.md closes; a blank placeholder is left
+    expect(useAppStore.getState().panes[0]!.tabs.map((t) => t.path)).toEqual([null])
+    find(list.current, 'nav:close-tab').run() // on the placeholder: visibly nothing
+    find(list.current, 'nav:reopen-tab').run()
+    expect(activePath()).toBe('a.md')
+  })
+
+  it('does not let a run of Ctrl+W on the placeholder push the closed note off the stack', () => {
+    seed({ 'a.md': '# a' })
+    setPanes([{ id: 't1', path: 'a.md' }])
+    const list = commands()
+    find(list.current, 'nav:close-tab').run()
+    // The stack keeps twenty entries; twenty blanks would bury the note for good.
+    for (let i = 0; i < 25; i += 1) find(list.current, 'nav:close-tab').run()
+    find(list.current, 'nav:reopen-tab').run()
+    expect(activePath()).toBe('a.md')
+  })
+
+  it('closing only ever-blank tabs leaves nothing to reopen', () => {
+    setPanes([{ id: 't1', path: null }])
+    const list = commands()
+    find(list.current, 'nav:close-tab').run()
+    expect(find(list.current, 'nav:reopen-tab').enabled?.()).toBe(false)
+  })
+
+  it('Ctrl+W leaves a pinned tab alone', () => {
+    seed({ 'a.md': '# a', 'b.md': '# b' })
+    setPanes([{ id: 't1', path: 'a.md', pinned: true }, { id: 't2', path: 'b.md' }])
+    const list = commands()
+    find(list.current, 'nav:close-tab').run()
+    expect(useAppStore.getState().panes[0]!.tabs.map((t) => t.path)).toEqual(['a.md', 'b.md'])
+    expect(find(list.current, 'nav:reopen-tab').enabled?.()).toBe(false)
+  })
+
+  it('F2 refuses a name that differs from an existing note only by case, as the explorer does', async () => {
+    seed({ 'foo.md': 'precious', 'Bar.md': '# bar' })
+    setPanes([{ id: 't1', path: 'Bar.md' }])
+    useAppStore.setState({ askText: async () => 'Foo' })
+    const list = commands()
+    await find(list.current, 'file:rename').run()
+    // On a Mac or Windows disk Foo.md and foo.md are one file, and the save
+    // after the rename would have written Bar's text over "precious".
+    expect([...useAppStore.getState().notes.keys()].sort()).toEqual(['Bar.md', 'foo.md'])
+    expect(useAppStore.getState().toasts.some((toast) => toast.message.includes('already exists'))).toBe(true)
+  })
+
+  it('renaming the note on screen keeps the forward stack', async () => {
+    seed({ 'a.md': '', 'b.md': '', 'c.md': '' })
+    setPanes([{ id: 't1', path: null }])
+    const list = commands()
+    act(() => useAppStore.getState().openPath('a.md'))
+    act(() => useAppStore.getState().openPath('b.md'))
+    act(() => useAppStore.getState().openPath('c.md'))
+    act(() => find(list.current, 'nav:back').run())
+    expect(activePath()).toBe('b.md')
+    expect(historyCanForward('pane-a')).toBe(true)
+
+    await act(() => useAppStore.getState().renameNote('b.md', 'b2.md'))
+
+    expect(activePath()).toBe('b2.md')
+    expect(historySnapshot('pane-a').entries).toEqual(['a.md', 'b2.md', 'c.md'])
+    expect(historyCanForward('pane-a')).toBe(true)
+  })
+
+  it('rename and rename back: Back goes to the previous note, not to a stale copy of this one', async () => {
+    seed({ 'a.md': '', 'b.md': '' })
+    setPanes([{ id: 't1', path: null }])
+    const list = commands()
+    act(() => useAppStore.getState().openPath('a.md'))
+    act(() => useAppStore.getState().openPath('b.md'))
+    await act(() => useAppStore.getState().renameNote('b.md', 'c.md'))
+    await act(() => useAppStore.getState().renameNote('c.md', 'b.md'))
+    expect(activePath()).toBe('b.md')
+    act(() => find(list.current, 'nav:back').run())
+    expect(activePath()).toBe('a.md')
+  })
+})

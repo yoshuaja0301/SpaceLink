@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { AppState } from '../state/store'
 import { useAppStore } from '../state/store'
+import { buildIndex } from '../core/graph/index'
+import { makeNote } from '../state/store'
 import { isNarrowViewport, useNarrowLayout } from './useNarrowLayout'
 
 const PRISTINE = useAppStore.getState()
@@ -157,5 +159,27 @@ describe('useNarrowLayout, on a wide screen', () => {
     act(() => media.setMatches(true))
     expect(useAppStore.getState().sidebarPanel).toBeNull()
     expect(useAppStore.getState().rightSidebarOpen).toBe(false)
+  })
+})
+
+describe('useNarrowLayout, when the open note is renamed from the drawer', () => {
+  it('keeps the drawer open: a rename is not choosing a note', async () => {
+    stubMatchMedia(true)
+    const notes = new Map([['a.md', makeNote('a.md', '# a', 1)]])
+    useAppStore.setState({ notes, index: buildIndex(notes), sidebarPanel: null, rightSidebarOpen: false, ...panesShowing('a.md') })
+    renderHook(() => useNarrowLayout())
+    act(() => useAppStore.getState().setSidebarPanel('files'))
+    expect(useAppStore.getState().sidebarPanel).toBe('files')
+
+    await act(() => useAppStore.getState().renameNote('a.md', 'b.md'))
+
+    expect(useAppStore.getState().sidebarPanel).toBe('files')
+    // …while actually choosing another note still closes it.
+    act(() => useAppStore.getState().openPath('b.md'))
+    const other = new Map(useAppStore.getState().notes)
+    other.set('c.md', makeNote('c.md', '# c', 1))
+    useAppStore.setState({ notes: other, index: buildIndex(other) })
+    act(() => useAppStore.getState().openPath('c.md'))
+    expect(useAppStore.getState().sidebarPanel).toBe(null)
   })
 })

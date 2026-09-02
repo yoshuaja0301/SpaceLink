@@ -221,6 +221,12 @@ export interface AppState {
   hoveredPath: NotePath | null
   /** Bumped whenever the editor should force-refresh from state. */
   revision: number
+  /**
+   * The last rename, numbered. A rename rewrites the open tab's path in
+   * place; the pane history and the narrow layout must tell that from a
+   * navigation, and only the store knows which it was.
+   */
+  renamed: { from: NotePath; to: NotePath; seq: number } | null
 
   /* actions: vault --------------------------------------------------- */
   /**
@@ -472,6 +478,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   searchQuery: '',
   hoveredPath: null,
   revision: 0,
+  renamed: null,
 
   /* ------------------------------------------------------------------ */
 
@@ -652,6 +659,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...pane,
             tabs: pane.tabs.map((tab) => (tab.path === from ? { ...tab, path: to } : tab)),
           })),
+          renamed: { from, to, seq: (s.renamed?.seq ?? 0) + 1 },
           revision: s.revision + 1,
         }
       })
@@ -1017,9 +1025,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const note = notes.get(from)
     if (!note) return
     const target = to.toLowerCase().endsWith('.md') ? to : `${to}.md`
-    if (notes.has(target)) {
-      get().pushToast(`A note named ${target} already exists`, 'error')
-      return
+    // Case-insensitively, as the explorer checks and as the disks of most
+    // Macs and every Windows machine compare: `Foo.md` beside `foo.md` would
+    // be one file there, and the save after the rename would write over it.
+    // The note's own name in another case is the one exception.
+    const wanted = target.toLowerCase()
+    for (const existing of notes.keys()) {
+      if (existing !== from && existing.toLowerCase() === wanted) {
+        get().pushToast(`A note named ${existing} already exists`, 'error')
+        return
+      }
     }
 
     // Every note's `parsed` must describe its `content` before a single link
@@ -1081,6 +1096,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...pane,
           tabs: pane.tabs.map((tab) => (tab.path === from ? { ...tab, path: target } : tab)),
         })),
+        renamed: { from, to: target, seq: (s.renamed?.seq ?? 0) + 1 },
         revision: s.revision + 1,
       }
     })
@@ -1208,7 +1224,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           continue
         }
         const index = pane.tabs.findIndex((tab) => tab.id === tabId)
-        if (index === -1) {
+        // A pinned tab is pinned against every way of closing it, not only
+        // "close others": Ctrl+W, the tab's own button, a middle click.
+        if (index === -1 || pane.tabs[index]?.pinned) {
           panes.push(pane)
           continue
         }

@@ -19,7 +19,7 @@ import { Editor, GraphView } from './lazy'
 import { Preview } from './Preview'
 import { SearchPanel } from './SearchPanel'
 import { TabBar } from './TabBar'
-import { push as pushHistory, reset as resetHistory } from './paneHistory'
+import { push as pushHistory, rename as renameHistory, reset as resetHistory } from './paneHistory'
 
 export const PANE_SIZES_KEY = 'spacefore.paneSizes'
 /** No pane may be squeezed below this, in px. */
@@ -159,7 +159,15 @@ export function Workspace(): JSX.Element {
   /* ---- navigation history --------------------------------------------- */
 
   const knownPanes = useRef<string[]>([])
+  const renamed = useAppStore((state) => state.renamed)
+  const seenRename = useRef(0)
   useEffect(() => {
+    // A rename changes the tab's path without anyone going anywhere; the
+    // history entry is renamed too, so the push below finds nothing new.
+    if (renamed && renamed.seq !== seenRename.current) {
+      seenRename.current = renamed.seq
+      renameHistory(renamed.from, renamed.to)
+    }
     for (const pane of panes) {
       const tab = pane.tabs.find((candidate) => candidate.id === pane.activeTabId)
       // `push` ignores a repeat of the entry already on screen, which is what
@@ -171,7 +179,7 @@ export function Workspace(): JSX.Element {
       if (!ids.includes(id)) resetHistory(id)
     }
     knownPanes.current = ids
-  }, [panes])
+  }, [panes, renamed])
 
   /* ---- splitter -------------------------------------------------------- */
 

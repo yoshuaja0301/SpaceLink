@@ -1279,3 +1279,38 @@ describe('ContextMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })
+
+describe('typing the extension into the rename box', () => {
+  /** Walk the tree to `path` and press F2 there. */
+  function startRename(path: string): HTMLInputElement {
+    fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    for (let guard = 0; document.activeElement?.getAttribute('data-path') !== path; guard += 1) {
+      if (guard > 50) throw new Error(`cannot reach ${path}`)
+      fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    }
+    fireEvent.keyDown(tree(), { key: 'F2' })
+    return screen.getByLabelText('New name') as HTMLInputElement
+  }
+
+  it('reads "B.md" as B.md — which already exists — rather than B.md.md', () => {
+    seed({ 'A.md': '# A', 'B.md': '# B' })
+    const renameNote = stubAction('renameNote', async () => {})
+    render(<FileExplorer />)
+    const box = startRename('A.md')
+    expect(box.value).toBe('A') // the box shows names without the extension
+    fireEvent.change(box, { target: { value: 'B.md' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(renameNote).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('A note with that name already exists')
+  })
+
+  it('renames to the typed name without doubling the extension', () => {
+    seed({ 'A.md': '# A' })
+    const renameNote = stubAction('renameNote', async () => {})
+    render(<FileExplorer />)
+    const box = startRename('A.md')
+    fireEvent.change(box, { target: { value: 'C.MD' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(renameNote).toHaveBeenCalledWith('A.md', 'C.md')
+  })
+})

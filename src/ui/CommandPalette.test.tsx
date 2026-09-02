@@ -1,15 +1,18 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { headingElementId } from '../core/markdown/parse'
 import { act } from 'react'
+import type { JSX } from 'react'
 import { afterEach, beforeEach, vi } from 'vitest'
 
-import type { EditorView } from '@codemirror/view'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 
 import type { Note, NotePath } from '../types'
 import { buildIndex } from '../core/graph/index'
 import { makeNote, useAppStore } from '../state/store'
 import { registerEditor } from './editor/markdownCommands'
-import { resetNavigationHistory } from './commands'
+import { resetNavigationHistory, useCommands } from './commands'
+import { useHotkeys } from './useHotkeys'
 import { CommandPalette } from './CommandPalette'
 
 const PRISTINE = useAppStore.getState()
@@ -365,5 +368,59 @@ describe('CommandPalette — headings', () => {
     render(<CommandPalette />)
     expect(options()).toHaveLength(0)
     expect(emptyText()).toBe('This note has no headings')
+  })
+})
+
+describe('⌘↩ in the quick switcher, with an editor mounted behind it', () => {
+  // jsdom does no layout; the same stub Editor.test.tsx uses.
+  const rangeProto = Range.prototype as unknown as { getClientRects?: () => DOMRect[] }
+  if (typeof rangeProto.getClientRects !== 'function') rangeProto.getClientRects = () => []
+
+  /** App.tsx wiring: the commands feed the hotkeys, and the palette is mounted. */
+  function Harness(): JSX.Element {
+    const commands = useCommands()
+    useHotkeys(commands)
+    return <CommandPalette />
+  }
+
+  it('opens the note in a new tab and leaves the note behind the palette untouched', async () => {
+    seed({ 'a.md': 'hello world', 'b.md': '# b' })
+    useAppStore.setState({
+      panes: [{ id: 'pane-a', tabs: [{ id: 't1', kind: 'note', path: 'a.md', mode: 'edit', pinned: false }], activeTabId: 't1' }],
+      activePaneId: 'pane-a',
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'hello world',
+        extensions: [
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) useAppStore.getState().setNoteContent('a.md', update.state.doc.toString())
+          }),
+        ],
+      }),
+      parent: host,
+    })
+    registerEditor('pane-a', view)
+    try {
+      render(<Harness />)
+      act(() => useAppStore.getState().setPalette('quickswitch'))
+      expect(document.activeElement).toBe(input())
+      type('b')
+      // The documented gesture: ⌘↩ opens the selected note in a new tab. The
+      // same chord is also "toggle task" in the editor, which has no focus.
+      key('Enter', { ctrlKey: true })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      expect(useAppStore.getState().panes[0]!.tabs.map((t) => t.path)).toEqual(['a.md', 'b.md'])
+      expect(view.state.doc.toString()).toBe('hello world')
+      expect(useAppStore.getState().notes.get('a.md')?.content).toBe('hello world')
+      expect(useAppStore.getState().dirty.has('a.md')).toBe(false)
+    } finally {
+      registerEditor('pane-a', null)
+      view.destroy()
+      host.remove()
+    }
   })
 })

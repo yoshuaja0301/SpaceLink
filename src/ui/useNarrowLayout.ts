@@ -76,14 +76,19 @@ export function useNarrowLayout(): void {
     let previousLeft = useAppStore.getState().sidebarPanel
     let previousRight = useAppStore.getState().rightSidebarOpen
     let previousPath = activePath(useAppStore.getState())
+    let previousRename = useAppStore.getState().renamed?.seq ?? 0
     const unsubscribe = useAppStore.subscribe((state) => {
       const leftOpened = state.sidebarPanel !== null && previousLeft === null
       const rightOpened = state.rightSidebarOpen && !previousRight
       const path = activePath(state)
-      const noteChanged = path !== null && path !== previousPath
+      // A rename changes the path without choosing anything: the reader is
+      // still in the drawer, mid-rename.
+      const renamedTo = state.renamed && state.renamed.seq !== previousRename ? state.renamed.to : null
+      const noteChanged = path !== null && path !== previousPath && path !== renamedTo
       previousLeft = state.sidebarPanel
       previousRight = state.rightSidebarOpen
       previousPath = path
+      previousRename = state.renamed?.seq ?? 0
       if (!list.matches) return
 
       // Choosing a note is the end of what a drawer is for. Leaving it open

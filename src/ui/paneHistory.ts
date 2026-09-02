@@ -140,6 +140,41 @@ export function snapshot(paneId: string): { entries: NotePath[]; index: number }
 }
 
 /**
+ * A note was renamed: every entry that named it, in every pane and on the
+ * closed-tab stack, now names it by its new path. Not a navigation — nothing
+ * moves, nothing ahead is lost. A rename that makes two neighbouring entries
+ * the same note folds them into one, so Back still goes somewhere.
+ */
+export function rename(from: NotePath, to: NotePath): void {
+  if (!from || !to || from === to) return
+  let changed = false
+  for (const history of histories.values()) {
+    if (!history.entries.includes(from)) continue
+    changed = true
+    const entries: NotePath[] = []
+    let index = history.index
+    history.entries.forEach((entry, at) => {
+      const path = entry === from ? to : entry
+      if (entries.length > 0 && entries[entries.length - 1] === path) {
+        // Folded into the entry before it; an index past this point moves up.
+        if (at <= history.index) index -= 1
+        return
+      }
+      entries.push(path)
+    })
+    history.entries = entries
+    history.index = Math.max(-1, Math.min(index, entries.length - 1))
+  }
+  for (const tab of closed) {
+    if (tab.kind === 'note' && tab.path === from) {
+      tab.path = to
+      changed = true
+    }
+  }
+  if (changed) bump()
+}
+
+/**
  * Forget a pane's history (the pane was closed), or — with no argument —
  * everything, closed tabs included.
  */

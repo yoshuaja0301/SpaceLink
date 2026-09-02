@@ -12,6 +12,7 @@ import {
   popClosed,
   push,
   pushClosed,
+  rename,
   reset,
   snapshot,
   subscribe,
@@ -279,5 +280,50 @@ describe('paneHistory — subscriptions', () => {
 
     expect(listener).not.toHaveBeenCalled()
     unsubscribe()
+  })
+})
+
+describe('paneHistory — a note renamed', () => {
+  it('renames every entry that named it, in every pane, without moving anyone', () => {
+    push(PANE, 'a.md')
+    push(PANE, 'b.md')
+    push(PANE, 'c.md')
+    back(PANE) // on b.md, with c.md ahead
+    push(OTHER, 'b.md')
+
+    rename('b.md', 'b2.md')
+
+    expect(snapshot(PANE)).toEqual({ entries: ['a.md', 'b2.md', 'c.md'], index: 1 })
+    expect(snapshot(OTHER)).toEqual({ entries: ['b2.md'], index: 0 })
+    expect(canForward(PANE)).toBe(true)
+    expect(forward(PANE)).toBe('c.md')
+  })
+
+  it('folds two neighbouring entries that become the same note, so Back still goes somewhere', () => {
+    push(PANE, 'a.md')
+    push(PANE, 'b.md')
+    rename('b.md', 'c.md')
+    rename('c.md', 'b.md')
+    expect(snapshot(PANE)).toEqual({ entries: ['a.md', 'b.md'], index: 1 })
+    expect(back(PANE)).toBe('a.md')
+
+    push(PANE, 'x.md')
+    push(PANE, 'y.md')
+    rename('y.md', 'x.md')
+    expect(snapshot(PANE)).toEqual({ entries: ['a.md', 'x.md'], index: 1 })
+  })
+
+  it('renames a closed tab too, so reopening it finds the note', () => {
+    pushClosed(tab('t1', 'old.md'))
+    rename('old.md', 'new.md')
+    expect(popClosed()?.path).toBe('new.md')
+  })
+
+  it('is a no-op, and announces nothing, when nothing named the note', () => {
+    push(PANE, 'a.md')
+    const before = getVersion()
+    rename('zzz.md', 'yyy.md')
+    expect(getVersion()).toBe(before)
+    expect(snapshot(PANE)).toEqual({ entries: ['a.md'], index: 0 })
   })
 })

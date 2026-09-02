@@ -37,6 +37,7 @@ import {
   push as pushHistory,
   pushClosed,
   reset as resetHistory,
+  rename as renameHistory,
 } from './paneHistory'
 import { formatShortcut } from './useHotkeys'
 import { getActiveEditor } from './editor/activeEditor'
@@ -62,11 +63,20 @@ export function selectActivePath(state: AppState): NotePath | null {
 
 /** Panes seen in the last snapshot, so a closed pane's history can be dropped. */
 let knownPanes: string[] = []
+/** The last rename the tracker has already applied to the history. */
+let seenRename = 0
 
 /** Record where every pane currently is. `push` ignores a repeat of the entry
  * already on screen, which is what makes a Back step a no-op here rather than
  * an entry that truncates the forward stack. */
 function recordState(state: AppState): void {
+  // A rename rewrites the open tab's path in place. Told apart from a
+  // navigation here, so the entry is renamed rather than pushed — a push
+  // would truncate the forward stack and leave a dead entry behind Back.
+  if (state.renamed && state.renamed.seq !== seenRename) {
+    seenRename = state.renamed.seq
+    renameHistory(state.renamed.from, state.renamed.to)
+  }
   const live: string[] = []
   for (const pane of state.panes) {
     live.push(pane.id)
@@ -112,6 +122,7 @@ function attachNavigationTracking(): () => void {
 
 /** Test seam: drop every recorded pane history and closed tab. */
 export function resetNavigationHistory(): void {
+  seenRename = 0
   resetHistory()
   knownPanes = []
 }
@@ -530,11 +541,13 @@ export function buildCommands(context: CommandContext): Command[] {
         const state = store()
         const pane = state.activePane()
         const tab = pane.tabs.find((t) => t.id === pane.activeTabId)
-        if (!tab) return
+        if (!tab || tab.pinned) return
         // Closures are recorded where they happen, never inferred from a diff:
         // `deleteNote` blanks a tab's path without closing it, and a diff reads
-        // that as a closed tab and offers to reopen a note that is gone.
-        pushClosed(tab)
+        // that as a closed tab and offers to reopen a note that is gone. The
+        // blank placeholder itself is not worth remembering: reopening it
+        // would hand back nothing, in front of the note that was closed.
+        if (tab.kind !== 'note' || tab.path) pushClosed(tab)
         state.closeTab(pane.id, tab.id)
       },
     },
