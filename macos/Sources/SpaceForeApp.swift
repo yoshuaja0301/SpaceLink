@@ -58,9 +58,11 @@ enum VaultChoice {
 
 // MARK: - The window
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
+    /// Where the download in flight is being written, so it can be revealed.
+    private var lastDownload: URL?
     private let server = SyncServer()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -200,11 +202,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // MARK: Delegates
 
     /// A link to anywhere but our own server opens in the browser, not in here.
+    ///
+    /// A download is not a navigation. "Export vault as JSON" is an `<a download>`
+    /// on a `blob:` URL, and a WKWebView told to *allow* that simply navigates
+    /// to the blob — nothing is saved, and nothing says so. WebKit flags the
+    /// intent on the action; answering `.download` is what turns it into a
+    /// `WKDownload`, which then asks the delegate below where to put it.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download)
+            return
+        }
         guard let url = navigationAction.request.url else {
             decisionHandler(.allow)
             return
@@ -216,6 +228,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
         }
+    }
+
+    /// A response WebKit cannot display — a PDF attachment opened directly, a
+    /// zip — is saved rather than shown as a blank page.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    // MARK: Downloads
+
+    /// Where a download goes: wherever the reader says, defaulting to the name
+    /// the page suggested (`My Vault.json`) in their Downloads folder.
+    func download(
+        _ download: WKDownload,
+        decideDestinationUsing response: URLResponse,
+        suggestedFilename: String,
+        completionHandler: @escaping (URL?) -> Void
+    ) {
+        let panel = NSSavePanel()
+        panel.title = "Save"
+        panel.nameFieldStringValue = suggestedFilename
+        panel.canCreateDirectories = true
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let chosen = panel.url else {
+            completionHandler(nil)
+            return
+        }
+        // WebKit refuses a destination that already exists rather than
+        // overwriting, so honour the panel's "Replace" by clearing it first.
+        try? FileManager.default.removeItem(at: chosen)
+        lastDownload = chosen
+        completionHandler(chosen)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        if let saved = lastDownload {
+            NSWorkspace.shared.activateFileViewerSelecting([saved])
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "The file could not be saved."
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        _ = alert.runModal()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

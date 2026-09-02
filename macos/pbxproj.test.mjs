@@ -245,6 +245,12 @@ describe('the app it builds', () => {
       // the app will launch and then fail to open any vault at all.
       expect(settings.CODE_SIGN_ENTITLEMENTS).toBeUndefined()
       expect(settings.ENABLE_HARDENED_RUNTIME).toBe('NO')
+      // The script phase reads the whole repository and writes into the
+      // bundle. Xcode 14+ can sandbox script phases to their declared inputs
+      // and outputs, and new-project templates turn that on; left unset it
+      // is off today, but "off today" is not a setting. Said explicitly, so a
+      // future default cannot turn the first build into a sandbox violation.
+      expect(settings.ENABLE_USER_SCRIPT_SANDBOXING).toBe('NO')
     }
 
     const projectConfigs = objects[root.buildConfigurationList].buildConfigurations.map((id) => objects[id])

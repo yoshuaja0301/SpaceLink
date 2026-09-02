@@ -179,6 +179,8 @@ open class NSSavePanel: NSObject {
     open var canCreateDirectories: Bool = false
     /// appkit/nssavepanel/directoryurl
     open var directoryURL: URL?
+    /// appkit/nssavepanel/namefieldstringvalue
+    open var nameFieldStringValue: String = ""
     /// appkit/nssavepanel/url
     open var url: URL? { nil }
     /// appkit/nssavepanel/runmodal()
@@ -223,4 +225,6 @@ open class NSWorkspace: NSObject {
     public class var shared: NSWorkspace { NSWorkspace() }
     /// appkit/nsworkspace/open(_:)
     @discardableResult open func open(_ url: URL) -> Bool { true }
+    /// appkit/nsworkspace/activatefileviewerselecting(_:)
+    open func activateFileViewerSelecting(_ fileURLs: [URL]) {}
 }

@@ -97,9 +97,30 @@ methods confirmed to exist (`NSApplication.terminate(_:)`, `NSText.cut(_:)`,
 `undo:` and `redo:` — are the standard responder-chain names and are not
 checked by anything.
 
-### One real bug this found
+### Three real bugs this found
 
-The first version had its entry point as statements at the bottom of the file.
+**The icon.** `copy-resources.sh` fed `iconutil` an `icon_64x64.png`. Apple's
+iconset format has five sizes — 16, 32, 128, 256, 512, each with an `@2x` twin —
+and no 64. A file iconutil does not recognise is a reason for it to refuse the
+set, so the app would have shipped with a blank icon. The one part of the script
+that could not run here was the one part nobody had checked; it now runs here,
+with `sips` and `iconutil` replaced by two shims that record what they were
+asked for, and the set is compared against Apple's list
+(`copy-resources.test.mjs`).
+
+**Export did nothing.** "Export vault as JSON" is an `<a download>` on a `blob:`
+URL. In a browser that saves a file; in a `WKWebView` it is a *navigation*, and
+the app answered "allow" — which navigates to the blob, saves nothing, and says
+nothing. WebKit flags the intent on the navigation action; the app now answers
+`.download`, takes the resulting `WKDownload`, and asks where to put it with an
+`NSSavePanel`. Anything WebKit cannot display — a PDF attachment opened directly
+— takes the same path instead of a blank page. All of it is macOS 11.3+ API
+(deployment target is 12.0), and every declaration was fetched from Apple's
+documentation into the stub, which is how the typecheck confirmed it — a wrong
+argument label on the delegate method fails the build here, as it would there.
+
+**The entry point.** The first version had its entry point as statements at the
+bottom of the file.
 That compiles as a single-file `swiftc` invocation — which is what `build.sh`
 did — and fails under `-parse-as-library`, which is what **Xcode** passes for an
 application target:
@@ -125,6 +146,8 @@ a real compiler, both before and after.
 | the token not being left in the address afterwards | asserted on the live URL |
 | an edit reaching the folder on disk | read the file back with `fs` |
 | the server dying when the app does — **including a crash** | `SIGKILL`ed the parent; server was gone in 2 s, port released |
+| the script phase is not sandboxed | `ENABLE_USER_SCRIPT_SANDBOXING = NO`, asserted — it reads the whole repository and writes into the bundle, which a sandboxed phase may not |
+| the iconset handed to `iconutil` | exactly Apple's ten names, checked through the real script with shims |
 
 The project file's checks were confirmed by breaking it ten different ways — a
 dangling reference, the App Sandbox creeping back in, a renamed source file, the
@@ -134,7 +157,8 @@ the bundle — and confirming each one fails.
 
 Still unverified: that the window looks right, that Xcode is happy with the
 project once it opens it, that the real SDK agrees with its own documentation,
-and that `iconutil` produces a usable icon.
+that `iconutil` accepts what it is given, and that a download actually lands
+where the save panel says.
 
 ### Running the Swift checks yourself
 
@@ -154,7 +178,9 @@ it is safe to wire into anything.
    a port the system picks, bound to `127.0.0.1`.
 3. Opens `http://127.0.0.1:<that port>` in a `WKWebView`, with the access token
    in the URL fragment so nothing has to be typed.
-4. Shuts the server down when you quit.
+4. Saves a download — an exported vault, a PDF attachment — where you say,
+   through the ordinary save panel, and shows it in the Finder.
+5. Shuts the server down when you quit.
 
 Your notes stay ordinary Markdown files in the folder you chose. The app reads
 and writes them and nothing else — no library, no database, no copy.
@@ -207,6 +233,7 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 | `build.sh` | builds without Xcode |
 | `SpaceFore.xcodeproj` | builds with it |
 | `pbxproj.test.mjs` | checks the project file, since Xcode cannot be run here |
+| `copy-resources.test.mjs` | checks the iconset the script builds, since `iconutil` cannot be run here |
 
 ---
 

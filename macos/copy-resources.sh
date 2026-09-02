@@ -48,10 +48,15 @@ rm -f "$RESOURCES/server/"*.test.mjs
 
 # The icon, drawn from the same source the web app uses for its own. Skipped
 # where the tools are not available, which is anywhere but a Mac.
+#
+# The sizes are the ones Apple's iconset format names, and only those: 16, 32,
+# 128, 256 and 512, each with an @2x twin. There is no 64x64 entry in that
+# format, and a file iconutil does not recognise is a reason for it to refuse
+# the whole set — which shipped the app with a blank icon.
 if command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
   ICONSET="$(mktemp -d)/SpaceFore.iconset"
   mkdir -p "$ICONSET"
-  for size in 16 32 64 128 256 512; do
+  for size in 16 32 128 256 512; do
     sips -z "$size" "$size" "$REPO/public/icon-512.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
     double=$((size * 2))
     sips -z "$double" "$double" "$REPO/public/icon-512.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null

@@ -36,6 +36,63 @@ open class WKWebViewConfiguration: NSObject {
 open class WKNavigationAction: NSObject {
     /// webkit/wknavigationaction/request
     open var request: URLRequest { URLRequest(url: URL(string: "about:blank")!) }
+    /// webkit/wknavigationaction/shouldperformdownload — macOS 11.3+
+    open var shouldPerformDownload: Bool { false }
+}
+
+/// webkit/wknavigationresponse
+open class WKNavigationResponse: NSObject {
+    /// webkit/wknavigationresponse/response
+    open var response: URLResponse {
+        // Linux Foundation has no argument-less initialiser; the shape is what matters.
+        URLResponse(url: URL(string: "about:blank")!, mimeType: nil, expectedContentLength: 0, textEncodingName: nil)
+    }
+    /// webkit/wknavigationresponse/canshowmimetype
+    open var canShowMIMEType: Bool { true }
+    /// webkit/wknavigationresponse/isformainframe
+    open var isForMainFrame: Bool { true }
+}
+
+/// webkit/wknavigationresponsepolicy
+public enum WKNavigationResponsePolicy {
+    case cancel
+    case allow
+    case download
+}
+
+/// webkit/wkdownload — macOS 11.3+
+open class WKDownload: NSObject {
+    /// webkit/wkdownload/delegate
+    weak open var delegate: (any WKDownloadDelegate)?
+    /// webkit/wkdownload/originalrequest
+    open var originalRequest: URLRequest? { nil }
+    /// webkit/wkdownload/webview
+    weak open var webView: WKWebView?
+    /// webkit/wkdownload/cancel(_:)
+    open func cancel(_ completionHandler: ((Data?) -> Void)?) {}
+}
+
+/// webkit/wkdownloaddelegate — macOS 11.3+
+///
+/// `download(_:decideDestinationUsing:suggestedFilename:completionHandler:)`
+/// is the one required member; the other two are `optional` on Apple's
+/// platforms and get default implementations here for the same reason the
+/// navigation delegate's do.
+public protocol WKDownloadDelegate: AnyObject {
+    /// webkit/wkdownloaddelegate/download(_:decidedestinationusing:suggestedfilename:completionhandler:)
+    func download(
+        _ download: WKDownload,
+        decideDestinationUsing response: URLResponse,
+        suggestedFilename: String,
+        completionHandler: @escaping (URL?) -> Void
+    )
+}
+
+extension WKDownloadDelegate {
+    /// webkit/wkdownloaddelegate/download(_:didfailwitherror:resumedata:)
+    public func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {}
+    /// webkit/wkdownloaddelegate/downloaddidfinish(_:)
+    public func downloadDidFinish(_ download: WKDownload) {}
 }
 
 /// webkit/wknavigationactionpolicy
@@ -79,6 +136,21 @@ extension WKNavigationDelegate {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {}
+
+    /// webkit/wknavigationdelegate/webview(_:decidepolicyfor:decisionhandler:)-19mn2
+    ///
+    /// The response overload. Same note about the handler's attributes.
+    public func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {}
+
+    /// webkit/wknavigationdelegate/webview(_:navigationaction:didbecome:) — macOS 11.3+
+    public func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {}
+
+    /// webkit/wknavigationdelegate/webview(_:navigationresponse:didbecome:) — macOS 11.3+
+    public func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {}
 
     /// webkit/wknavigationdelegate/webview(_:didfail:witherror:)
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {}
