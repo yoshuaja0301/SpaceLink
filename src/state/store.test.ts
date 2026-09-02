@@ -971,3 +971,62 @@ describe('line endings survive editing', () => {
     expect(await adapter.read('C.md')).toBe('# B\r\n')
   })
 })
+
+describe('attaching a file', () => {
+  const png = (): File => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'image.png', { type: 'image/png' })
+
+  it('writes the bytes and answers with what to type in the note', async () => {
+    await openSeededVault()
+    const attached = await useAppStore.getState().attachFile(png())
+
+    expect(attached?.path).toMatch(/^attachments\/Pasted image \d{14}\.png$/)
+    expect(attached?.embed).toBe(`![[${attached!.path.slice('attachments/'.length)}]]`)
+
+    // Read it back off the vault, not out of the store's own bookkeeping.
+    const bytes = new Uint8Array(await (await useAppStore.getState().adapter!.readBinary(attached!.path)).arrayBuffer())
+    expect([...bytes]).toEqual([0x89, 0x50, 0x4e, 0x47])
+  })
+
+  it('lists it, which is what makes the embed resolve', async () => {
+    await openSeededVault()
+    const attached = await useAppStore.getState().attachFile(png())
+    expect(useAppStore.getState().attachments.map((file) => file.path)).toContain(attached!.path)
+  })
+
+  it('honours the configured folder, including the vault root', async () => {
+    await openSeededVault()
+    useAppStore.getState().updateSettings({ attachmentFolder: 'files/pictures' })
+    expect((await useAppStore.getState().attachFile(png()))?.path).toMatch(/^files\/pictures\//)
+
+    useAppStore.getState().updateSettings({ attachmentFolder: '' })
+    // The root is the case that used to be impossible twice over: `||` turned
+    // an empty folder back into the default, and `normalizePath` threw on an
+    // empty path. No slash in the result is the whole assertion — the ` 1` is
+    // the vault-wide name rule doing its job, since both pastes in this test
+    // land on the same second.
+    const atRoot = (await useAppStore.getState().attachFile(png()))?.path
+    expect(atRoot).toMatch(/^Pasted image \d{14}( \d+)?\.png$/)
+    expect(atRoot).not.toContain('/')
+  })
+
+  it('never overwrites a file that is already there', async () => {
+    await openSeededVault()
+    const first = await useAppStore.getState().attachFile(new File([new Uint8Array([1])], 'chart.png', { type: 'image/png' }))
+    const second = await useAppStore.getState().attachFile(new File([new Uint8Array([2])], 'chart.png', { type: 'image/png' }))
+
+    expect(second?.path).not.toBe(first?.path)
+    const bytes = new Uint8Array(await (await useAppStore.getState().adapter!.readBinary(first!.path)).arrayBuffer())
+    expect([...bytes]).toEqual([1])
+  })
+
+  it('says so rather than failing quietly on a read-only vault', async () => {
+    // The demo vault is writable, so a genuinely read-only one is needed here.
+    await useAppStore.getState().openVault(createMemoryVault({ 'a.md': 'A' }, { name: 'Docs', writable: false }))
+    expect(useAppStore.getState().adapter?.writable).toBe(false)
+
+    expect(await useAppStore.getState().attachFile(png())).toBeNull()
+    const toast = useAppStore.getState().toasts.at(-1)
+    expect(toast?.kind).toBe('error')
+    expect(toast?.message).toMatch(/read-only/i)
+  })
+})

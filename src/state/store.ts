@@ -27,6 +27,12 @@ import type {
 import { parseNote } from '../core/markdown/parse'
 import { buildIndex, emptyIndex, getBacklinks, resolveLinkTarget } from '../core/graph/index'
 import { toVaultFile } from '../core/vault/paths'
+import {
+  attachmentName,
+  DEFAULT_ATTACHMENT_FOLDER,
+  embedTextFor,
+  uniqueAttachmentPath,
+} from '../core/vault/attachments'
 
 const AUTOSAVE_MS_MIN = 200
 
@@ -57,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spellcheck: false,
   readableLineLength: true,
   newNoteFolder: '',
+  attachmentFolder: DEFAULT_ATTACHMENT_FOLDER,
   dailyNoteFolder: 'Daily',
   dailyNoteFormat: 'YYYY-MM-DD',
   autosaveDelay: 800,
@@ -238,6 +245,8 @@ export interface AppState {
   deleteNote: (path: NotePath) => Promise<void>
   /** Write attachment bytes into the vault; returns how many landed. */
   restoreAttachments: (entries: readonly [NotePath, Blob][]) => Promise<number>
+  /** Put a pasted or dropped file in the vault; returns what to type in the note. */
+  attachFile: (file: File) => Promise<{ path: NotePath; embed: string } | null>
   renameNote: (from: NotePath, to: NotePath) => Promise<void>
   openDailyNote: () => Promise<void>
 
@@ -863,6 +872,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { attachments: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) }
     })
     return written.length
+  },
+
+  async attachFile(file) {
+    const state = get()
+    if (!state.adapter?.writable) {
+      state.pushToast(`The ${state.vaultName || 'current'} vault is read-only, so it cannot hold attachments`, 'error')
+      return null
+    }
+
+    // Unique against notes as well as attachments: a bare `![[chart.png]]` is
+    // resolved by name across the whole vault, so a second file with that name
+    // anywhere would make which one you get a matter of sort order.
+    const taken = [...state.notes.keys(), ...state.attachments.map((entry) => entry.path)]
+    const path = uniqueAttachmentPath(
+      // `??`, not `||`: an empty folder is a real choice — the vault root —
+      // and the settings field says as much in its placeholder. Only a
+      // settings object saved before this existed has no answer at all.
+      state.settings.attachmentFolder ?? DEFAULT_ATTACHMENT_FOLDER,
+      attachmentName(file),
+      taken,
+    )
+
+    const written = await get().restoreAttachments([[path, file]])
+    if (written === 0) return null
+    return { path, embed: embedTextFor(path, file) }
   },
 
   async deleteNote(path) {

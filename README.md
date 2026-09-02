@@ -46,6 +46,9 @@ No account, no server, no telemetry. Everything runs in the tab.
   and writes the same folder, live. See [docs/SERVER.md](docs/SERVER.md)
 - **Demo vault** — a ready-made 20-note knowledge base that doubles as the
   product tour
+- **Paste or drop a file into a note** — a screenshot goes in as
+  `![[Pasted image …]]`, a dropped file keeps its own name, and both land in a
+  folder you choose
 - Export the whole vault as one JSON file — notes *and* attachments — export a
   note as Markdown, import either back
 
@@ -137,14 +140,14 @@ npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1366 unit and component tests
+npm test         # vitest — 1393 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens a real browser and walks 142 real
-user flows — 110 of them in Chromium alone, the rest in the other two engines.
+`npm run e2e` starts the preview server, opens a real browser and walks 146 real
+user flows — 114 of them in Chromium alone, the rest in the other two engines.
 They expand folders, type, format, complete wiki-links, click links and tags,
 tick a task inside a transclusion, use the search operators and the command
 palette, open the graph, rename a note and watch the links follow it, delete,
@@ -162,6 +165,11 @@ it and rewrites the links inside other files, that deleting removes it, that
 changed by another editor is picked up on reload, that switching vaults mid-edit
 leaves the folder untouched, and that a dropped directory permission falls back
 without losing the folder.
+
+It also pastes a real PNG into a note and drops another one on it, then reads
+both back off disk, checks the bytes, and confirms the pasted image decodes in
+the preview — because until this existed the app could *show* an image a folder
+already contained but never add one, which is most of what attachments are for.
 
 It finishes by exporting that folder as JSON and importing it into a **browser
 vault**, then reading the result out of IndexedDB and comparing the attachment

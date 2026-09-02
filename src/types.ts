@@ -342,6 +342,8 @@ export interface Settings {
   readableLineLength: boolean
   /** Folder new notes land in. Empty string = vault root. */
   newNoteFolder: string
+  /** Folder pasted and dropped files go into. Empty means the vault root. */
+  attachmentFolder: string
   /** Folder for daily notes. */
   dailyNoteFolder: string
   /** `YYYY-MM-DD` style tokens. */

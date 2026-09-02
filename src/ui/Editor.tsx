@@ -30,6 +30,7 @@ import { EditorView } from '@codemirror/view'
 import { resolveLinkTarget } from '../core/graph/index'
 import { useAppStore } from '../state/store'
 import type { NotePath } from '../types'
+import { attachFilesOnPasteAndDrop } from './editor/attachFiles'
 import { mayTakeFocusOnMount } from './focus'
 import { registerEditor } from './editor/markdownCommands'
 import { flashLine, refreshDecorations } from './editor/markdownDecorations'
@@ -191,6 +192,14 @@ export function Editor({ path, paneId }: { path: NotePath; paneId: string }): Re
         })
       },
     })
+    // Appended rather than passed in: this needs the store, and the editor
+    // module below it deliberately knows nothing about vaults.
+    extensions.push(
+      attachFilesOnPasteAndDrop(async (file) => {
+        const attached = await useAppStore.getState().attachFile(file)
+        return attached?.embed ?? null
+      }),
+    )
     extensionsRef.current = extensions
 
     const initial = pathRef.current

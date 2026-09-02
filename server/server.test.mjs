@@ -627,3 +627,83 @@ describe('the change stream accepts a query token', () => {
     expect(response.status).toBe(401)
   })
 })
+
+
+describe('a folder that vanishes while the watcher is scanning it', () => {
+  /** A server of its own, so emitting an error here cannot disturb the rest. */
+  async function watched() {
+    const root = await mkdtemp(join(tmpdir(), 'spacefore-watch-'))
+    await writeFile(join(root, 'Home.md'), '# Home\n')
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(root, '__no_dist__') })
+    const controller = new AbortController()
+    const watcher = server.startWatching(controller.signal)
+    return { root, watcher, stop: () => controller.abort() }
+  }
+
+  const enoent = () => Object.assign(new Error('scandir failed'), { code: 'ENOENT', syscall: 'scandir' })
+
+  it('listens for the watcher’s errors at all', async () => {
+    // This is the whole bug. On Linux a recursive watch is emulated in
+    // JavaScript, and a folder deleted mid-scan is reported by *emitting* an
+    // error — which an EventEmitter with no listener rethrows, killing the
+    // process. It never travels through the async iterator, so the `for await`
+    // this used to be written as could not catch it however it was wrapped.
+    const { watcher, stop } = await watched()
+    try {
+      expect(watcher).not.toBeNull()
+      expect(watcher.listenerCount('error')).toBeGreaterThan(0)
+    } finally {
+      stop()
+    }
+  })
+
+  it('shrugs off an ENOENT and keeps watching the rest of the vault', async () => {
+    const { watcher, stop } = await watched()
+    let closed = false
+    const close = watcher.close.bind(watcher)
+    watcher.close = () => {
+      closed = true
+      close()
+    }
+    try {
+      expect(() => watcher.emit('error', enoent())).not.toThrow()
+      // The folder is gone and there is nothing to do about it; everything
+      // else in the vault is still worth watching.
+      expect(closed).toBe(false)
+    } finally {
+      stop()
+    }
+  })
+
+  it('gives up, and says so, on an error that is not a missing folder', async () => {
+    const { watcher, stop } = await watched()
+    let closed = false
+    const close = watcher.close.bind(watcher)
+    watcher.close = () => {
+      closed = true
+      close()
+    }
+    const said = []
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (text) => {
+      said.push(String(text))
+      return true
+    }
+    try {
+      expect(() => watcher.emit('error', Object.assign(new Error('too many files'), { code: 'EMFILE' }))).not.toThrow()
+      expect(closed).toBe(true)
+      expect(said.join('')).toMatch(/stopped watching the vault/)
+    } finally {
+      process.stderr.write = write
+      stop()
+    }
+  })
+
+  it('does not start at all once the signal is already aborted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'spacefore-watch-'))
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(root, '__no_dist__') })
+    const controller = new AbortController()
+    controller.abort()
+    expect(server.startWatching(controller.signal)).toBeNull()
+  })
+})

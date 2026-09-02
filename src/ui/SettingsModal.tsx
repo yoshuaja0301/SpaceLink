@@ -442,6 +442,22 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </Row>
 
         <Row
+          label="Attachment folder"
+          description="Where a pasted or dropped file is written. Created on demand."
+          htmlFor={id('attachment-folder')}
+        >
+          <input
+            id={id('attachment-folder')}
+            className="input"
+            type="text"
+            list={id('folder-list')}
+            placeholder="Vault root"
+            value={settings.attachmentFolder}
+            onChange={(event) => updateSettings({ attachmentFolder: event.currentTarget.value })}
+          />
+        </Row>
+
+        <Row
           label="Daily note format"
           description="YYYY, MM, DD, MMMM, DDDD, HH, mm and ss are replaced."
           htmlFor={id('daily-format')}

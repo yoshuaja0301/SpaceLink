@@ -359,6 +359,132 @@ await step('a folder whose permission is re-granted opens again', async () => {
   return status.split('\n').slice(0, 2).join(' / ')
 })
 
+/** Open a note by name through the quick switcher, the way a person would. */
+const openNote = async (page, name) => {
+  await page.keyboard.press('Control+p')
+  await page.waitForSelector('.palette-input', { timeout: 15_000 })
+  await page.keyboard.type(name)
+  await page.waitForTimeout(500)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(1000)
+}
+
+/** Reads a file off "disk" as bytes, bypassing anything the app has cached. */
+const READ_DISK_BYTES = async (path) => {
+  const root = await navigator.storage.getDirectory()
+  let dir = await root.getDirectoryHandle('my-notes')
+  const parts = path.split('/')
+  const file = parts.pop()
+  for (const part of parts) dir = await dir.getDirectoryHandle(part)
+  const handle = await dir.getFileHandle(file)
+  return [...new Uint8Array(await (await handle.getFile()).arrayBuffer())]
+}
+
+/** A real PNG, so `naturalWidth` means something when the preview shows it. */
+const PNG = [...(await readFile(new URL('../public/icon-192.png', import.meta.url)))]
+
+await step('pasting an image writes a real file and embeds it', async () => {
+  // Taking a screenshot and putting it in the note is most of what attachments
+  // are for, and there was no way to do it: the app could show an image the
+  // folder already had but never add one. A browser vault could not acquire an
+  // image at all.
+  await openNote(page, 'Home')
+  await page.locator('[aria-label="Edit view"]').first().click()
+  await page.waitForSelector('.cm-content', { timeout: 20_000 })
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+End')
+
+  await page.evaluate((bytes) => {
+    // Named `image.png`, which is what every browser calls a pasted screenshot.
+    const file = new File([new Uint8Array(bytes)], 'image.png', { type: 'image/png' })
+    const transfer = new DataTransfer()
+    transfer.items.add(file)
+    document
+      .querySelector('.cm-content')
+      .dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
+  }, PNG)
+  await page.waitForTimeout(2500)
+
+  const paths = await page.evaluate(LIST_DISK)
+  const written = paths.find((path) => /^attachments\/Pasted image \d{14}\.png$/.test(path))
+  must(written, `nothing was written: ${JSON.stringify(paths)}`)
+
+  // The bytes on disk, not the ones we handed the page.
+  const onDisk = await page.evaluate(READ_DISK_BYTES, written)
+  must(onDisk.join(',') === PNG.join(','), `the file on disk is ${onDisk.length} bytes, not ${PNG.length}`)
+
+  // And the note itself must carry the embed — read off disk, not from the app.
+  const note = await page.evaluate(READ_DISK, 'Home.md')
+  const name = written.slice('attachments/'.length)
+  must(note.includes(`![[${name}]]`), `the note does not embed it: ${JSON.stringify(note.slice(-120))}`)
+  return written
+})
+
+await step('the pasted image actually renders in the note', async () => {
+  // The point of all of it. A file on disk that the preview cannot resolve
+  // would be a broken image with extra steps.
+  await page.locator('[aria-label="Preview view"]').first().click()
+  await page.waitForSelector('.markdown-preview .embed-image', { timeout: 20_000 })
+  const shown = await page.evaluate(() => {
+    const image = document.querySelector('.markdown-preview .embed-image')
+    return { src: (image?.getAttribute('src') ?? '').slice(0, 5), width: image?.naturalWidth ?? 0 }
+  })
+  must(shown.width > 0, `the image did not decode (src ${shown.src}, naturalWidth ${shown.width})`)
+  return `${shown.width}px wide`
+})
+
+await step('pasting ordinary text still just pastes text', async () => {
+  // The file handlers must decline anything that is not a file. Swallowing a
+  // normal paste would be a far worse bug than the one they fix.
+  await page.locator('[aria-label="Edit view"]').first().click()
+  await page.waitForSelector('.cm-content', { timeout: 20_000 })
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+End')
+
+  await page.evaluate(() => {
+    const transfer = new DataTransfer()
+    transfer.setData('text/plain', 'Pasted as plain text.')
+    document
+      .querySelector('.cm-content')
+      .dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
+  })
+  await page.waitForTimeout(1600)
+
+  const note = await page.evaluate(READ_DISK, 'Home.md')
+  must(note.includes('Pasted as plain text.'), `the text never arrived: ${JSON.stringify(note.slice(-120))}`)
+  return 'text pasted, no file written'
+})
+
+await step('a dropped file keeps the name it arrived with', async () => {
+  await page.locator('[aria-label="Edit view"]').first().click()
+  await page.waitForSelector('.cm-content', { timeout: 20_000 })
+
+  await page.evaluate((bytes) => {
+    const file = new File([new Uint8Array(bytes)], 'Quarterly chart.png', { type: 'image/png' })
+    const transfer = new DataTransfer()
+    transfer.items.add(file)
+    const content = document.querySelector('.cm-content')
+    const box = content.getBoundingClientRect()
+    content.dispatchEvent(
+      new DragEvent('drop', {
+        dataTransfer: transfer,
+        bubbles: true,
+        cancelable: true,
+        clientX: box.x + 20,
+        clientY: box.y + 20,
+      }),
+    )
+  }, PNG)
+  await page.waitForTimeout(2500)
+
+  const paths = await page.evaluate(LIST_DISK)
+  // Its own name, because that is what someone will look for later.
+  must(paths.includes('attachments/Quarterly chart.png'), `not written: ${JSON.stringify(paths)}`)
+  const note = await page.evaluate(READ_DISK, 'Home.md')
+  must(note.includes('![[Quarterly chart.png]]'), 'the note does not embed the dropped file')
+  return 'attachments/Quarterly chart.png'
+})
+
 await step('exporting the vault carries the attachment, not just the notes', async () => {
   // "Export vault as JSON" is what someone reaches for to keep a copy. It used
   // to write `state.notes` and nothing else, so a folder of notes *and images*

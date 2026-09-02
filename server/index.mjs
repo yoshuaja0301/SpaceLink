@@ -22,7 +22,8 @@
  */
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { readFile, watch as watchDirectory } from 'node:fs/promises'
+import { watch as watchDirectory } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -349,39 +350,78 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
     sendJson(response, 404, { error: `No such endpoint: ${request.method} ${url.pathname}` })
   }
 
-  /** Watch the folder so edits made outside the app reach every device. */
-  async function startWatching(signal) {
+  /** Tell every listening device what one changed file now looks like. */
+  async function announceChange(filename) {
+    if (!filename) return
+    const relativePath = String(filename).split(/[\\/]/).join('/')
+    // Dot-files are not part of the vault, and the scratch file an atomic
+    // write moves into place must never be announced as a note.
+    const leaf = relativePath.split('/').pop() ?? ''
+    if (leaf.startsWith('.') || leaf.startsWith(TEMP_PREFIX)) return
+    let entry
     try {
-      const watcher = watchDirectory(store.root, { recursive: true, signal })
-      for await (const event of watcher) {
-        if (!event.filename) continue
-        const relativePath = String(event.filename).split(/[\\/]/).join('/')
-        // Dot-files are not part of the vault, and the scratch file an atomic
-        // write moves into place must never be announced as a note.
-        const leaf = relativePath.split('/').pop() ?? ''
-        if (leaf.startsWith('.') || leaf.startsWith(TEMP_PREFIX)) continue
-        let entry
-        try {
-          entry = store.resolvePath(relativePath)
-        } catch {
-          continue // inside a skipped directory, or otherwise not ours
-        }
-        const body = await readFile(entry.absolute).catch(() => null)
-        if (body === null) {
-          if (isOwnEcho(entry.relative, '')) continue
-          broadcast({ type: 'remove', path: entry.relative })
-          continue
-        }
-        const hash = hashOf(body)
-        if (isOwnEcho(entry.relative, hash)) continue
-        noteOwnWrite(entry.relative, hash)
-        broadcast({ type: 'upsert', path: entry.relative, hash })
-      }
-    } catch (error) {
-      if (error?.name !== 'AbortError') {
-        process.stderr.write(`SpaceFore: stopped watching the vault (${error?.message ?? error}).\n`)
-      }
+      entry = store.resolvePath(relativePath)
+    } catch {
+      return // inside a skipped directory, or otherwise not ours
     }
+    const body = await readFile(entry.absolute).catch(() => null)
+    if (body === null) {
+      if (isOwnEcho(entry.relative, '')) return
+      broadcast({ type: 'remove', path: entry.relative })
+      return
+    }
+    const hash = hashOf(body)
+    if (isOwnEcho(entry.relative, hash)) return
+    noteOwnWrite(entry.relative, hash)
+    broadcast({ type: 'upsert', path: entry.relative, hash })
+  }
+
+  /**
+   * Watch the folder so edits made outside the app reach every device.
+   *
+   * The callback form rather than `fs/promises.watch`, because it hands back
+   * the watcher itself and that is the only place an `error` can be listened
+   * for. On Linux a recursive watch is emulated in JavaScript, and when a
+   * folder disappears while it is being scanned the resulting ENOENT is
+   * *emitted* as an error rather than surfacing through the iterator. An
+   * EventEmitter with no `error` listener rethrows what it was given, so with
+   * the promise form that ENOENT became an uncaught exception: deleting a
+   * folder inside your vault at the wrong moment could take the server with
+   * it. A `for await` around it cannot catch that, because it never travels
+   * through the iterator.
+   *
+   * Returns the watcher so a test can put an error through it; nothing else
+   * needs it.
+   */
+  function startWatching(signal) {
+    if (signal?.aborted) return null
+    let watcher
+    try {
+      watcher = watchDirectory(store.root, { recursive: true })
+    } catch (error) {
+      process.stderr.write(`SpaceFore: could not watch the vault (${error?.message ?? error}).\n`)
+      return null
+    }
+
+    watcher.on('error', (error) => {
+      // A folder that went away mid-scan. There is nothing to do about it and
+      // nothing is lost: the watch on the rest of the vault carries on.
+      if (error?.code === 'ENOENT') return
+      process.stderr.write(`SpaceFore: stopped watching the vault (${error?.message ?? error}).\n`)
+      watcher.close()
+    })
+
+    // One at a time, in order, as the `for await` loop used to do: two events
+    // for the same file processed together would race over `isOwnEcho`.
+    let queue = Promise.resolve()
+    watcher.on('change', (_eventType, filename) => {
+      queue = queue.then(() => announceChange(filename)).catch((error) => {
+        process.stderr.write(`SpaceFore: could not announce a change (${error?.message ?? error}).\n`)
+      })
+    })
+
+    signal?.addEventListener('abort', () => watcher.close(), { once: true })
+    return watcher
   }
 
   return { store, handle, startWatching, listeners }
