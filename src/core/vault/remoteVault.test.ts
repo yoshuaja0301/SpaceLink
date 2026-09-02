@@ -20,6 +20,7 @@ import { join } from 'node:path'
 
 // @ts-expect-error — plain JavaScript, typed by JSDoc rather than declarations
 import { createSyncServer } from '../../../server/index.mjs'
+import { comparePaths } from './paths'
 import { createRemoteVault, deviceId, normalizeServerUrl, probeServer, RemoteConflict } from './remoteVault'
 
 const TOKEN = 'b'.repeat(43)
@@ -388,5 +389,26 @@ describe('a rename announced by the change stream', () => {
     } finally {
       delete (globalThis as { EventSource?: unknown }).EventSource
     }
+  })
+})
+
+describe('the remote adapter behaves like every other adapter', () => {
+  it('throws "File not found" for a delete of a file that is not there', async () => {
+    const remote = await connect()
+    await expect(remote.remove('ghost.md')).rejects.toThrow('File not found: ghost.md')
+  })
+
+  it('treats a rename onto itself as nothing to do', async () => {
+    const remote = await connect()
+    await expect(remote.rename('Home.md', './Home.md')).resolves.toBeUndefined()
+    expect(await onDisk('Home.md')).toContain('# Home')
+  })
+
+  it('lists in the shared comparePaths order, not the server’s', async () => {
+    for (const name of ['b.md', 'B.md', 'a.md']) await writeFile(join(vault, name), '')
+    const remote = await connect()
+    const listed = (await remote.list()).map((file) => file.path)
+    expect(listed).toEqual([...listed].sort(comparePaths))
+    expect(listed.indexOf('B.md')).toBeLessThan(listed.indexOf('a.md'))
   })
 })

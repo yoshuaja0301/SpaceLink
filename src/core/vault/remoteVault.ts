@@ -15,7 +15,7 @@
  *    save.
  */
 import type { NotePath, VaultAdapter, VaultChange, VaultFile } from '../../types'
-import { dirName, extensionOf, joinPath, normalizePath, stemOf } from './paths'
+import { comparePaths, dirName, extensionOf, joinPath, normalizePath, stemOf } from './paths'
 
 export interface RemoteVaultOptions {
   /** Base address of the sync server, e.g. `https://notes.example.ts.net`. */
@@ -237,18 +237,21 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
       if (!response.ok) throw new Error(`The server could not list the vault (${response.status}).`)
       const body = (await response.json()) as { files: RemoteFile[] }
       hashes.clear()
-      return body.files.map((file) => {
-        const path = normalizePath(file.path)
-        hashes.set(path, file.hash)
-        return {
-          path,
-          name: file.isMarkdown ? stemOf(path) : path.slice(path.lastIndexOf('/') + 1),
-          extension: extensionOf(path),
-          isMarkdown: file.isMarkdown,
-          size: file.size,
-          mtime: file.mtime,
-        }
-      })
+      return body.files
+        .map((file) => {
+          const path = normalizePath(file.path)
+          hashes.set(path, file.hash)
+          return {
+            path,
+            name: file.isMarkdown ? stemOf(path) : path.slice(path.lastIndexOf('/') + 1),
+            extension: extensionOf(path),
+            isMarkdown: file.isMarkdown,
+            size: file.size,
+            mtime: file.mtime,
+          }
+        })
+        // The order every other adapter lists in, not the server's.
+        .sort((a, b) => comparePaths(a.path, b.path))
     },
 
     /**
@@ -384,13 +387,16 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
     async remove(path: NotePath): Promise<void> {
       const target = normalizePath(path)
       const response = await request(`/api/file?path=${encodeURIComponent(target)}`, { method: 'DELETE' })
-      if (!response.ok && response.status !== 404) throw new Error(`Could not delete "${target}" (${response.status}).`)
+      // What every other adapter says for a file that is not there.
+      if (response.status === 404) throw new Error(`File not found: ${target}`)
+      if (!response.ok) throw new Error(`Could not delete "${target}" (${response.status}).`)
       hashes.delete(target)
     },
 
     async rename(from: NotePath, to: NotePath): Promise<void> {
       const source = normalizePath(from)
       const target = normalizePath(to)
+      if (source === target) return // `./Home.md` is Home.md; nothing to do, as in every other adapter
       const response = await request('/api/rename', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
