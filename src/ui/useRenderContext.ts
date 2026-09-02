@@ -18,7 +18,7 @@
  * or of a vault that is no longer open — is revoked so the blob can be
  * collected.
  */
-import { useEffect, useMemo, useReducer } from 'react'
+import { useEffect, useMemo, useReducer, useRef } from 'react'
 
 import type { Note, NotePath, VaultAdapter, VaultFile, VaultIndex } from '../types'
 import type { RenderContext } from '../core/markdown/render'
@@ -128,7 +128,7 @@ function resolveAttachment(
  * ------------------------------------------------------------------ */
 
 /** Plenty for any realistic note, small enough to bound blob memory. */
-const MAX_CACHED_ASSETS = 64
+export const MAX_CACHED_ASSETS = 256
 
 /** `<vault id>\0<path>` -> `blob:`/`data:` URL. Insertion ordered, so the first key is the oldest. */
 const assetCache = new Map<string, string>()
@@ -204,16 +204,31 @@ function revokeAsset(url: string): void {
   }
 }
 
+/**
+ * The asset keys each mounted hook resolved in its latest render. Eviction
+ * never takes one of these: the note is on screen and its `<img>` is pointing
+ * at the URL, and revoking it would leave a broken picture in view. What is
+ * over the bound and pinned stays until the note that pins it goes.
+ */
+const pinned = new Map<symbol, ReadonlySet<string>>()
+
+function isPinned(key: string): boolean {
+  for (const keys of pinned.values()) if (keys.has(key)) return true
+  return false
+}
+
 function cacheAsset(key: string, url: string): void {
   const previous = assetCache.get(key)
   if (previous && previous !== url) revokeAsset(previous)
   assetCache.set(key, url)
-  while (assetCache.size > MAX_CACHED_ASSETS) {
-    const oldest = assetCache.keys().next()
-    if (oldest.done) break
-    const evicted = assetCache.get(oldest.value)
-    assetCache.delete(oldest.value)
-    if (evicted) revokeAsset(evicted)
+  let over = assetCache.size - MAX_CACHED_ASSETS
+  // Oldest first: a Map iterates in insertion order, and a hit re-inserts.
+  for (const [candidate, cached] of [...assetCache]) {
+    if (over <= 0) break
+    if (candidate === key || isPinned(candidate)) continue
+    assetCache.delete(candidate)
+    revokeAsset(cached)
+    over -= 1
   }
 }
 
@@ -339,6 +354,15 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
 
   const attachmentIndex = useMemo(() => buildAttachmentIndex(attachments), [attachments])
 
+  // What this note's latest render asked for, published after every render so
+  // eviction can leave it alone, and withdrawn when the note goes.
+  const pinId = useMemo(() => Symbol('render-context'), [])
+  const used = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    pinned.set(pinId, used.current)
+  })
+  useEffect(() => () => void pinned.delete(pinId), [pinId])
+
   return useMemo<RenderContext>(() => {
     // `assetTick` and `embeds` are never read here: they exist so that a
     // finished asset read, or an edit to a transcluded note, produces a brand
@@ -347,6 +371,8 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
     void assetTick
     void embeds
     const prefix = activateVault(adapter)
+    const asked = new Set<string>()
+    used.current = asked
     return {
       currentPath,
       resolveLink: (target, fromPath) => resolveLinkTarget(target, fromPath, index),
@@ -363,8 +389,17 @@ export function useRenderContext(currentPath: NotePath): RenderContext {
         if (!path) return null
 
         const key = `${prefix}${path}`
+        asked.add(key)
         const cached = assetCache.get(key)
-        if (cached) return cached
+        if (cached) {
+          // Touched: back to the end of the line. Eviction takes from the
+          // front, so what a note on screen keeps asking for is what stays,
+          // and a note left behind is what goes — not the other way round,
+          // which revoked the URL of an image still in view.
+          assetCache.delete(key)
+          assetCache.set(key, cached)
+          return cached
+        }
         if (adapter) loadAsset(adapter, key, path)
         return null
       },

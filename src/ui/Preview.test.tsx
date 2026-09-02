@@ -11,6 +11,7 @@ import type { Note, NotePath, VaultAdapter, VaultFile } from '../types'
 import { emptyIndex, buildIndex } from '../core/graph/index'
 import { makeNote, useAppStore } from '../state/store'
 import { Preview } from './Preview'
+import { MAX_CACHED_ASSETS } from './useRenderContext'
 import { useRenderContext } from './useRenderContext'
 
 /**
@@ -929,6 +930,68 @@ describe('useRenderContext — asset cache', () => {
     })
     expect(container.querySelector('img.embed-image')?.getAttribute('src')).toBe('blob:spacefore/2')
     expect(revoked).toContain(before)
+  })
+})
+
+describe('Preview — the asset cache keeps what is on screen', () => {
+  function imageFile(path: string): VaultFile {
+    return { path, name: path.slice(path.lastIndexOf('/') + 1), extension: 'png', isMarkdown: false, size: 4, mtime: 1 }
+  }
+
+  it('evicts the image least recently shown, never one a mounted note keeps asking for', async () => {
+    const revoked: string[] = []
+    let issued = 0
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      issued += 1
+      return `blob:spacefore/${issued}`
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url: string) => void revoked.push(url))
+
+    // Note A shows one image; note B shows as many as the cache holds. With
+    // first-in-first-out eviction, B's last image pushes A's out and revokes
+    // the URL A's <img> is still pointing at.
+    const others = Array.from({ length: MAX_CACHED_ASSETS }, (_, i) => `img/other-${i}.png`)
+    const adapter = {
+      kind: 'directory',
+      name: 'vault',
+      writable: true,
+      list: async () => [],
+      read: async () => '',
+      readBinary: async () => new Blob(['png'], { type: 'image/png' }),
+      write: async () => {},
+      writeBinary: async () => {},
+      remove: async () => {},
+      rename: async () => {},
+      exists: async () => true,
+    } as unknown as VaultAdapter
+    seed(
+      { 'A.md': '![[keep.png]]', 'B.md': others.map((path) => `![[${path.slice(4)}]]`).join('\n\n'), 'C.md': '![[late.png]]' },
+      { attachments: [imageFile('img/keep.png'), imageFile('img/late.png'), ...others.map(imageFile)], adapter },
+    )
+
+    const a = render(<Preview path="A.md" paneId={PANE_ID} />)
+    await waitFor(() => {
+      expect(a.container.querySelector('img.embed-image')).not.toBeNull()
+    })
+    const kept = a.container.querySelector('img.embed-image')!.getAttribute('src')
+
+    const b = render(<Preview path="B.md" paneId="pane-b" />)
+    await waitFor(() => {
+      expect(b.container.querySelectorAll('img.embed-image[src^="blob:"]').length).toBe(MAX_CACHED_ASSETS)
+    })
+
+    // Everything on screen is still on screen: one image over the bound, and
+    // nothing revoked, because every entry is pinned by a mounted note.
+    expect(revoked).toEqual([])
+    expect(a.container.querySelector('img.embed-image')!.getAttribute('src')).toBe(kept)
+
+    // Once A is gone its image is fair game, and the next arrival evicts it.
+    a.unmount()
+    const c = render(<Preview path="C.md" paneId="pane-c" />)
+    await waitFor(() => {
+      expect(c.container.querySelector('img.embed-image[src^="blob:"]')).not.toBeNull()
+    })
+    expect(revoked).toEqual([kept])
   })
 })
 
