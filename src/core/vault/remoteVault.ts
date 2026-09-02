@@ -130,8 +130,21 @@ function conflictPathFor(path: NotePath, when: Date): NotePath {
   const extension = extensionOf(path)
   // `stemOf`, not `baseName`: the latter keeps the extension, which would name
   // the copy "Home.md (conflict …).md".
-  const stem = stemOf(path)
-  return joinPath(folder, `${stem} (conflict ${stamp})${extension ? `.${extension}` : ''}`)
+  const suffix = ` (conflict ${stamp})${extension ? `.${extension}` : ''}`
+  // A file name has a limit — 255 bytes on every common file system — and a
+  // note named near it has no room for the suffix. The copy is the only place
+  // this device's text goes, so the stem gives way rather than the copy.
+  return joinPath(folder, `${fitStem(stemOf(path), MAX_FILE_NAME_BYTES - utf8Length(suffix))}${suffix}`)
+}
+
+const MAX_FILE_NAME_BYTES = 255
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length
+
+/** `stem` cut to at most `bytes` of UTF-8, at a character boundary. */
+function fitStem(stem: string, bytes: number): string {
+  let out = stem
+  while (out.length > 0 && utf8Length(out) > bytes) out = out.slice(0, -1)
+  return out
 }
 
 export async function createRemoteVault(options: RemoteVaultOptions): Promise<VaultAdapter> {
@@ -192,6 +205,14 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
       if (!change || change.origin === device) return // our own save
       if (change.type === 'upsert' && change.path && change.hash) hashes.set(change.path, change.hash)
       if (change.type === 'remove' && change.path) hashes.delete(change.path)
+      // A rename done elsewhere: the bytes, and so the hash, travel with the
+      // file. Left filed under the old name, the next save of the new one
+      // would carry no If-Match and write over whatever that device did next.
+      if (change.type === 'rename' && change.from && change.to) {
+        const moved = hashes.get(change.from)
+        hashes.delete(change.from)
+        if (moved !== undefined) hashes.set(change.to, moved)
+      }
       emit({ type: change.type, path: change.path, from: change.from, to: change.to })
     }
     stream.onerror = () => {
@@ -320,11 +341,22 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
         // the server's version down.
         const body = (await response.json().catch(() => ({}))) as { currentHash?: string }
         const conflictPath = conflictPathFor(target, new Date())
-        await request(`/api/file?path=${encodeURIComponent(conflictPath)}`, {
+        const copy = await request(`/api/file?path=${encodeURIComponent(conflictPath)}`, {
           method: 'PUT',
           headers: { 'content-type': 'text/markdown; charset=utf-8' },
           body: content,
         })
+        if (!copy.ok) {
+          // RemoteConflict means "your version was kept". When the copy could
+          // not be written — a name too long, a full disk — that promise would
+          // have the store clear the note's unsaved flag and load the server's
+          // text over the only copy of this one. An ordinary failure keeps the
+          // note marked, and the hash is left as it was so the next save is
+          // refused again rather than writing over the other device's text.
+          throw new Error(
+            `Could not save "${target}": it changed on another device, and a copy of this version could not be written (${copy.status}).`,
+          )
+        }
         if (body.currentHash) hashes.set(target, body.currentHash)
         // Only the new copy is announced. Reloading the original is the store's
         // job, in the same step that clears the note's unsaved flag — announcing

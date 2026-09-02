@@ -20,6 +20,8 @@ interface FileSystemHandlePermissionDescriptor {
 }
 
 interface FileSystemHandle {
+  /** Same file or folder on disk, whatever the two handles were opened as. */
+  isSameEntry?(other: FileSystemHandle): Promise<boolean>
   /** Chromium only; absent in browsers that ship the API without permissions. */
   queryPermission?(descriptor?: FileSystemHandlePermissionDescriptor): Promise<PermissionState>
   requestPermission?(descriptor?: FileSystemHandlePermissionDescriptor): Promise<PermissionState>

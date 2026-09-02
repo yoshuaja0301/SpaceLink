@@ -8,12 +8,12 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createSyncServer } from './index.mjs'
-import { VaultStore, hashOf } from './vaultStore.mjs'
+import { VaultConflictError, VaultStore, hashOf } from './vaultStore.mjs'
 import { generateToken, parseArgs, tokensMatch } from './config.mjs'
 
 const TOKEN = 'a'.repeat(43)
@@ -28,6 +28,8 @@ let base
 let sync
 /** @type {AbortController} */
 let watching
+/** @type {import('node:fs').FSWatcher | null} */
+let watcher
 
 beforeAll(async () => {
   vault = await mkdtemp(join(tmpdir(), 'spacefore-server-'))
@@ -37,7 +39,7 @@ beforeAll(async () => {
   const address = listener.address()
   base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   watching = new AbortController()
-  void sync.startWatching(watching.signal)
+  watcher = sync.startWatching(watching.signal)
 })
 
 afterAll(async () => {
@@ -745,5 +747,219 @@ describe('a folder that vanishes while the watcher is scanning it', () => {
     const controller = new AbortController()
     controller.abort()
     expect(server.startWatching(controller.signal)).toBeNull()
+  })
+})
+
+describe('a request that is not an address', () => {
+  it('survives GET /%ZZ without a token, and keeps serving', async () => {
+    // Nothing checks the token before the static file server, so anyone on
+    // the network could send this; it used to reject the handler's promise,
+    // which nobody awaited, and Node ended the process.
+    const bad = await fetch(`${base}/%ZZ`)
+    expect(bad.status).toBe(400)
+    expect((await fetch(`${base}/api/health`)).status).toBe(200)
+  })
+
+  it('keeps the message of an error nobody planned for to itself — it names the vault on disk', async () => {
+    const list = sync.store.list
+    sync.store.list = async () => {
+      throw new Error(`EACCES: permission denied, scandir '${vault}'`)
+    }
+    try {
+      const response = await call('/api/files')
+      expect(response.status).toBe(500)
+      const text = await response.text()
+      expect(text).not.toContain(vault)
+      expect(JSON.parse(text)).toEqual({ error: 'Something went wrong.' })
+    } finally {
+      sync.store.list = list
+    }
+  })
+
+  it('answers a rename with a body that is not JSON with a 400, not a stack trace', async () => {
+    const response = await call('/api/rename', { method: 'POST', body: '{not json' })
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toMatch(/JSON/)
+  })
+})
+
+describe('two devices saving the same note at the same moment', () => {
+  it('lets exactly one conditional write through at the store', async () => {
+    const store = new VaultStore(vault)
+    const { hash } = await store.read('Home.md')
+    const results = await Promise.allSettled([
+      store.write('Home.md', Buffer.from('device A edit\n'), hash),
+      store.write('Home.md', Buffer.from('device B edit\n'), hash),
+    ])
+    const conflicts = results.filter((result) => result.status === 'rejected' && result.reason instanceof VaultConflictError)
+    expect(conflicts, JSON.stringify(results)).toHaveLength(1)
+    const winner = results.findIndex((result) => result.status === 'fulfilled')
+    expect(await onDisk('Home.md')).toBe(winner === 0 ? 'device A edit\n' : 'device B edit\n')
+  })
+
+  it('answers one PUT with 200 and the other with 409 over HTTP', async () => {
+    const etag = (await call('/api/file?path=Home.md')).headers.get('etag')
+    const [a, b] = await Promise.all([
+      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacefore-client': 'device-a' }, body: 'device A edit\n' }),
+      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacefore-client': 'device-b' }, body: 'device B edit\n' }),
+    ])
+    expect([a.status, b.status].sort()).toEqual([200, 409])
+    const refused = a.status === 409 ? a : b
+    expect((await refused.json()).currentHash).toBe(hashOf(await onDisk('Home.md')))
+  })
+})
+
+describe('a link inside the vault', () => {
+  /** @type {string} */
+  let outside
+
+  beforeAll(async () => {
+    outside = await mkdtemp(join(tmpdir(), 'spacefore-outside-'))
+    await writeFile(join(outside, 'secret.md'), 'top secret\n')
+    await writeFile(join(outside, 'victim.md'), 'keep me\n')
+    await symlink(outside, join(vault, 'link'))
+    await symlink(join(vault, 'Ideas'), join(vault, 'Alias'))
+  })
+
+  afterAll(async () => {
+    await unlink(join(vault, 'link')).catch(() => {})
+    await unlink(join(vault, 'Alias')).catch(() => {})
+    await rm(outside, { recursive: true, force: true })
+  })
+
+  it('is not read through, whatever it points at', async () => {
+    const read = await call(`/api/file?path=${encodeURIComponent('link/secret.md')}`)
+    expect(read.status).toBe(400)
+    expect(JSON.stringify(await read.json())).not.toContain(outside)
+  })
+
+  it('is not written or deleted through', async () => {
+    const write = await call(`/api/file?path=${encodeURIComponent('link/planted.md')}`, { method: 'PUT', body: 'planted' })
+    expect(write.status).toBe(400)
+    await expect(readFile(join(outside, 'planted.md'), 'utf8')).rejects.toThrow()
+
+    const remove = await call(`/api/file?path=${encodeURIComponent('link/victim.md')}`, { method: 'DELETE' })
+    expect(remove.status).toBe(400)
+    expect(await readFile(join(outside, 'victim.md'), 'utf8')).toBe('keep me\n')
+  })
+
+  it('is absent from the listing and from the file API alike', async () => {
+    const { files } = await (await call('/api/files')).json()
+    const paths = files.map((file) => file.path)
+    expect(paths).toContain('Ideas/Seed.md')
+    expect(paths.some((path) => path.startsWith('Alias/') || path.startsWith('link/'))).toBe(false)
+    expect((await call(`/api/file?path=${encodeURIComponent('Alias/Seed.md')}`)).status).toBe(400)
+  })
+})
+
+describe('what the watcher tells the other devices', { timeout: 20_000 }, () => {
+  /** @type {any[]} */
+  const captured = []
+  const tap = {
+    write: (chunk) => {
+      for (const line of String(chunk).split('\n')) {
+        if (line.startsWith('data: ')) captured.push(JSON.parse(line.slice(6)))
+      }
+    },
+  }
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  /** @param {() => boolean} condition */
+  async function until(condition, timeoutMs = 8_000) {
+    const started = Date.now()
+    while (!condition() && Date.now() - started < timeoutMs) await sleep(25)
+    return condition()
+  }
+
+  beforeAll(() => {
+    sync.listeners.add(tap)
+  })
+  afterAll(() => {
+    sync.listeners.delete(tap)
+  })
+  beforeEach(() => {
+    captured.length = 0
+  })
+
+  it('announces a note that was deleted and then put back with the same bytes after an API write', async () => {
+    const body = '# Home\n\nsaved by device A\n'
+    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacefore-client': 'device-a' }, body })
+    await sleep(400) // the watcher's echo of that write goes by, suppressed as it should be
+    captured.length = 0
+
+    // `git stash`, or an editor that saves by delete-and-create. The event is
+    // put through the watcher by hand as well: Node's emulated recursive watch
+    // on Linux loses a file after an atomic replace, and this test is about
+    // what the server says when told, not whether the emulation tells it.
+    await unlink(join(vault, 'Home.md'))
+    watcher?.emit('change', 'rename', 'Home.md')
+    expect(
+      await until(() => captured.some((event) => event.type === 'remove' && event.path === 'Home.md')),
+      `events after the delete: ${JSON.stringify(captured)}`,
+    ).toBe(true)
+    await writeFile(join(vault, 'Home.md'), body)
+    watcher?.emit('change', 'rename', 'Home.md')
+
+    // The same bytes as device A's write — but every device was just told the
+    // note is gone, so this is news, not an echo.
+    const back = await until(() => captured.some((event) => event.type === 'upsert' && event.path === 'Home.md'))
+    expect(back, `events after the file came back: ${JSON.stringify(captured)}`).toBe(true)
+  })
+
+  it('does not echo an API rename back as an anonymous write of the new name', async () => {
+    const response = await call('/api/rename', {
+      method: 'POST',
+      headers: { 'x-spacefore-client': 'device-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ from: 'Ideas/Seed.md', to: 'Ideas/Moved.md' }),
+    })
+    expect(response.status).toBe(200)
+    await sleep(1_000)
+    // The renaming device has its note marked unsaved until its own save
+    // lands; an origin-less upsert would read to it as somebody else's edit.
+    const stray = captured.filter((event) => event.type === 'upsert' && event.path === 'Ideas/Moved.md' && !event.origin)
+    expect(stray, `all events: ${JSON.stringify(captured)}`).toEqual([])
+    expect(captured.some((event) => event.type === 'rename' && event.to === 'Ideas/Moved.md' && event.origin === 'device-a')).toBe(true)
+  })
+
+  it('neither announces nor serves a note in a hidden folder, which the listing leaves out', async () => {
+    await mkdir(join(vault, '.github'), { recursive: true })
+    await writeFile(join(vault, '.github/notes.md'), '# not a note\n')
+    try {
+      await sleep(600)
+      const { files } = await (await call('/api/files')).json()
+      expect(files.map((file) => file.path)).not.toContain('.github/notes.md')
+      expect(captured.some((event) => event.path === '.github/notes.md')).toBe(false)
+      expect((await call(`/api/file?path=${encodeURIComponent('.github/notes.md')}`)).status).toBe(400)
+    } finally {
+      await rm(join(vault, '.github'), { recursive: true, force: true })
+    }
+  })
+
+  it('does not announce a folder as a removed note', async () => {
+    await mkdir(join(vault, 'Fresh Folder'), { recursive: true })
+    try {
+      await sleep(600)
+      expect(captured.filter((event) => event.path === 'Fresh Folder')).toEqual([])
+    } finally {
+      await rm(join(vault, 'Fresh Folder'), { recursive: true, force: true })
+    }
+  })
+})
+
+describe('a path that names a folder, or runs through a file', () => {
+  it('is refused with a 4xx that does not reveal where the vault is on disk', async () => {
+    const attempts = [
+      call('/api/file?path=Ideas', { method: 'DELETE' }),
+      call('/api/file?path=Ideas', { method: 'PUT', body: 'x' }),
+      call('/api/rename', { method: 'POST', body: JSON.stringify({ from: 'Ideas/Seed.md', to: 'Home.md/Seed.md' }) }),
+      call(`/api/file?path=${encodeURIComponent('Home.md/inside.md')}`, { method: 'PUT', body: 'x' }),
+    ]
+    for (const response of await Promise.all(attempts)) {
+      const text = await response.text()
+      expect(response.status, text).toBeGreaterThanOrEqual(400)
+      expect(response.status, text).toBeLessThan(500)
+      expect(text).not.toContain(vault)
+    }
+    expect(await onDisk('Ideas/Seed.md')).toBe('# Seed\n')
+    expect(await onDisk('Home.md')).toContain('# Home')
   })
 })

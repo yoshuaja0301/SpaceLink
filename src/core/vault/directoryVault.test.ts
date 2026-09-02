@@ -42,6 +42,10 @@ class FakeFileHandle {
     return new File([this.data], this.name, { lastModified: this.lastModified })
   }
 
+  async isSameEntry(other: unknown): Promise<boolean> {
+    return other === this
+  }
+
   async createWritable(): Promise<{
     write: (chunk: Blob | string) => Promise<void>
     close: () => Promise<void>
@@ -79,8 +83,28 @@ class FakeDirectoryHandle {
   requestCalls = 0
   /** Set to make `getDirectoryHandle(..., { create: true })` fail. */
   failCreate: string | null = null
+  /**
+   * Model a volume that does not tell `Home.md` from `home.md` — APFS and NTFS
+   * as shipped. Opening either name opens the one file that is there.
+   */
+  caseInsensitive = false
 
   constructor(readonly name: string) {}
+
+  /** The child `name` opens: the exact one, or on a case-insensitive volume any that matches. */
+  private lookup(name: string): FakeFileHandle | FakeDirectoryHandle | undefined {
+    const exact = this.children.get(name)
+    if (exact || !this.caseInsensitive) return exact
+    for (const [key, value] of this.children) if (key.toLowerCase() === name.toLowerCase()) return value
+    return undefined
+  }
+
+  /** The key `name` is stored under, if a child already answers to it. */
+  private keyFor(name: string): string {
+    if (!this.caseInsensitive) return name
+    for (const key of this.children.keys()) if (key.toLowerCase() === name.toLowerCase()) return key
+    return name
+  }
 
   async *entries(): AsyncGenerator<[string, FakeFileHandle | FakeDirectoryHandle]> {
     // Snapshot: the adapter may mutate the folder while a walk is in flight.
@@ -88,7 +112,7 @@ class FakeDirectoryHandle {
   }
 
   async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FakeDirectoryHandle> {
-    const existing = this.children.get(name)
+    const existing = this.lookup(name)
     if (existing) {
       if (existing.kind !== 'directory') throw fsError('TypeMismatchError', `"${name}" is a file`)
       return existing
@@ -97,12 +121,13 @@ class FakeDirectoryHandle {
     if (this.failCreate) throw fsError('NotAllowedError', this.failCreate)
     const created = new FakeDirectoryHandle(name)
     created.failCreate = this.failCreate
+    created.caseInsensitive = this.caseInsensitive
     this.children.set(name, created)
     return created
   }
 
   async getFileHandle(name: string, options?: { create?: boolean }): Promise<FakeFileHandle> {
-    const existing = this.children.get(name)
+    const existing = this.lookup(name)
     if (existing) {
       if (existing.kind !== 'file') throw fsError('TypeMismatchError', `"${name}" is a directory`)
       return existing
@@ -114,12 +139,13 @@ class FakeDirectoryHandle {
   }
 
   async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
-    const existing = this.children.get(name)
+    const key = this.keyFor(name)
+    const existing = this.children.get(key)
     if (!existing) throw fsError('NotFoundError', `No entry named "${name}"`)
     if (existing.kind === 'directory' && existing.children.size > 0 && !options?.recursive) {
       throw fsError('InvalidModificationError', `"${name}" is not empty`)
     }
-    this.children.delete(name)
+    this.children.delete(key)
   }
 
   async queryPermission(): Promise<PermissionState> {
@@ -135,8 +161,9 @@ class FakeDirectoryHandle {
 }
 
 /** Build a folder tree from `path -> contents`. */
-function buildDirectory(name: string, files: Record<string, string>): FakeDirectoryHandle {
+function buildDirectory(name: string, files: Record<string, string>, caseInsensitive = false): FakeDirectoryHandle {
   const root = new FakeDirectoryHandle(name)
+  root.caseInsensitive = caseInsensitive
   for (const [path, contents] of Object.entries(files)) {
     const segments = path.split('/')
     const fileName = segments.pop() as string
@@ -145,6 +172,7 @@ function buildDirectory(name: string, files: Record<string, string>): FakeDirect
       let next = directory.children.get(segment)
       if (!next) {
         next = new FakeDirectoryHandle(segment)
+        ;(next as FakeDirectoryHandle).caseInsensitive = caseInsensitive
         directory.children.set(segment, next)
       }
       directory = next as FakeDirectoryHandle
@@ -508,6 +536,102 @@ describe('createDirectoryVault — rename', () => {
     const { vault } = makeVault()
     await vault.rename('Welcome.md', './Welcome.md')
     expect(await vault.read('Welcome.md')).toBe(VAULT_FILES['Welcome.md'])
+  })
+})
+
+describe('createDirectoryVault — a file that appeared after the first walk', () => {
+  // Obsidian, git pull, Finder: none of them tell the app. The tree was walked
+  // once, and "not in the tree" must not be taken for "not on disk".
+  it('is seen by exists() and read(), and by the next list()', async () => {
+    const { root, vault } = makeVault()
+    await vault.list()
+    root.children.set('Ideas.md', new FakeFileHandle('Ideas.md', '# Ideas written elsewhere\n'))
+
+    expect(await vault.exists('Ideas.md')).toBe(true)
+    expect(await vault.read('Ideas.md')).toBe('# Ideas written elsewhere\n')
+    expect((await vault.list()).map((file) => file.path)).toContain('Ideas.md')
+  })
+
+  it('can be read straight away, without anything else having looked first', async () => {
+    const { root, vault } = makeVault()
+    await vault.list()
+    root.children.set('Ideas.md', new FakeFileHandle('Ideas.md', '# Ideas written elsewhere\n'))
+    expect(await vault.read('Ideas.md')).toBe('# Ideas written elsewhere\n')
+  })
+
+  it('is not written over by a createNote-style "exists, then write"', async () => {
+    const { root, vault } = makeVault()
+    await vault.list()
+    root.children.set('Ideas.md', new FakeFileHandle('Ideas.md', '# Ideas written elsewhere\n'))
+
+    if (!(await vault.exists('Ideas.md'))) await vault.write('Ideas.md', '')
+
+    expect(await (findNode(root, 'Ideas.md') as FakeFileHandle).getFile().then((file) => file.text())).toBe(
+      '# Ideas written elsewhere\n',
+    )
+  })
+
+  it('still keeps out of a skipped folder, which the disk probe must not reach into', async () => {
+    const { root, vault } = makeVault()
+    await vault.list()
+    const git = new FakeDirectoryHandle('.git')
+    git.children.set('HEAD.md', new FakeFileHandle('HEAD.md', 'ref'))
+    root.children.set('.git', git)
+
+    expect(await vault.exists('.git/HEAD.md')).toBe(false)
+    await expect(vault.read('.git/HEAD.md')).rejects.toThrow('File not found')
+  })
+})
+
+describe('createDirectoryVault — a rename that only changes letter case', () => {
+  it('keeps the note on a volume that does not tell the two names apart', async () => {
+    // Copy-then-delete would copy Home.md onto itself and then delete the only copy.
+    const root = buildDirectory('vault', { 'Home.md': '# Home\n\nimportant text\n' }, true)
+    const vault = createDirectoryVault(asHandle(root))
+    await vault.list()
+
+    await vault.rename('Home.md', 'home.md')
+
+    expect([...root.children.keys()]).toEqual(['home.md'])
+    expect(await vault.read('home.md')).toBe('# Home\n\nimportant text\n')
+  })
+
+  it('is an ordinary rename on a volume that does tell them apart', async () => {
+    const root = buildDirectory('vault', { 'Home.md': '# Home\n' })
+    const vault = createDirectoryVault(asHandle(root))
+    await vault.rename('Home.md', 'home.md')
+    expect([...root.children.keys()]).toEqual(['home.md'])
+  })
+
+  it('still refuses a target that is a different file, even one the tree has not seen yet', async () => {
+    const { root, vault } = makeVault()
+    await vault.list()
+    root.children.set('Taken.md', new FakeFileHandle('Taken.md', 'taken'))
+    await expect(vault.rename('Welcome.md', 'Taken.md')).rejects.toThrow(/already exists/)
+    expect(await vault.read('Taken.md')).toBe('taken')
+    expect(await vault.exists('Welcome.md')).toBe(true)
+  })
+})
+
+describe('createDirectoryVault — names the vault spells differently from the disk', () => {
+  it('lists a file with a trailing space under the path it can be read by, and writes to that same file', async () => {
+    const root = buildDirectory('vault', { 'Draft.md ': '# Draft' })
+    const vault = createDirectoryVault(asHandle(root))
+
+    expect((await vault.list()).map((file) => file.path)).toEqual(['Draft.md'])
+    expect(await vault.exists('Draft.md')).toBe(true)
+    expect(await vault.read('Draft.md')).toBe('# Draft')
+
+    await vault.write('Draft.md', '# Draft, edited')
+    expect([...root.children.keys()]).toEqual(['Draft.md '])
+    expect(await vault.read('Draft.md')).toBe('# Draft, edited')
+  })
+
+  it('lists a file whose name holds a backslash under the slashed path it reads by', async () => {
+    const root = buildDirectory('vault', { 'a\\b.md': 'ab' })
+    const vault = createDirectoryVault(asHandle(root))
+    expect((await vault.list()).map((file) => file.path)).toEqual(['a/b.md'])
+    expect(await vault.read('a/b.md')).toBe('ab')
   })
 })
 

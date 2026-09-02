@@ -116,14 +116,6 @@ export function createDirectoryVault(handle: FileSystemDirectoryHandle, name: st
     return tree
   }
 
-  async function fileHandleFor(path: NotePath): Promise<FileSystemFileHandle> {
-    const normalized = normalizePath(path)
-    const { files } = await ensureTree()
-    const found = files.get(normalized)
-    if (!found) throw new Error(`File not found: ${normalized}`)
-    return found
-  }
-
   /** Walk down to the folder holding `path`, optionally creating it. */
   async function directoryFor(path: NotePath, create: boolean): Promise<FileSystemDirectoryHandle> {
     let directory = handle
@@ -133,11 +125,41 @@ export function createDirectoryVault(handle: FileSystemDirectoryHandle, name: st
     return directory
   }
 
+  /**
+   * Look `normalized` up on disk rather than in the cached tree. The tree was
+   * walked once; a file another program has created since is not in it, and
+   * `exists` answering "no" for such a file is exactly how createNote would
+   * write over it. Skipped folders stay off limits either way.
+   */
+  async function probeFile(normalized: NotePath): Promise<FileSystemFileHandle | null> {
+    if (pathSegments(normalized).some(isSkipped) || isSkipped(baseName(normalized))) return null
+    try {
+      const directory = await directoryFor(normalized, false)
+      return await directory.getFileHandle(baseName(normalized))
+    } catch {
+      return null
+    }
+  }
+
+  async function fileHandleFor(path: NotePath): Promise<FileSystemFileHandle> {
+    const normalized = normalizePath(path)
+    const { files } = await ensureTree()
+    const cached = files.get(normalized)
+    if (cached) return cached
+    const found = await probeFile(normalized)
+    if (!found) throw new Error(`File not found: ${normalized}`)
+    invalidate() // the folder has changed under the cache; the next listing walks it again
+    return found
+  }
+
   /** Create intermediate folders as needed, then replace the file's contents. */
   async function writeFile(path: NotePath, data: string | Blob): Promise<void> {
     try {
-      const directory = await directoryFor(path, true)
-      const file = await directory.getFileHandle(baseName(path), { create: true })
+      // A file already listed under this path is written through its own
+      // handle: its name on disk may not be the path's spelling (a trailing
+      // space, a backslash), and opening by name would create a second file.
+      const listed = tree ? (await tree).files.get(path) : undefined
+      const file = listed ?? (await (await directoryFor(path, true)).getFileHandle(baseName(path), { create: true }))
       const writable = await file.createWritable()
       try {
         await writable.write(data)
@@ -205,13 +227,29 @@ export function createDirectoryVault(handle: FileSystemDirectoryHandle, name: st
       if (source === target) return
 
       const { files } = await ensureTree()
-      const sourceHandle = files.get(source)
+      const sourceHandle = files.get(source) ?? (await probeFile(source))
       if (!sourceHandle) throw new Error(`File not found: ${source}`)
       if (files.has(target)) throw new Error(`Cannot rename to ${target}: that file already exists.`)
 
       // Copy as a blob so attachments survive the round trip untouched, and
       // only unlink the original once the copy is on disk.
       const contents = await sourceHandle.getFile()
+      const clash = await probeFile(target)
+      if (clash) {
+        if (!(await sameEntry(clash, sourceHandle, source, target))) {
+          throw new Error(`Cannot rename to ${target}: that file already exists.`)
+        }
+        // Only the letter case changes, on a volume that does not tell the two
+        // apart (APFS and NTFS by default): opening `home.md` opened Home.md
+        // itself, so the copy below would write the file onto itself and the
+        // delete would then remove the only copy. Go through a third name.
+        const temporary = `${target}.spacefore-renaming`
+        await writeFile(temporary, contents)
+        await removeFile(source)
+        await writeFile(target, contents)
+        await removeFile(temporary)
+        return
+      }
       await writeFile(target, contents)
       await removeFile(source)
     },
@@ -220,12 +258,27 @@ export function createDirectoryVault(handle: FileSystemDirectoryHandle, name: st
       try {
         const normalized = normalizePath(path)
         const { files } = await ensureTree()
-        return files.has(normalized)
+        if (files.has(normalized)) return true
+        const onDisk = (await probeFile(normalized)) !== null
+        if (onDisk) invalidate()
+        return onDisk
       } catch {
         return false
       }
     },
   }
+}
+
+/**
+ * Are `a` and `b` the same file on disk? Asked when a rename's target opens a
+ * file: on a case-insensitive volume that file may be the source itself.
+ */
+async function sameEntry(a: FileSystemHandle, b: FileSystemHandle, aPath: NotePath, bPath: NotePath): Promise<boolean> {
+  if (typeof a.isSameEntry === 'function') return a.isSameEntry(b).catch(() => false)
+  // No `isSameEntry`: the same folder and a name that differs only in case is
+  // the only way one path can open the other's file.
+  const folderOf = (path: NotePath): string => pathSegments(path).join('/')
+  return folderOf(aPath) === folderOf(bPath) && baseName(aPath).toLowerCase() === baseName(bPath).toLowerCase()
 }
 
 /** Recursively collect every file below `root`, skipping dot- and vendor folders. */
@@ -240,9 +293,22 @@ async function walkDirectory(root: FileSystemDirectoryHandle): Promise<HandleTre
       if (child.kind === 'directory') {
         await walk(child, path)
       } else {
+        // Filed under the path the entry reports, which is the name normalised
+        // (a trailing space trimmed, a backslash made a slash): every lookup
+        // normalises the caller's path first, so the two have to agree or the
+        // note shows in the tree and cannot be opened. A name the vault cannot
+        // address at all, or a second name normalising to a listed one, is
+        // left out rather than listed twice.
+        let key: NotePath
+        try {
+          key = normalizePath(path)
+        } catch {
+          continue
+        }
+        if (files.has(key)) continue
         const file = await child.getFile()
-        files.set(path, child)
-        entries.push(toVaultFile(path, file.size, file.lastModified))
+        files.set(key, child)
+        entries.push(toVaultFile(key, file.size, file.lastModified))
       }
     }
   }

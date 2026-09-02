@@ -293,3 +293,100 @@ describe('deviceId', () => {
     if (original) Object.defineProperty(window, 'localStorage', original)
   })
 })
+
+describe('a conflict copy that cannot be written the usual way', () => {
+  // 80 CJK characters are 240 bytes; with ".md" the name is 243 bytes, legal
+  // everywhere (the limit is 255). The " (conflict …).md" suffix would take it
+  // to 274, which no file system accepts.
+  const longName = `${'記'.repeat(80)}.md`
+
+  it('shortens the copy’s name to fit, rather than losing the text', async () => {
+    const remote = await connect()
+    await remote.write(longName, 'original\n')
+    await writeFile(join(vault, longName), 'edited elsewhere\n') // another device
+
+    const thrown = await remote.write(longName, 'my local edits\n').then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(thrown).toBeInstanceOf(RemoteConflict)
+    const copy = (thrown as RemoteConflict).conflictPath
+    expect(Buffer.byteLength(copy, 'utf8')).toBeLessThanOrEqual(255)
+    expect(copy).toMatch(/ \(conflict .*\)\.md$/)
+    expect(await onDisk(copy)).toBe('my local edits\n')
+    expect(await onDisk(longName)).toBe('edited elsewhere\n')
+  })
+
+  it('raises an ordinary error, not "your version was kept", when the server refuses the copy', async () => {
+    const remote = await connect()
+    await remote.write('Home.md', 'original\n')
+    await writeFile(join(vault, 'Home.md'), 'edited elsewhere\n')
+
+    // RemoteConflict is what makes the store drop the note's unsaved flag and
+    // load the server's text over it: it may only be raised once the copy is
+    // really there. Here the server cannot take it.
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (init?.method === 'PUT' && decodeURIComponent(url).includes('(conflict')) {
+        return new Response(JSON.stringify({ error: 'no room' }), { status: 507 })
+      }
+      return realFetch(input, init)
+    }
+    try {
+      const thrown = await remote.write('Home.md', 'my local edits\n').then(
+        () => null,
+        (error: unknown) => error,
+      )
+      expect(thrown).toBeInstanceOf(Error)
+      expect(thrown).not.toBeInstanceOf(RemoteConflict)
+      expect((thrown as Error).message).toMatch(/copy of this version could not be written/)
+      expect(await filesInVault()).not.toContainEqual(expect.stringContaining('(conflict'))
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    // The hash was left as it was, so the retry is refused again and writes a
+    // copy — instead of carrying the server's hash and writing over its text.
+    await expect(remote.write('Home.md', 'my local edits\n')).rejects.toBeInstanceOf(RemoteConflict)
+    expect(await onDisk('Home.md')).toBe('edited elsewhere\n')
+  })
+})
+
+describe('a rename announced by the change stream', () => {
+  it('moves the known hash with it, so the next save of the new name is still conditional', async () => {
+    const streams: FakeEventSource[] = []
+    class FakeEventSource {
+      onopen: (() => void) | null = null
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: (() => void) | null = null
+      constructor(_url: string) {
+        streams.push(this)
+      }
+      close(): void {}
+    }
+    ;(globalThis as { EventSource?: unknown }).EventSource = FakeEventSource
+    try {
+      const remote = await connect()
+      await remote.list() // learns Home.md's hash
+      if (!remote.watch) throw new Error('the remote vault has no change stream')
+      remote.watch(() => {})
+      // Another device renames Home.md through the API, and the stream says so.
+      await fetch(`${origin}/api/rename`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'x-spacefore-client': 'other' },
+        body: JSON.stringify({ from: 'Home.md', to: 'Start.md' }),
+      })
+      const announce = streams[0]?.onmessage
+      if (!announce) throw new Error('the adapter never opened its change stream')
+      announce({ data: JSON.stringify({ type: 'rename', from: 'Home.md', to: 'Start.md', origin: 'other' }) })
+      // …and edits it before this device saves its own, older, version.
+      await writeFile(join(vault, 'Start.md'), '# edited elsewhere\n')
+
+      await expect(remote.write('Start.md', '# mine\n')).rejects.toBeInstanceOf(RemoteConflict)
+      expect(await onDisk('Start.md')).toBe('# edited elsewhere\n')
+    } finally {
+      delete (globalThis as { EventSource?: unknown }).EventSource
+    }
+  })
+})

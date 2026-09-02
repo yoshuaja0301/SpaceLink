@@ -10,8 +10,8 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 /** Prefix for the scratch file an atomic write moves into place. */
 export const TEMP_PREFIX = '.spacefore-tmp-'
@@ -68,6 +68,18 @@ export class VaultStore {
   /** @param {string} root */
   constructor(root) {
     this.root = resolve(root)
+    /**
+     * The root with every link resolved, found once. `resolve` is lexical: a
+     * path that stays inside the root on paper can still lead anywhere on disk
+     * through a symlink, and only `realpath` can tell.
+     * @type {Promise<string> | null}
+     */
+    this.realRoot = null
+    /**
+     * One promise per absolute path, for whatever is running against it.
+     * @type {Map<string, Promise<void>>}
+     */
+    this.locks = new Map()
     /**
      * Content hashes, keyed by absolute path.
      *
@@ -142,13 +154,79 @@ export class VaultStore {
       throw new VaultPathError(`"${inputPath}" is outside the vault.`)
     }
     // A skipped directory anywhere in the path is off limits, in both directions:
-    // the server neither serves from it nor writes into it.
+    // the server neither serves from it nor writes into it. So is anything
+    // hidden: the listing walks past every dot-entry, and a note the listing
+    // does not show must not be announced, served or written either — a device
+    // would add it, then lose it on the next reload.
     for (const segment of inside.split(sep)) {
       if (SKIP_DIRECTORIES.has(segment)) {
         throw new VaultPathError(`"${inputPath}" is in a directory the vault does not sync.`)
       }
+      if (segment.startsWith('.')) {
+        throw new VaultPathError(`"${inputPath}" is hidden, and hidden files are not part of the vault.`)
+      }
     }
     return { relative: inside.split(sep).join('/'), absolute }
+  }
+
+  /**
+   * `resolvePath`, then the check only the filesystem can make: that no link
+   * on the way leads out of the vault, or anywhere at all. Links are not
+   * followed — the listing skips them — so the file API must not quietly
+   * read, write or delete through one. A path that does not exist yet is
+   * judged by its deepest existing ancestor.
+   * @param {string} inputPath
+   * @returns {Promise<{ relative: string, absolute: string }>}
+   */
+  async resolveOnDisk(inputPath) {
+    const entry = this.resolvePath(inputPath)
+    this.realRoot ??= realpath(this.root)
+    const realRoot = await this.realRoot
+    let probe = entry.absolute
+    for (;;) {
+      /** @type {string | null} */
+      let real = null
+      try {
+        real = await realpath(probe)
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error
+      }
+      if (real !== null) {
+        if (real !== join(realRoot, relative(this.root, probe))) {
+          throw new VaultPathError(`"${inputPath}" goes through a link, and the vault does not follow links.`)
+        }
+        return entry
+      }
+      if (probe === this.root) return entry
+      probe = dirname(probe)
+    }
+  }
+
+  /**
+   * Run `operation` once everything already running against `keys` is done.
+   *
+   * `write` reads the file, compares its hash and then writes. Two of them
+   * interleaved both read the old hash, both pass the check, and both land:
+   * the first device's edit is gone with no conflict to show for it. One
+   * operation at a time per file is what makes the If-Match promise true.
+   * @template T
+   * @param {string[]} keys
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  serialized(keys, operation) {
+    const sorted = [...new Set(keys)].sort()
+    const earlier = Promise.all(sorted.map((key) => this.locks.get(key) ?? Promise.resolve()))
+    const run = earlier.then(operation, operation)
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    for (const key of sorted) this.locks.set(key, settled)
+    void settled.then(() => {
+      for (const key of sorted) if (this.locks.get(key) === settled) this.locks.delete(key)
+    })
+    return run
   }
 
   /** Create the vault directory if it is not there yet. */
@@ -213,7 +291,7 @@ export class VaultStore {
    * @returns {Promise<{ body: Buffer, hash: string, mtime: number }>}
    */
   async read(path) {
-    const { absolute, relative: rel } = this.resolvePath(path)
+    const { absolute, relative: rel } = await this.resolveOnDisk(path)
     try {
       const [body, info] = await Promise.all([readFile(absolute), stat(absolute)])
       const hash = hashOf(body)
@@ -253,7 +331,7 @@ export class VaultStore {
 
   /** @param {string} path */
   async createReadStream(path) {
-    const { absolute } = this.resolvePath(path)
+    const { absolute } = await this.resolveOnDisk(path)
     const info = await stat(absolute).catch(() => null)
     if (!info || !info.isFile()) throw new VaultNotFoundError(`"${path}" is not in the vault.`)
     const body = await readFile(absolute)
@@ -274,7 +352,21 @@ export class VaultStore {
    * @returns {Promise<{ hash: string, mtime: number }>}
    */
   async write(path, body, expectedHash) {
-    const { absolute } = this.resolvePath(path)
+    const { absolute, relative: rel } = await this.resolveOnDisk(path)
+    return this.serialized([absolute], () => this.writeNow(absolute, rel, body, expectedHash))
+  }
+
+  /**
+   * `write`, once it holds the file.
+   * @param {string} absolute
+   * @param {string} rel
+   * @param {Buffer} body
+   * @param {string} [expectedHash]
+   * @returns {Promise<{ hash: string, mtime: number }>}
+   */
+  async writeNow(absolute, rel, body, expectedHash) {
+    const target = await stat(absolute).catch(() => null)
+    if (target && !target.isFile()) throw new VaultPathError(`"${rel}" is a folder, not a file.`)
     const existing = await readFile(absolute).catch(() => null)
     const current = existing ? hashOf(existing) : ''
     const incoming = hashOf(body)
@@ -295,7 +387,7 @@ export class VaultStore {
       return { hash: current, mtime: Math.round(info.mtimeMs) }
     }
 
-    await mkdir(dirname(absolute), { recursive: true })
+    await this.makeFolderFor(absolute, rel)
     // Write beside the target and move it into place, so a failure part-way
     // through leaves the previous version whole rather than a truncated file.
     // A dot prefix keeps the half-written file out of both the listing and the
@@ -313,38 +405,64 @@ export class VaultStore {
     return { hash: incoming, mtime: Math.round(info.mtimeMs) }
   }
 
+  /**
+   * The folder `absolute` lives in, created as needed. A file sitting where a
+   * folder is needed is the caller's mistake, not a server failure — and the
+   * error Node raises for it names the whole path on disk.
+   * @param {string} absolute
+   * @param {string} rel
+   */
+  async makeFolderFor(absolute, rel) {
+    try {
+      await mkdir(dirname(absolute), { recursive: true })
+    } catch (error) {
+      if (error?.code === 'EEXIST' || error?.code === 'ENOTDIR') {
+        throw new VaultPathError(`"${rel}" cannot be created: a file sits where one of its folders would be.`)
+      }
+      throw error
+    }
+  }
+
   /** @param {string} path */
   async remove(path) {
-    const { absolute, relative: rel } = this.resolvePath(path)
-    const info = await stat(absolute).catch(() => null)
-    if (!info) throw new VaultNotFoundError(`"${rel}" is not in the vault.`)
-    await rm(absolute, { force: true })
-    this.hashes.delete(absolute)
+    const { absolute, relative: rel } = await this.resolveOnDisk(path)
+    return this.serialized([absolute], async () => {
+      const info = await stat(absolute).catch(() => null)
+      if (!info) throw new VaultNotFoundError(`"${rel}" is not in the vault.`)
+      if (!info.isFile()) throw new VaultPathError(`"${rel}" is a folder, not a file.`)
+      await rm(absolute, { force: true })
+      this.hashes.delete(absolute)
+    })
   }
 
   /**
    * @param {string} from
    * @param {string} to
+   * @returns {Promise<{ hash: string }>} the moved file's hash
    */
   async rename(from, to) {
-    const source = this.resolvePath(from)
-    const target = this.resolvePath(to)
-    const info = await stat(source.absolute).catch(() => null)
-    if (!info) throw new VaultNotFoundError(`"${source.relative}" is not in the vault.`)
-    const clash = await stat(target.absolute).catch(() => null)
-    if (clash) throw new VaultConflictError(`"${target.relative}" already exists.`, '')
-    await mkdir(dirname(target.absolute), { recursive: true })
-    await rename(source.absolute, target.absolute)
-    // The hash travels with the bytes; only the key it is filed under changes.
-    const moved = this.hashes.get(source.absolute)
-    this.hashes.delete(source.absolute)
-    if (moved) this.hashes.set(target.absolute, moved)
+    const source = await this.resolveOnDisk(from)
+    const target = await this.resolveOnDisk(to)
+    return this.serialized([source.absolute, target.absolute], async () => {
+      const info = await stat(source.absolute).catch(() => null)
+      if (!info) throw new VaultNotFoundError(`"${source.relative}" is not in the vault.`)
+      if (!info.isFile()) throw new VaultPathError(`"${source.relative}" is a folder, not a file.`)
+      const clash = await stat(target.absolute).catch(() => null)
+      if (clash) throw new VaultConflictError(`"${target.relative}" already exists.`, '')
+      await this.makeFolderFor(target.absolute, target.relative)
+      await rename(source.absolute, target.absolute)
+      // The hash travels with the bytes; only the key it is filed under changes.
+      const moved = this.hashes.get(source.absolute)
+      this.hashes.delete(source.absolute)
+      if (moved) this.hashes.set(target.absolute, moved)
+      return { hash: moved?.hash ?? hashOf(await readFile(target.absolute)) }
+    })
   }
 
   /** @param {string} path */
   async exists(path) {
     try {
-      const { absolute } = this.resolvePath(path)
+      const { absolute } = await this.resolveOnDisk(path)
       const info = await stat(absolute).catch(() => null)
       return info !== null && info.isFile()
     } catch {

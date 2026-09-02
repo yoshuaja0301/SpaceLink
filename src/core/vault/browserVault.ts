@@ -13,7 +13,7 @@
  * persist.
  */
 import type { NotePath, VaultAdapter, VaultFile } from '../../types'
-import { FILES_STORE, idbAvailable, idbDelete, idbGetAll, idbSet, openDB } from './idb'
+import { FILES_STORE, idbAvailable, idbDelete, idbGet, idbGetAll, idbSet, openDB } from './idb'
 import { createMemoryVault } from './memoryVault'
 import { comparePaths, mimeTypeOf, normalizePath, toVaultFile } from './paths'
 
@@ -69,10 +69,25 @@ export async function createBrowserVault(name: string = DEFAULT_VAULT_NAME): Pro
     return loading
   }
 
+  /**
+   * The record at `normalized`: from the cache, or failing that from the
+   * database itself. Another tab or window of the app shares the database but
+   * not this cache, and a note it created is in IndexedDB and nowhere else —
+   * "not in the cache" is not "does not exist", and createNote writing over a
+   * note the other tab just made is what that difference costs.
+   */
+  async function lookup(normalized: NotePath): Promise<StoredFile | undefined> {
+    await ensureLoaded()
+    const cached = cache.get(normalized)
+    if (cached) return cached
+    const stored = await idbGet<StoredFile>(db, FILES_STORE, normalized).catch(() => undefined)
+    if (stored && typeof stored.path === 'string') cache.set(normalized, stored)
+    return stored
+  }
+
   async function mustGet(path: NotePath): Promise<{ path: NotePath; record: StoredFile }> {
     const normalized = normalizePath(path)
-    await ensureLoaded()
-    const record = cache.get(normalized)
+    const record = await lookup(normalized)
     if (!record) throw new Error(`File not found: ${normalized}`)
     return { path: normalized, record }
   }
@@ -132,7 +147,7 @@ export async function createBrowserVault(name: string = DEFAULT_VAULT_NAME): Pro
       const { path: source, record } = await mustGet(from)
       const target = normalizePath(to)
       if (target === source) return
-      if (cache.has(target)) throw new Error(`Cannot rename to ${target}: that file already exists.`)
+      if (await lookup(target)) throw new Error(`Cannot rename to ${target}: that file already exists.`)
       // Write the new key before dropping the old one, so an interrupted rename
       // duplicates a file rather than losing it.
       await put({ ...record, path: target, mtime: Date.now() })
@@ -142,9 +157,7 @@ export async function createBrowserVault(name: string = DEFAULT_VAULT_NAME): Pro
 
     async exists(path: NotePath): Promise<boolean> {
       try {
-        const normalized = normalizePath(path)
-        await ensureLoaded()
-        return cache.has(normalized)
+        return (await lookup(normalizePath(path))) !== undefined
       } catch {
         return false
       }

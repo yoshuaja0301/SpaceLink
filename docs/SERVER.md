@@ -279,8 +279,11 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
 - **Rotate the token** by deleting `~/.spacefore/server.json` and restarting.
   Every device will need to be paired again, which is exactly what you want if
   one has been lost.
-- **Dot-directories and `node_modules` are never served, walked or written to.**
-  A `.obsidian` folder in the same vault is left alone.
+- **Hidden files and folders, `node_modules`, and anything behind a symlink are
+  never listed, served, announced or written to.** A `.obsidian` folder in the
+  same vault is left alone, and a link inside the vault is not followed — not
+  even one that points back into it — so the listing and the file API always
+  agree on what the vault holds, and a link cannot lead a request outside it.
 
 ---
 
@@ -327,7 +330,7 @@ needs `Authorization: Bearer <token>`.
 | `GET /api/files` | every file with size, mtime and a SHA-256 of its contents |
 | `GET /api/bundle` | every note's text in one streamed response, as newline-delimited JSON. This is what a device uses to open the vault — one request rather than one per note |
 | `GET /api/file?path=…` | the file; `ETag` is its hash |
-| `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash |
+| `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash. Writes to one file run one at a time, so two devices saving against the same hash at the same moment get one `200` and one `409`, never two `200`s |
 | `DELETE /api/file?path=…` | remove it |
 | `POST /api/rename` | `{ from, to }` |
 | `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers |

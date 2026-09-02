@@ -23,7 +23,7 @@
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { watch as watchDirectory } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -176,10 +176,27 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
   }
 
   /**
+   * Every request, and no exception gets past here: the listener drops this
+   * promise, so one that rejected would end the process — one badly spelled
+   * address, from anyone on the network, no token needed.
    * @param {import('node:http').IncomingMessage} request
    * @param {import('node:http').ServerResponse} response
    */
   async function handle(request, response) {
+    try {
+      await route(request, response)
+    } catch (error) {
+      process.stderr.write(`SpaceFore: ${request.method} ${request.url} failed (${error?.message ?? error}).\n`)
+      if (response.headersSent) response.destroy()
+      else sendJson(response, 500, { error: 'Something went wrong.' })
+    }
+  }
+
+  /**
+   * @param {import('node:http').IncomingMessage} request
+   * @param {import('node:http').ServerResponse} response
+   */
+  async function route(request, response) {
     const url = new URL(request.url ?? '/', 'http://localhost')
     const origin = request.headers.origin
 
@@ -228,10 +245,14 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
     try {
       await handleApi(request, response, url)
     } catch (error) {
-      const status = typeof error?.status === 'number' ? error.status : 500
-      const body = { error: error instanceof Error ? error.message : 'Something went wrong.' }
+      // Only an error raised on purpose carries a status and a message written
+      // for the caller. Anything else is Node's own, and those name the file
+      // on disk — the vault's whole path — which is nobody's business.
+      const known = typeof error?.status === 'number' && error instanceof Error
+      if (!known) process.stderr.write(`SpaceFore: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
+      const body = { error: known ? error.message : 'Something went wrong.' }
       if (error instanceof VaultConflictError) body.currentHash = error.currentHash
-      sendJson(response, status, body)
+      sendJson(response, known ? error.status : 500, body)
     }
   }
 
@@ -320,9 +341,19 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
     }
 
     if (url.pathname === '/api/rename' && request.method === 'POST') {
-      const body = JSON.parse((await readBody(request)).toString('utf8') || '{}')
-      await store.rename(String(body.from ?? ''), String(body.to ?? ''))
+      let body
+      try {
+        body = JSON.parse((await readBody(request)).toString('utf8') || '{}')
+      } catch {
+        throw new VaultPathError('The request body is not valid JSON.')
+      }
+      const renamed = await store.rename(String(body.from ?? ''), String(body.to ?? ''))
       noteOwnWrite(String(body.from ?? ''), '')
+      // The new name too: the watcher will see a file appear there, and
+      // without this it would announce it as an anonymous write — which the
+      // renaming device, whose note is still marked unsaved, takes for
+      // somebody else's edit.
+      noteOwnWrite(String(body.to ?? ''), renamed.hash)
       broadcast({ type: 'rename', from: String(body.from), to: String(body.to), origin: client })
       sendJson(response, 200, { from: body.from, to: body.to, renamed: true })
       return
@@ -360,13 +391,18 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
     if (leaf.startsWith('.') || leaf.startsWith(TEMP_PREFIX)) return
     let entry
     try {
-      entry = store.resolvePath(relativePath)
+      entry = await store.resolveOnDisk(relativePath)
     } catch {
-      return // inside a skipped directory, or otherwise not ours
+      return // hidden, inside a skipped directory, through a link, or otherwise not ours
     }
-    const body = await readFile(entry.absolute).catch(() => null)
+    const info = await stat(entry.absolute).catch(() => null)
+    if (info && !info.isFile()) return // a folder appearing is not a note going away
+    const body = info ? await readFile(entry.absolute).catch(() => null) : null
     if (body === null) {
       if (isOwnEcho(entry.relative, '')) return
+      // The file is gone, and with it what was last written there: a file
+      // that comes back with the same bytes is news, not an echo of that write.
+      recentWrites.delete(entry.relative)
       broadcast({ type: 'remove', path: entry.relative })
       return
     }
@@ -433,7 +469,14 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
  * @param {string} distDir
  */
 async function serveStatic(pathname, response, distDir) {
-  const decoded = decodeURIComponent(pathname)
+  let decoded
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    // `/%ZZ` is not an address, and it is not a reason to stop serving.
+    sendJson(response, 400, { error: 'That address is not valid.' })
+    return
+  }
   const candidate = resolve(distDir, `.${decoded}`)
   const inside = candidate === distDir || candidate.startsWith(`${distDir}/`) || candidate.startsWith(`${distDir}\\`)
   const target = inside && decoded !== '/' ? candidate : join(distDir, 'index.html')

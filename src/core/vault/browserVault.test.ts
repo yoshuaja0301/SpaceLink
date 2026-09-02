@@ -324,6 +324,30 @@ describe('createBrowserVault — IndexedDB path', () => {
     expect((await second.list()).find((file) => file.path === 'assets/logo.png')?.size).toBe(3)
   })
 
+  it('sees a note another tab of the app wrote to the same database', async () => {
+    // Two windows of the PWA share one IndexedDB and nothing else. "Not in my
+    // cache" is not "does not exist", and createNote asks exactly that.
+    const tab1 = await withIdb('Shared')
+    const tab2 = await createBrowserVault('Shared')
+    await tab1.list()
+    await tab2.write('Ideas.md', '# written in tab 2\n')
+
+    expect(await tab1.exists('Ideas.md')).toBe(true)
+    expect(await tab1.read('Ideas.md')).toBe('# written in tab 2\n')
+    if (!(await tab1.exists('Ideas.md'))) await tab1.write('Ideas.md', '')
+    const stored = fake.databases.get('Shared')?.get('files')?.get('Ideas.md') as { content: string }
+    expect(stored.content).toBe('# written in tab 2\n')
+  })
+
+  it('refuses to rename onto a note another tab created', async () => {
+    const tab1 = await withIdb('Shared')
+    const tab2 = await createBrowserVault('Shared')
+    await tab1.write('A.md', 'a')
+    await tab2.write('B.md', 'b')
+    await expect(tab1.rename('A.md', 'B.md')).rejects.toThrow(/already exists/)
+    expect(await tab2.read('B.md')).toBe('b')
+  })
+
   it('stores one record per path under the files store', async () => {
     const vault = await withIdb()
     await vault.write('notes/A.md', '# A')
