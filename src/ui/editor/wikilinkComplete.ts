@@ -22,8 +22,6 @@ const MAX_OPTIONS = 20
 const WIKI_CONTEXT = /\[\[[^[\]\n]*$/
 /** A `#` plus the tag characters typed after it. */
 const TAG_CONTEXT = /#[\p{L}\p{N}_/-]*$/u
-/** The completion stays valid while the text still looks like a link body. */
-const WIKI_VALID = /^[^[\]\n]*$/
 const TAG_VALID = /^#[\p{L}\p{N}_/-]*$/u
 /** A tag may only follow the start of a line, whitespace, or an opening bracket. */
 const TAG_PREFIX = /[\s([{]/
@@ -37,12 +35,21 @@ const TAG_PREFIX = /[\s([{]/
  */
 function applyWikiLink(view: EditorView, from: number, to: number, target: string): void {
   const doc = view.state.doc
-  const after = doc.sliceString(to, Math.min(doc.length, to + 2))
-  const closing = after.startsWith(']]') ? '' : after.startsWith(']') ? ']' : ']]'
+  // The caret may sit in the middle of what was typed. The whole body is
+  // replaced, up to the alias, heading, block id or closing brackets that
+  // follow it — leaving the tail would keep `Note]]` after the new name.
+  const line = doc.lineAt(to)
+  const rest = doc.sliceString(to, line.to)
+  const stop = rest.search(/[\]|#^]/)
+  const bodyEnd = stop === -1 ? line.to : to + stop
+  const tail = doc.sliceString(bodyEnd, Math.min(doc.length, bodyEnd + 2))
+  const continues = /^[|#^]/.test(tail)
+  const closing = continues || tail.startsWith(']]') ? '' : tail.startsWith(']') ? ']' : ']]'
   view.dispatch({
-    changes: { from, to, insert: target + closing },
-    // Land just past the closing brackets, ready to keep typing.
-    selection: { anchor: from + target.length + 2 },
+    changes: { from, to: bodyEnd, insert: target + closing },
+    // Land just past the closing brackets, ready to keep typing — or at the
+    // end of the name when an alias or heading follows it.
+    selection: { anchor: from + target.length + (continues ? 0 : 2) },
     userEvent: 'input.complete',
     scrollIntoView: true,
   })
@@ -126,13 +133,20 @@ function noteCompletions(context: CompletionContext): CompletionResult | null {
   return {
     from,
     options: scored.slice(0, MAX_OPTIONS).map((s) => s.option),
-    validFor: WIKI_VALID,
+    // The scoring above is the ranking: a note reached through one of its
+    // aliases has a label its alias does not resemble, and with nothing typed
+    // the order is recency. Left to its own filter, the completion list would
+    // drop the first and alphabetise the second. Re-asked on every keystroke
+    // instead, which is cheap.
+    filter: false,
   }
 }
 
 function tagCompletions(context: CompletionContext): CompletionResult | null {
   const match = context.matchBefore(TAG_CONTEXT)
   if (!match) return null
+  // `[[#Heading` is a heading link being typed, not a tag.
+  if (context.matchBefore(WIKI_CONTEXT)) return null
 
   const state = context.state
   const before = match.from === 0 ? '' : state.doc.sliceString(match.from - 1, match.from)

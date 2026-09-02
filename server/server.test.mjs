@@ -511,7 +511,10 @@ describe('change events', () => {
         })
       },
     )
-    expect(events.find((event) => event.path === 'Home.md')?.origin).toBe('device-a')
+    // The first Home.md event on the stream may be the watcher's echo of the
+    // beforeEach write; the API's own is the one tagged.
+    expect(events.some((event) => event.path === 'Home.md' && event.origin === 'device-a')).toBe(true)
+    expect(events.filter((event) => event.path === 'Home.md' && event.type === 'upsert').every((event) => event.hash)).toBe(true)
   })
 })
 

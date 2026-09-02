@@ -191,6 +191,8 @@ export interface SearchFilters {
   paths: string[]
   files: string[]
   regex: RegExp | null
+  /** Every `/pattern/` in the query, all required; `regex` is the first of them. */
+  regexes: RegExp[]
 }
 /** Parse `tag:x path:y file:z "exact phrase" -excluded /re/` into filters. */
 export function parseQuery(query: string): SearchFilters

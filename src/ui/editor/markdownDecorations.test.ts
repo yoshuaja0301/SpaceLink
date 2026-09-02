@@ -5,6 +5,8 @@
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 
+import { renderMarkdown } from '../../core/markdown/render'
+
 import type { DecorationKind, DecorationRange, SelectionSpan } from './markdownDecorations'
 import {
   computeDecorationRanges,
@@ -452,6 +454,54 @@ describe('flashLineHighlight', () => {
       expect(lit(view)).toEqual(['two'])
     } finally {
       view.destroy()
+    }
+  })
+})
+
+describe('what the third bug hunt found', () => {
+  it('leaves backslash-escaped syntax alone, as the reading view does', () => {
+    expect(of(run('see \\[[Not A Link]] here'), 'wikilink')).toEqual([])
+    expect(of(run('\\*not italic\\*'), 'italic')).toEqual([])
+    expect(of(run('a \\**not bold\\** b'), 'bold')).toEqual([])
+    // An escaped backslash escapes nothing: `\\*x*` is a backslash, then italic.
+    expect(of(run('\\\\*x*'), 'italic')).toHaveLength(1)
+    // A real opener with an escaped closer is not a span either.
+    expect(of(run('*not closed\\* here'), 'italic')).toEqual([])
+    expect(of(run('**not closed\\** here'), 'bold')).toEqual([])
+  })
+
+  it('reads ***both*** as bold and italic over one span, hiding all six stars', () => {
+    const text = '***alpha***'
+    expect(renderMarkdown(text, { currentPath: 'a.md', resolveLink: () => null })).toContain('<em><strong>alpha</strong></em>')
+    const ranges = run(text, { hideSyntax: true, selection: [{ from: 100, to: 100 }] })
+    expect(slices(text, of(ranges, 'bold'))).toEqual(['***alpha***'])
+    expect(slices(text, of(ranges, 'italic'))).toEqual(['***alpha***'])
+    expect(slices(text, of(ranges, 'syntax'))).toEqual(['***', '***'])
+  })
+
+  it('does not take a backtick code span at the start of a line for a fence', () => {
+    const text = '```inline``` text\n**bold** [[Link]]'
+    expect(renderMarkdown(text, { currentPath: 'a.md', resolveLink: () => 'Link.md' })).toContain('<strong>bold</strong>')
+    const kinds = run(text).map((range) => range.kind)
+    expect(kinds).toContain('bold')
+    expect(kinds).toContain('wikilink')
+  })
+
+  it('renders a task inside a blockquote as a checkbox that writes back', () => {
+    const doc = '> - [ ] quoted task'
+    expect(of(run(doc), 'task')).toHaveLength(1)
+    const view = new EditorView({
+      state: EditorState.create({ doc, extensions: [markdownDecorations({ resolve: () => null, hideSyntax: () => true })] }),
+    })
+    document.body.appendChild(view.dom)
+    try {
+      const box = view.dom.querySelector<HTMLInputElement>('.cm-task-checkbox')
+      expect(box).not.toBeNull()
+      box!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      expect(view.state.doc.toString()).toBe('> - [x] quoted task')
+    } finally {
+      view.destroy()
+      view.dom.remove()
     }
   })
 })

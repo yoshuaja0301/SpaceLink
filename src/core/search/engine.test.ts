@@ -549,3 +549,43 @@ describe('quickSwitch', () => {
     expect(Date.now() - started).toBeLessThan(3000)
   })
 })
+
+describe('what the third bug hunt found', () => {
+  it('terminates on a zero-width unicode pattern over a note with an emoji', () => {
+    // `/x*/u` matches empty everywhere. In unicode mode a step that landed
+    // inside the surrogate pair was snapped back to its start, matched empty
+    // there again, and never moved on — on the main thread, for ever.
+    const emoji = makeNote('Emoji.md', 'a😀b\n')
+    expect(searchNotes('/x*/u', vault(emoji))).toEqual(searchNotes('/x*/', vault(emoji)))
+    expect(searchNotes('/(?:)/v', vault(emoji))).toEqual([])
+    expect(searchNotes('/\\p{L}+/u', vault(emoji)).map((hit) => hit.path)).toEqual(['Emoji.md'])
+  })
+
+  it('finds a term with İ typed exactly as it appears in the note', () => {
+    // 'İ'.toLowerCase() is two characters; folded, the needle no longer
+    // occurs in the note, and the `i` flag cannot bridge the difference.
+    const trip = makeNote('Trip.md', 'Flights to İstanbul booked\n')
+    expect(searchNotes('İstanbul', vault(trip)).map((hit) => hit.path)).toEqual(['Trip.md'])
+    expect(searchNotes('İstanbul', vault(trip), { caseSensitive: true }).map((hit) => hit.path)).toEqual(['Trip.md'])
+    // Folding still happens where it loses nothing.
+    expect(parseQuery('Foo İstanbul').terms).toEqual(['foo', 'İstanbul'])
+  })
+
+  it('requires every /regex/ in the query, like every other operator', () => {
+    const both = makeNote('Both.md', 'alpha and beta\n')
+    const onlyBeta = makeNote('OnlyBeta.md', 'just beta here\n')
+    const onlyAlpha = makeNote('OnlyAlpha.md', 'just alpha here\n')
+    expect(searchNotes('/alph[a]/ /bet[a]/', vault(both, onlyBeta, onlyAlpha)).map((hit) => hit.path)).toEqual(['Both.md'])
+    const filters = parseQuery('/a/ /b/i')
+    expect(filters.regexes.map((regex) => regex.source)).toEqual(['a', 'b'])
+    expect(filters.regex?.source).toBe('a')
+  })
+
+  it('reads a slash inside a character class as part of the pattern', () => {
+    expect(parseQuery('/[/]/').regex?.source).toBe('[/]')
+    expect(parseQuery('/[/]/').terms).toEqual([])
+    expect(parseQuery('/[^/]+/ tag:x').regex?.source).toBe('[^/]+')
+    const slashed = makeNote('Paths.md', 'see a/b\n')
+    expect(searchNotes('/[/]/', vault(slashed, alpha)).map((hit) => hit.path)).toEqual(['Paths.md'])
+  })
+})

@@ -52,6 +52,8 @@ export interface SearchFilters {
   paths: string[]
   files: string[]
   regex: RegExp | null
+  /** Every `/pattern/` in the query; `regex` is the first, kept for callers that read one. */
+  regexes: RegExp[]
 }
 
 export interface SearchOptions {
@@ -132,6 +134,7 @@ function readRegex(query: string, start: number): { body: string; flags: string;
   let i = start + 1
   let body = ''
   let closed = false
+  let inClass = false
   while (i < query.length) {
     const ch = query[i]
     if (ch === '\\' && i + 1 < query.length) {
@@ -139,7 +142,11 @@ function readRegex(query: string, start: number): { body: string; flags: string;
       i += 2
       continue
     }
-    if (ch === '/') {
+    // A slash inside a character class does not end the pattern: `/[/]/` is
+    // a search for a slash, the way the language itself reads it.
+    if (ch === '[') inClass = true
+    else if (ch === ']') inClass = false
+    else if (ch === '/' && !inClass) {
       closed = true
       i += 1
       break
@@ -154,6 +161,17 @@ function readRegex(query: string, start: number): { body: string; flags: string;
     i += 1
   }
   return { body, flags, end: i }
+}
+
+/**
+ * Lower-case for matching — unless lower-casing changes the text's length,
+ * which it does for `İ` (one code unit to two): the needle is then a
+ * different string from what is in the note, and the `i` flag on the match
+ * cannot bridge it. Such text is matched as written.
+ */
+function foldCase(text: string): string {
+  const lower = text.toLowerCase()
+  return lower.length === text.length ? lower : text
 }
 
 /** `tag:x` -> `{ name: 'tag', value: 'x' }`. */
@@ -182,8 +200,9 @@ function parseQueryInternal(query: string, fold: boolean): SearchFilters {
     paths: [],
     files: [],
     regex: null,
+    regexes: [],
   }
-  const norm = (text: string): string => (fold ? text.toLowerCase() : text)
+  const norm = (text: string): string => (fold ? foldCase(text) : text)
 
   let i = 0
   while (i < query.length) {
@@ -205,7 +224,11 @@ function parseQueryInternal(query: string, fold: boolean): SearchFilters {
         const raw = query.slice(i, found.end)
         i = found.end
         try {
-          filters.regex = new RegExp(found.body, found.flags)
+          const compiled = new RegExp(found.body, found.flags)
+          // Every pattern is required, like every term: the second one used
+          // to replace the first, and notes matching only the last came back.
+          filters.regexes.push(compiled)
+          filters.regex ??= compiled
         } catch {
           // Not a usable pattern — fall back to searching for the text itself.
           filters.terms.push(norm(raw))
@@ -313,8 +336,8 @@ function buildNeedles(filters: SearchFilters, caseSensitive: boolean): Needle[] 
     const needle = literalNeedle(term, caseSensitive)
     if (needle) needles.push(needle)
   }
-  if (filters.regex) {
-    const needle = regexNeedle(filters.regex, caseSensitive)
+  for (const regex of filters.regexes) {
+    const needle = regexNeedle(regex, caseSensitive)
     if (needle) needles.push(needle)
   }
   return needles
@@ -332,7 +355,11 @@ function collectMatches(scan: RegExp, text: string, out: MatchRange[] | null): n
   while (match !== null) {
     const length = match[0].length
     if (length === 0) {
-      scan.lastIndex += 1
+      // Past the empty match — by a whole code point in unicode mode, where
+      // `exec` would snap a `lastIndex` left inside a surrogate pair back to
+      // its start and match empty there again, for ever.
+      const wide = /[uv]/.test(scan.flags) && (text.codePointAt(match.index) ?? 0) > 0xffff
+      scan.lastIndex = match.index + (wide ? 2 : 1)
     } else {
       count += 1
       if (out) out.push([match.index, match.index + length])

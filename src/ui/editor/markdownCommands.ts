@@ -31,8 +31,13 @@ export { getActiveEditor, registerEditor } from './activeEditor'
  * Shared helpers
  * ------------------------------------------------------------------ */
 
-/** Characters that count as "the word under the cursor". */
-const WORD = /[\p{L}\p{N}_'-]/u
+/**
+ * Characters that count as "the word under the cursor". Marks (vowel signs,
+ * accents, viramas) belong to the letter before them, and a zero-width joiner
+ * belongs to both its neighbours: a word must not be cut in the middle of a
+ * grapheme, or the closing marker lands inside a glyph.
+ */
+const WORD = /[\p{L}\p{M}\p{N}_'\-\u200d]/u
 
 /** The word around `pos`, or the empty range at `pos` when there is none. */
 function wordRangeAt(state: EditorState, pos: number): { from: number; to: number } {
@@ -61,22 +66,36 @@ function runAfter(state: EditorState, pos: number, ch: string): number {
   return n
 }
 
+/** Length of the run of `ch` starting at `at` in `text`. */
+function runIn(text: string, at: number, ch: string): number {
+  let n = 0
+  while (at + n < text.length && text[at + n] === ch) n += 1
+  return n
+}
+
 /**
  * Build a wrap/unwrap command for a delimiter made of one repeated character
  * (`**`, `*`, `~~`, `==`, `` ` ``).
  *
- * The run-length checks are what stop `toggleItalic` from chewing a `*` off the
- * `**` of a bold span: the surrounding run has to be *exactly* as long as the
- * marker for it to count as ours.
+ * Which runs a marker may claim is what keeps `toggleItalic` from chewing a
+ * `*` off the `**` of a bold span, and what lets it take its own `*` back out
+ * of `***bold italic***`: one star is italic, two are bold, three are both,
+ * so italic owns runs of one and three and bold runs of two and three. A code
+ * span's fence may be any length and all of it is the marker.
  */
 function wrapCommand(marker: string, userEvent: string): Command {
   const ch = marker[0]!
   const len = marker.length
+  const owns = (run: number): boolean =>
+    ch === '`' ? run >= 1 : ch === '*' || ch === '_' ? run === len || run === 3 : run === len
+  const strip = (run: number): number => (ch === '`' ? run : len)
 
   return (view) => {
     const state = view.state
     if (state.readOnly) return false
 
+    // Two cursors in one word are one word, wrapped once.
+    const seen = new Set<string>()
     view.dispatch({
       ...state.changeByRange((range) => {
         let { from, to } = range
@@ -85,27 +104,36 @@ function wrapCommand(marker: string, userEvent: string): Command {
           from = word.from
           to = word.to
         }
+        const key = `${from}:${to}`
+        if (seen.has(key)) return { range }
+        seen.add(key)
 
         // 1. Markers sit immediately outside the range -> unwrap them.
-        if (runBefore(state, from, ch) === len && runAfter(state, to, ch) === len) {
+        const before = runBefore(state, from, ch)
+        const after = runAfter(state, to, ch)
+        if (before > 0 && before === after && owns(before)) {
+          const n = strip(before)
           return {
             changes: [
-              { from: from - len, to: from },
-              { from: to, to: to + len },
+              { from: from - n, to: from },
+              { from: to, to: to + n },
             ],
-            range: EditorSelection.range(from - len, to - len),
+            range: EditorSelection.range(from - n, to - n),
           }
         }
 
         // 2. The range itself is wrapped -> strip the markers from inside it.
         const inner = state.doc.sliceString(from, to)
-        if (inner.length >= 2 * len && inner.startsWith(marker) && inner.endsWith(marker)) {
+        const lead = runIn(inner, 0, ch)
+        const trail = lead > 0 && inner.length >= 2 * lead ? runIn(inner.split('').reverse().join(''), 0, ch) : 0
+        if (lead > 0 && lead === trail && owns(lead) && inner.length >= 2 * lead) {
+          const n = strip(lead)
           return {
             changes: [
-              { from, to: from + len },
-              { from: to - len, to },
+              { from, to: from + n },
+              { from: to - n, to },
             ],
-            range: EditorSelection.range(from, to - 2 * len),
+            range: EditorSelection.range(from, to - 2 * n),
           }
         }
 
@@ -215,8 +243,11 @@ export const toggleBlockquote: Command = (view) =>
     return changes
   })
 
-const TASK_MARKER = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]/
-const LIST_MARKER = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)/
+// A task can sit inside a blockquote: `> - [ ] quoted`. The reading view and
+// the editor's own scanner both treat it as a task, so the command must too.
+const TASK_MARKER = /^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]/
+const LIST_MARKER = /^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+)/
+const LINE_LEAD = /^\s*(?:>\s*)*/
 
 /**
  * Flip `[ ]` <-> `[x]` on the selected lines. A list item without a checkbox
@@ -238,8 +269,9 @@ export const toggleTaskCheckbox: Command = (view) =>
         continue
       }
       if (line.text.trim() === '') continue
-      const indent = line.text.length - line.text.trimStart().length
-      changes.push({ from: line.from + indent, insert: '- [ ] ' })
+      // After the indent and any quote markers, so `> text` stays quoted.
+      const lead = LINE_LEAD.exec(line.text)?.[0] ?? ''
+      changes.push({ from: line.from + lead.length, insert: '- [ ] ' })
     }
     return changes
   })
@@ -304,9 +336,11 @@ export const insertTable: Command = (view) => {
   view.dispatch({
     ...state.changeByRange((range) => {
       const line = state.doc.lineAt(range.from)
-      // Only break onto a new line when the current one already has content.
+      const endLine = state.doc.lineAt(range.to)
+      // Only break onto a new line when the current one already has content —
+      // before, on the line the selection starts on; after, on the line it ends on.
       const prefix = line.text.slice(0, range.from - line.from).trim() === '' ? '' : '\n'
-      const suffix = line.text.slice(range.to - line.from).trim() === '' ? '' : '\n'
+      const suffix = endLine.text.slice(range.to - endLine.from).trim() === '' ? '' : '\n'
       const insert = prefix + table + suffix
       return {
         changes: { from: range.from, to: range.to, insert },
@@ -328,8 +362,12 @@ export const insertCodeBlock: Command = (view) => {
     ...state.changeByRange((range) => {
       const selected = state.doc.sliceString(range.from, range.to)
       const line = state.doc.lineAt(range.from)
+      const endLine = state.doc.lineAt(range.to)
       const prefix = line.text.slice(0, range.from - line.from).trim() === '' ? '' : '\n'
-      const insert = `${prefix}\`\`\`\n${selected}\n\`\`\``
+      // A closing fence may carry nothing after it: text left on its line
+      // would make it content, and the block would swallow the rest of the note.
+      const suffix = endLine.text.slice(range.to - endLine.from).trim() === '' ? '' : '\n'
+      const insert = `${prefix}\`\`\`\n${selected}\n\`\`\`${suffix}`
       const bodyStart = range.from + prefix.length + 4
       return {
         changes: { from: range.from, to: range.to, insert },

@@ -4,6 +4,8 @@
  * `dispatch` that folds the transaction back in. No DOM, no layout, no timers.
  */
 import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
+
+import { renderMarkdown } from '../../core/markdown/render'
 import type { TransactionSpec } from '@codemirror/state'
 import type { Command, EditorView } from '@codemirror/view'
 
@@ -329,5 +331,81 @@ describe('editor registry', () => {
     expect(getActiveEditor()).toBe(a)
     registerEditor('pane-a', null)
     expect(getActiveEditor()).toBe(null)
+  })
+})
+
+describe('what the third bug hunt found', () => {
+  it('insertCodeBlock puts the closing fence on a line of its own when text follows', () => {
+    const h = harness('hello world\n\nparagraph after', 5)
+    h.run(insertCodeBlock)
+    expect(h.doc()).toBe('hello\n```\n\n```\n world\n\nparagraph after')
+    // A closing fence with text after it is content, and the block would
+    // have swallowed the rest of the note.
+    const html = renderMarkdown(h.doc(), { currentPath: 'a.md', resolveLink: () => null })
+    expect(html).toContain('<p>paragraph after</p>')
+  })
+
+  it('insertTable breaks before text left on the last line of a multi-line selection', () => {
+    const h = harness('abc\ndef', 0, 5)
+    h.run(insertTable)
+    expect(h.doc().endsWith('|  |  |  |\nef')).toBe(true)
+  })
+
+  it('toggleTaskCheckbox flips a task inside a blockquote, and quotes a new one', () => {
+    const quoted = harness('> - [ ] quoted task', 5)
+    quoted.run(toggleTaskCheckbox)
+    expect(quoted.doc()).toBe('> - [x] quoted task')
+
+    const plain = harness('> plain', 3)
+    plain.run(toggleTaskCheckbox)
+    expect(plain.doc()).toBe('> - [ ] plain')
+  })
+
+  it('toggleItalic on bold text adds italic, and takes it back out of ***both***', () => {
+    expect(expectRoundTrip(toggleItalic, '**alpha**', 2, 7)).toBe('***alpha***')
+    expect(expectRoundTrip(toggleItalic, '**alpha**', 0, 9)).toBe('***alpha***')
+    const collapsed = harness('***word***', 5)
+    collapsed.run(toggleItalic)
+    expect(collapsed.doc()).toBe('**word**')
+  })
+
+  it('toggleBold takes the bold out of ***both***, leaving the italic', () => {
+    const h = harness('***alpha***', 3, 8)
+    h.run(toggleBold)
+    expect(h.doc()).toBe('*alpha*')
+  })
+
+  it('toggleInlineCode strips a double-backtick span whole', () => {
+    const h = harness('``x``', 0, 5)
+    h.run(toggleInlineCode)
+    expect(h.doc()).toBe('x')
+  })
+
+  it('wraps a word once when two cursors sit in it', () => {
+    let state = EditorState.create({
+      doc: 'hello',
+      selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(3)]),
+      extensions: EditorState.allowMultipleSelections.of(true),
+    })
+    const view = {
+      get state() {
+        return state
+      },
+      dispatch(spec: TransactionSpec) {
+        state = state.update(spec).state
+      },
+    } as unknown as EditorView
+    toggleBold(view)
+    expect(state.doc.toString()).toBe('**hello**')
+  })
+
+  it('takes the whole grapheme: marks belong to the word under the cursor', () => {
+    const hindi = harness('हिंदी भाषा', 1)
+    hindi.run(toggleBold)
+    expect(hindi.doc()).toBe('**हिंदी** भाषा')
+
+    const decomposed = harness('un cafe\u0301 noir', 4)
+    decomposed.run(toggleBold)
+    expect(decomposed.doc()).toBe('un **cafe\u0301** noir')
   })
 })

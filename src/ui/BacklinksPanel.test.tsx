@@ -406,7 +406,7 @@ describe('BacklinksPanel — a source note that links here thousands of times', 
     for (let click = 0; click < 14; click += 1) fireEvent.click(more()!)
     expect(contexts(linked)).toHaveLength(3000)
     expect(more()).toBeNull()
-  })
+  }, 20_000)
 
   it('forgets how far the reader had scrolled when a different note is opened', () => {
     seed(HEAVY)

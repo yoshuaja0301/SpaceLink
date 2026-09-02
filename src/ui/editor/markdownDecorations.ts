@@ -131,12 +131,23 @@ function isWordChar(ch: string | undefined): boolean {
  * by whitespace (`**bold **` is not bold) and must itself be a run of exactly
  * `marker.length` for single-character markers, so `*` never eats into a `**`.
  */
+/** Is the character at `at` preceded by an odd run of backslashes? */
+function escapedAt(line: string, at: number): boolean {
+  let backslashes = 0
+  for (let k = at - 1; k >= 0 && line[k] === '\\'; k -= 1) backslashes += 1
+  return backslashes % 2 === 1
+}
+
+/** What a backslash may escape: ASCII punctuation, as in the reading view. */
+const ESCAPABLE = /[!-/:-@[-`{-~]/
+
 function findCloser(line: string, open: number, marker: string, end: number): number {
   const ch = marker[0]!
   const len = marker.length
   for (let j = open + len; j + len <= end; j += 1) {
     if (line[j] !== ch) continue
     if (line.slice(j, j + len) !== marker) continue
+    if (escapedAt(line, j)) continue // `\*` is a star, not a closer
     // Whitespace directly before the closer means this is not a closer.
     if (/\s/.test(line[j - 1] ?? ' ')) {
       j += runLength(line, j, ch) - 1
@@ -162,6 +173,12 @@ function scanInline(line: string, base: number, start: number, end: number, ctx:
   let i = start
   while (i < end) {
     const ch = line[i]!
+
+    /* ---- backslash escapes: literal text, as the reading view shows ---- */
+    if (ch === '\\' && i + 1 < end && ESCAPABLE.test(line[i + 1]!)) {
+      i += 2
+      continue
+    }
 
     /* ---- inline code: highest priority, contents are opaque ------------- */
     if (ch === '`') {
@@ -272,6 +289,25 @@ function scanInline(line: string, base: number, start: number, end: number, ctx:
     /* ---- **bold** / __bold__ and *italic* / _italic_ --------------------- */
     if (ch === '*' || ch === '_') {
       const run = runLength(line, i, ch)
+      if (run >= 3) {
+        // `***both***`: bold and italic over the same span, three-character
+        // markers. Only when a matching triple closes it; otherwise the run
+        // is read as `**` plus a stray, as before.
+        const triple = ch.repeat(3)
+        const close = findCloser(line, i, triple, end)
+        if (close !== -1) {
+          const to = close + 3
+          ctx.out.push({ kind: 'bold', from: base + i, to: base + to })
+          ctx.out.push({ kind: 'italic', from: base + i, to: base + to })
+          pushSyntax(ctx, base + i, base + to, [
+            [base + i, base + i + 3],
+            [base + close, base + to],
+          ])
+          if (depth < MAX_NESTING) scanInline(line, base, i + 3, close, ctx, depth + 1)
+          i = to
+          continue
+        }
+      }
       if (run >= 2) {
         const marker = ch + ch
         const close = findCloser(line, i, marker, end)
@@ -379,6 +415,17 @@ export function computeDecorationRanges(
 }
 
 /** Decorate a single line, updating the fenced-code state through `setFence`. */
+/**
+ * The fence `line` opens or closes, or null. A backtick fence's info string
+ * may not contain a backtick: ```` ```inline``` text ```` is a code span in a
+ * paragraph, not the start of a block that swallows the rest of the note.
+ */
+function openingFence(line: string): RegExpExecArray | null {
+  const m = FENCE.exec(line)
+  if (m && m[1]![0] === '`' && m[2]!.includes('`')) return null
+  return m
+}
+
 function scanLine(
   line: string,
   base: number,
@@ -386,7 +433,7 @@ function scanLine(
   ctx: ScanContext,
   setFence: (next: string | null) => void,
 ): void {
-  const fenceMatch = FENCE.exec(line)
+  const fenceMatch = openingFence(line)
 
   if (fence !== null) {
     // Inside a fence: only a matching closing fence is meaningful, and nothing
@@ -499,7 +546,9 @@ export interface MarkdownDecorationsConfig {
   hideSyntax: () => boolean
 }
 
-const TASK_LINE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]/
+// Inside a blockquote too: `> - [ ] quoted` is a task to the scanner and the
+// reading view, so the widget must find its box.
+const TASK_LINE = /^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+)\[([ xX])\]/
 
 /** The rendered `[ ]` / `[x]` marker: a real checkbox that writes back to the doc. */
 class TaskWidget extends WidgetType {
