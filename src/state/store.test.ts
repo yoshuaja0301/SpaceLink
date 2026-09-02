@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Note, NotePath, Pane } from '../types'
+import type { Note, NotePath, Pane, VaultAdapter } from '../types'
 import { buildIndex, resolveLinkTarget } from '../core/graph/index'
 import { createMemoryVault } from '../core/vault/memoryVault'
 import type { AppState } from './store'
@@ -1150,6 +1150,307 @@ describe('renaming and moving: what a link is left pointing at', () => {
       const tail = useAppStore.getState().notes.get('Journal.md')!.content.slice(-140)
       expect(tail).toContain('[[Hub2]]')
       expect(useAppStore.getState().index.unresolved.size).toBe(0)
+    })
+  })
+})
+
+
+describe('where an edit can be lost, and now is not', () => {
+  /** Make the adapter's write wait until told, so a save can be caught in flight. */
+  function holdWrites(adapter: VaultAdapter): { release: () => void; failWith?: (error: Error) => void } {
+    const raw = adapter.write.bind(adapter)
+    let release = (): void => {}
+    let failure: Error | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    adapter.write = async (path, content) => {
+      await gate
+      if (failure) throw failure
+      await raw(path, content)
+    }
+    return { release, failWith: (error) => { failure = error } }
+  }
+
+  it('a remote rename of a note with an unsaved edit still gets that edit written', async () => {
+    await openSeededVault({ 'A.md': 'original\n', 'B.md': 'b\n' })
+    const adapter = useAppStore.getState().adapter!
+    useAppStore.getState().setNoteContent('A.md', 'original\nUNSAVED EDIT\n')
+
+    // Another device renamed the file; the server already moved it and now
+    // says so. The edit moves with the note — and so must its dirty flag, or
+    // saveAll and the unload flush look for A.md, find nothing, and drop it.
+    await adapter.rename('A.md', 'Renamed.md')
+    await useAppStore.getState().applyVaultChange({ type: 'rename', from: 'A.md', to: 'Renamed.md' })
+    // Nobody calls saveAll here: the rename itself has to get the edit written.
+    await vi.waitFor(() => expect(useAppStore.getState().dirty.size).toBe(0))
+
+    expect(await adapter.read('Renamed.md')).toContain('UNSAVED EDIT')
+    expect(useAppStore.getState().saving.size).toBe(0)
+  })
+
+  it('a remote rename while a save is in flight ends with nothing left "saving" and no file at the old name', async () => {
+    await openSeededVault({ 'A.md': 'original\n' })
+    const adapter = useAppStore.getState().adapter!
+    const gate = holdWrites(adapter)
+    useAppStore.getState().setNoteContent('A.md', 'original\nEDIT\n')
+    const inFlight = useAppStore.getState().saveNote('A.md')
+
+    await adapter.rename('A.md', 'Renamed.md')
+    await useAppStore.getState().applyVaultChange({ type: 'rename', from: 'A.md', to: 'Renamed.md' })
+    gate.release()
+    await inFlight
+    await vi.waitFor(() => expect(useAppStore.getState().saving.size).toBe(0))
+
+    // The old write finished after the rename: it must neither resurrect the
+    // old file nor leave "Saving…" showing forever for the new one.
+    expect({ old: await adapter.exists('A.md'), renamed: await adapter.read('Renamed.md'), dirty: [...useAppStore.getState().dirty] }).toEqual({
+      old: false,
+      renamed: 'original\nEDIT\n',
+      dirty: [],
+    })
+  })
+
+  it('a remote rename keeps the persisted starred list pointing at the new name', async () => {
+    await openSeededVault({ 'A.md': 'a\n' })
+    useAppStore.getState().toggleStar('A.md')
+    await useAppStore.getState().adapter!.rename('A.md', 'B.md')
+    await useAppStore.getState().applyVaultChange({ type: 'rename', from: 'A.md', to: 'B.md' })
+    expect(useAppStore.getState().starred).toEqual(['B.md'])
+    expect(JSON.parse(localStorage.getItem('spacefore.starred')!)).toEqual(['B.md'])
+  })
+
+  it('a remote delete blanks the tab, so keystrokes are not swallowed by a note that is gone', async () => {
+    await openSeededVault({ 'A.md': 'a\n', 'B.md': 'b\n' })
+    const adapter = useAppStore.getState().adapter!
+    useAppStore.getState().openPath('A.md')
+    expect(useAppStore.getState().activeTab()?.path).toBe('A.md')
+
+    await adapter.remove('A.md')
+    await useAppStore.getState().applyVaultChange({ type: 'remove', path: 'A.md' })
+
+    useAppStore.getState().setNoteContent('A.md', 'typed after the remote delete\n')
+    const state = useAppStore.getState()
+    expect({ tab: state.activeTab()?.path ?? null, dirty: [...state.dirty], has: state.notes.has('A.md') }).toEqual({
+      tab: null,
+      dirty: [],
+      has: false,
+    })
+  })
+
+  it('a remote delete of a note with an unsaved edit keeps the edit, and the next save puts the file back', async () => {
+    await openSeededVault({ 'A.md': 'a\n' })
+    const adapter = useAppStore.getState().adapter!
+    useAppStore.getState().setNoteContent('A.md', 'a\nUNSAVED\n')
+
+    await adapter.remove('A.md')
+    await useAppStore.getState().applyVaultChange({ type: 'remove', path: 'A.md' })
+
+    // The other device's delete does not take this device's unsaved text with
+    // it: the note stays, still marked, and the reader is told.
+    const state = useAppStore.getState()
+    expect({ has: state.notes.has('A.md'), dirty: state.dirty.has('A.md'), tab: state.activeTab()?.path }).toEqual({
+      has: true,
+      dirty: true,
+      tab: 'A.md',
+    })
+    expect(state.toasts.some((toast) => toast.message.includes('changed elsewhere'))).toBe(true)
+    await useAppStore.getState().saveAll()
+    expect(await adapter.read('A.md')).toBe('a\nUNSAVED\n')
+  })
+
+  it('⌘S on a clean note, then a remote rename mid-write, does not leave the new name "Saving…" forever', async () => {
+    await openSeededVault({ 'A.md': 'clean\n' })
+    const adapter = useAppStore.getState().adapter!
+    const gate = holdWrites(adapter)
+    // The Save command does not check the flag: a clean note can be mid-write.
+    const inFlight = useAppStore.getState().saveNote('A.md')
+    expect(useAppStore.getState().saving.has('A.md')).toBe(true)
+
+    await adapter.rename('A.md', 'Renamed.md')
+    await useAppStore.getState().applyVaultChange({ type: 'rename', from: 'A.md', to: 'Renamed.md' })
+    gate.release()
+    await inFlight
+
+    // Nothing is dirty, so no save runs for the new name — and nothing must be
+    // waiting for one: the tab's dot and the status bar both read this set.
+    expect([...useAppStore.getState().saving]).toEqual([])
+  })
+
+  it('a sync conflict keeps text typed while the refused save was in flight', async () => {
+    await openSeededVault({ 'A.md': 'base\n' })
+    const adapter = useAppStore.getState().adapter!
+    const raw = adapter.write.bind(adapter)
+    await raw('A.md', 'SERVER VERSION\n')
+    const gate = holdWrites(adapter)
+    const conflict = new Error('"A" was edited on another device. Your version was kept as "A (conflict)".')
+    conflict.name = 'RemoteConflict'
+    gate.failWith!(conflict)
+
+    useAppStore.getState().setNoteContent('A.md', 'v1\n')
+    const saving = useAppStore.getState().saveNote('A.md')
+    useAppStore.getState().setNoteContent('A.md', 'v1\nTYPED DURING SAVE\n')
+    gate.release()
+    await saving
+
+    // The conflict copy only carries v1. The text typed since is in no copy
+    // at all — reloading the server's version over it would have lost it.
+    const state = useAppStore.getState()
+    expect(state.notes.get('A.md')?.content).toContain('TYPED DURING SAVE')
+    expect(state.dirty.has('A.md')).toBe(true)
+  })
+
+  it('two autosaves landing out of order leave the newest text on disk, not the oldest', async () => {
+    vi.useFakeTimers()
+    await openSeededVault({ 'A.md': 'v0\n' })
+    useAppStore.getState().updateSettings({ autosaveDelay: 200 })
+    const adapter = useAppStore.getState().adapter!
+    const raw = adapter.write.bind(adapter)
+    // A backend where an earlier request can finish after a later one.
+    adapter.write = (path, content) =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => void raw(path, content).then(resolve), content.includes('v1') ? 1_000 : 100)
+      })
+
+    useAppStore.getState().setNoteContent('A.md', 'v1\n')
+    await vi.advanceTimersByTimeAsync(250) // save #1 starts, slow
+    useAppStore.getState().setNoteContent('A.md', 'v2\n')
+    await vi.advanceTimersByTimeAsync(250) // save #2 starts, fast, lands
+    await vi.advanceTimersByTimeAsync(2_000) // #1 lands last — and is noticed
+
+    const state = useAppStore.getState()
+    expect({ onDisk: await adapter.read('A.md'), dirty: state.dirty.has('A.md'), saving: state.saving.size }).toEqual({
+      onDisk: 'v2\n',
+      dirty: false,
+      saving: 0,
+    })
+  })
+
+  it('deleting a note while its save is in flight does not bring the file back', async () => {
+    await openSeededVault({ 'A.md': 'a\n' })
+    const adapter = useAppStore.getState().adapter!
+    const gate = holdWrites(adapter)
+
+    useAppStore.getState().setNoteContent('A.md', 'a\nmore\n')
+    const saving = useAppStore.getState().saveNote('A.md')
+    await useAppStore.getState().deleteNote('A.md')
+    expect(useAppStore.getState().notes.has('A.md')).toBe(false)
+    gate.release()
+    await saving
+
+    expect(await adapter.exists('A.md')).toBe(false)
+  })
+
+  it('createNote never writes over a file that is on disk but unknown to the store', async () => {
+    await openSeededVault({ 'A.md': 'a\n' })
+    const adapter = useAppStore.getState().adapter!
+    // Created by another program while the app was open: a directory vault
+    // has no change feed, so the store never heard of it.
+    await adapter.write('Ideas.md', 'IMPORTANT NOTES WRITTEN OUTSIDE THE APP\n')
+
+    const made = await useAppStore.getState().createNote('Ideas')
+
+    expect(await adapter.read('Ideas.md')).toContain('IMPORTANT NOTES WRITTEN OUTSIDE THE APP')
+    expect(made).toBe('Ideas 1.md')
+  })
+
+  it('openDailyNote opens today’s note when it exists only on disk, rather than replacing it', async () => {
+    await openSeededVault({ 'A.md': 'a\n' })
+    const adapter = useAppStore.getState().adapter!
+    const today = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const path = `Daily/${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}.md`
+    await adapter.write(path, '# today\n\nWRITTEN FROM ANOTHER APP\n')
+
+    await useAppStore.getState().openDailyNote()
+
+    expect(await adapter.read(path)).toContain('WRITTEN FROM ANOTHER APP')
+    expect(useAppStore.getState().notes.get(path)?.content).toContain('WRITTEN FROM ANOTHER APP')
+    expect(useAppStore.getState().activeTab()?.path).toBe(path)
+  })
+
+  it('an edit typed while the next vault is being listed still reaches the vault it belongs to', async () => {
+    vi.useFakeTimers()
+    await openSeededVault({ 'Welcome.md': 'old vault text\n' })
+    const previous = useAppStore.getState().adapter!
+    const next = createMemoryVault({ 'Other.md': 'x\n' }, { name: 'On disk' })
+    const list = next.list.bind(next)
+    next.list = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return list()
+    }
+
+    const opening = useAppStore.getState().openVault(next)
+    await vi.advanceTimersByTimeAsync(50) // saveAll done; list() still walking
+    useAppStore.getState().setNoteContent('Welcome.md', 'old vault text\nTYPED DURING SWITCH\n')
+    await vi.advanceTimersByTimeAsync(2_000)
+    await opening
+
+    expect(await previous.read('Welcome.md')).toBe('old vault text\nTYPED DURING SWITCH\n')
+    expect(useAppStore.getState().toasts.some((toast) => toast.kind === 'error')).toBe(false)
+  })
+
+  it('an edit that cannot be flushed before the switch is at least reported, not dropped in silence', async () => {
+    vi.useFakeTimers()
+    await openSeededVault({ 'Welcome.md': 'old vault text\n' })
+    const previous = useAppStore.getState().adapter!
+    const next = createMemoryVault({ 'Other.md': 'x\n' }, { name: 'On disk' })
+    const list = next.list.bind(next)
+    next.list = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return list()
+    }
+
+    const opening = useAppStore.getState().openVault(next)
+    await vi.advanceTimersByTimeAsync(50)
+    previous.write = async () => {
+      throw new Error('disk full')
+    }
+    useAppStore.getState().setNoteContent('Welcome.md', 'old vault text\nTYPED DURING SWITCH\n')
+    await vi.advanceTimersByTimeAsync(2_000)
+    await opening
+
+    expect(useAppStore.getState().toasts.some((toast) => toast.kind === 'error' && toast.message.includes('Welcome.md'))).toBe(true)
+    expect(useAppStore.getState().adapter).toBe(next)
+  })
+
+  describe('a big note whose parse is deferred', () => {
+    const HUGE = ['# Journal', '', ...Array.from({ length: 14_000 }, (_, i) => `${i}. A line that links [[Hub]] and tags #jurnal.`), ''].join('\n')
+
+    it('still gets its parse and the index settled after createNote', async () => {
+      // performance.now stays real, so the parse can prove itself slow.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+      await openSeededVault({ 'Journal.md': HUGE, 'Hub.md': '# Hub\n' })
+      useAppStore.getState().setNoteContent('Journal.md', HUGE + 'x') // timed: proves slow
+      const parsedBefore = useAppStore.getState().notes.get('Journal.md')!.parsed
+      useAppStore.getState().setNoteContent('Journal.md', HUGE + 'x\n[[Brand New Link]]\n') // deferred
+      expect(useAppStore.getState().notes.get('Journal.md')!.parsed).toBe(parsedBefore)
+
+      // createNote used to clear the "still owes a parse" set while the note
+      // was still stale, so the link typed above was never seen by anything.
+      await useAppStore.getState().createNote('Scratch.md')
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      const state = useAppStore.getState()
+      expect(state.notes.get('Journal.md')!.parsed.links.some((link) => link.target === 'Brand New Link')).toBe(true)
+      expect(state.index.unresolved.has('brand new link')).toBe(true)
+    })
+
+    it('still gets its parse and the index settled after deleteNote', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+      await openSeededVault({ 'Journal.md': HUGE, 'Hub.md': '# Hub\n', 'Gone.md': 'bye\n' })
+      useAppStore.getState().setNoteContent('Journal.md', HUGE + 'x') // timed: proves slow
+      const parsedBefore = useAppStore.getState().notes.get('Journal.md')!.parsed
+      useAppStore.getState().setNoteContent('Journal.md', HUGE + 'x\n[[Brand New Link]]\n') // deferred
+      expect(useAppStore.getState().notes.get('Journal.md')!.parsed).toBe(parsedBefore)
+
+      await useAppStore.getState().deleteNote('Gone.md')
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      const state = useAppStore.getState()
+      expect(state.notes.has('Gone.md')).toBe(false)
+      expect(state.notes.get('Journal.md')!.parsed.links.some((link) => link.target === 'Brand New Link')).toBe(true)
+      expect(state.index.unresolved.has('brand new link')).toBe(true)
     })
   })
 })

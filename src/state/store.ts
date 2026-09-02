@@ -294,6 +294,9 @@ export interface AppState {
 }
 
 const saveTimers = new Map<NotePath, ReturnType<typeof setTimeout>>()
+/** The number of the latest save started per note, and the latest to land. */
+const saveSequence = new Map<NotePath, number>()
+const saveLanded = new Map<NotePath, number>()
 
 /** Unsubscribes the current vault's change feed; replaced on every open. */
 let detachVaultWatch: (() => void) | null = null
@@ -490,6 +493,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Nothing is published before every read has landed: a store holding the
       // new adapter next to the old notes writes one vault's text into another.
       const files = await adapter.list()
+      // Listing took time, and the editor was live throughout: whatever was
+      // typed into the outgoing vault meanwhile is flushed to it now, while
+      // it is still the adapter installed. Otherwise the publish below would
+      // drop those keystrokes without a word.
+      // (A write that fails here raises saveNote's own error toast.)
+      if (get().adapter && get().dirty.size > 0) await get().saveAll()
       const notes = new Map<NotePath, Note>()
       const attachments: VaultFile[] = []
       const mtimes = new Map<NotePath, number>()
@@ -603,16 +612,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (change.type === 'rename' && change.from && change.to) {
       const from = change.from
       const to = change.to
+      // An autosave armed for the old name would find no note there and do
+      // nothing; re-arm it for the new one so an unsaved edit still lands.
+      const timer = saveTimers.get(from)
+      if (timer) {
+        clearTimeout(timer)
+        saveTimers.delete(from)
+      }
       set((s) => {
         const note = s.notes.get(from)
         if (!note) return {}
         const notes = new Map(s.notes)
         notes.delete(from)
+        // The note moves with whatever is unsaved in it: the other device
+        // renamed the file, it did not see this device's edit, and that edit
+        // has to be written under the new name or saveAll and the unload
+        // flush — which look up notes by their dirty path — will never find it.
         notes.set(to, makeNote(to, note.content, note.mtime, note.lineEnding))
+        const dirty = new Set(s.dirty)
+        if (dirty.delete(from)) dirty.add(to)
+        // A write still in flight for the old name finishes as a write to the
+        // old name: it clears its own flag there, and saveNote (below) raises
+        // its own for the new one. Moving the flag would leave it raised for
+        // good, with the tab marked and the status bar saying "Saving…".
+        const saving = new Set(s.saving)
+        saving.delete(from)
+        const starred = s.starred.map((path) => (path === from ? to : path))
+        // What renameNote does; a remote rename must not leave the persisted
+        // list pointing at a name that no longer exists.
+        saveJSON(STARRED_KEY, starred)
         return {
           notes,
           index: buildIndex(notes),
-          starred: s.starred.map((path) => (path === from ? to : path)),
+          dirty,
+          saving,
+          starred,
           recent: s.recent.map((path) => (path === from ? to : path)),
           panes: s.panes.map((pane) => ({
             ...pane,
@@ -621,6 +655,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           revision: s.revision + 1,
         }
       })
+      if (get().dirty.has(to)) void get().saveNote(to)
       return
     }
 
@@ -636,6 +671,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     if (change.type === 'remove') {
+      // Only a note with nothing unsaved gets here (the guard above), so there
+      // is no flag and no armed autosave to clean up — a write still in flight
+      // for it will notice the note is gone and take its own file away again.
       set((s) => {
         if (!s.notes.has(path)) return {}
         const notes = new Map(s.notes)
@@ -644,6 +682,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           notes,
           index: buildIndex(notes),
           attachments: s.attachments.filter((file) => file.path !== path),
+          // A tab left on a note that no longer exists keeps rendering it and
+          // swallows every keystroke — there is no note to put them in. Blank
+          // it, as deleteNote and openVault do.
+          panes: s.panes.map((pane) => closeTabsFor(pane, path)),
           revision: s.revision + 1,
         }
       })
@@ -756,6 +798,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // The exact text this call is responsible for. The user can type again
     // while the write is in flight, and this write does not save that edit.
     const written = note.content
+    // Which save this is, so two in flight for one note can tell which of them
+    // landed last. A backend is free to finish them out of order.
+    const sequence = (saveSequence.get(path) ?? 0) + 1
+    saveSequence.set(path, sequence)
     set((s) => ({ saving: new Set(s.saving).add(path) }))
     if (get().adapter !== adapter) {
       // The vault was swapped while this save was being set up; its content
@@ -771,15 +817,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Restored to the file's own line endings on the way out; the app works
       // in `\n` everywhere inside.
       await adapter.write(path, toFileText(note))
+      // The note was deleted while this write was in flight: the write has
+      // just put the file back. Take it away again rather than resurrect it.
+      if (!get().notes.has(path)) {
+        await adapter.remove(path).catch(() => {})
+        set((s) => {
+          const saving = new Set(s.saving)
+          saving.delete(path)
+          return { saving }
+        })
+        return
+      }
+      const landedLate = (saveLanded.get(path) ?? 0) > sequence
+      if (!landedLate) saveLanded.set(path, sequence)
       set((s) => {
         const dirty = new Set(s.dirty)
         // Only this write's text is saved: anything typed since is still dirty,
         // and clearing the flag for it would defeat the unload guard.
-        if (s.notes.get(path)?.content === written) dirty.delete(path)
+        if (s.notes.get(path)?.content === written && !landedLate) dirty.delete(path)
         const saving = new Set(s.saving)
         saving.delete(path)
         return { dirty, saving }
       })
+      // An older write that finished after a newer one has left the file
+      // holding the older text. The note is still marked, and this puts the
+      // newest text back on its own.
+      if (landedLate) void get().saveNote(path)
     } catch (error) {
       set((s) => {
         const saving = new Set(s.saving)
@@ -792,12 +855,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       // unsaved flag and reloading the server's version is what stops the next
       // save from making another copy, and another after that.
       if (error instanceof Error && error.name === 'RemoteConflict') {
+        get().pushToast(error.message, 'info')
+        // Only if nothing has been typed since. The conflict copy holds the
+        // text this write carried; anything typed while it was in flight is in
+        // no copy at all, and reloading the server's version over it would be
+        // the one way to lose it. It stays here, still unsaved, and the next
+        // save goes through the same door.
+        if (get().notes.get(path)?.content !== written) return
         set((s) => {
           const dirty = new Set(s.dirty)
           dirty.delete(path)
           return { dirty }
         })
-        get().pushToast(error.message, 'info')
         await get().applyVaultChange({ type: 'upsert', path })
         return
       }
@@ -812,15 +881,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   async createNote(path, content = '') {
-    const { adapter, notes } = get()
+    const { adapter } = get()
     let target = path.toLowerCase().endsWith('.md') ? path : `${path}.md`
-    if (notes.has(target)) {
+    // Taken means taken on disk too, not only in the store. A directory vault
+    // has no change feed, so a file another program created while the app
+    // was open is unknown here — and writing over it would be the app
+    // destroying a note it never showed.
+    const taken = async (candidate: NotePath): Promise<boolean> =>
+      get().notes.has(candidate) || (adapter ? await adapter.exists(candidate).catch(() => false) : false)
+    if (await taken(target)) {
       const stem = target.slice(0, -3)
       let n = 1
-      while (notes.has(`${stem} ${n}.md`)) n += 1
+      while (await taken(`${stem} ${n}.md`)) n += 1
       target = `${stem} ${n}.md`
     }
-    const next = new Map(notes)
+    // Settled first: clearPendingIndex below forgets which notes still owe a
+    // parse, and a note it forgot would keep stale links and tags for good.
+    const next = new Map(settleParses(get().notes))
     next.set(target, makeNote(target, content, Date.now()))
     const index = buildIndex(next)
     clearPendingIndex()
@@ -912,9 +989,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       }
     }
+    // Settled before clearPendingIndex forgets who still owes a parse.
+    const settled = settleParses(get().notes)
     clearPendingIndex()
     set((s) => {
-      const next = new Map(s.notes)
+      const next = new Map(settled === notes ? s.notes : settled)
       next.delete(path)
       const dirty = new Set(s.dirty)
       dirty.delete(path)
@@ -1026,6 +1105,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (notes.has(path)) {
       get().openPath(path)
       return
+    }
+    // Today's note may exist on disk without the store having heard of it —
+    // written by another program, or by this app on another device before the
+    // change feed caught up. That note is opened, not written over.
+    const adapter = get().adapter
+    if (adapter && (await adapter.exists(path).catch(() => false))) {
+      try {
+        const content = await adapter.read(path)
+        set((s) => {
+          const next = new Map(s.notes)
+          next.set(path, makeNote(path, content, Date.now()))
+          return { notes: next, index: buildIndex(next), revision: s.revision + 1 }
+        })
+        get().openPath(path)
+        return
+      } catch {
+        // Fall through: if it cannot be read, creating it is the next best thing.
+      }
     }
     await get().createNote(path, `# ${name}\n\n`)
     get().openPath(path, { mode: 'edit' })

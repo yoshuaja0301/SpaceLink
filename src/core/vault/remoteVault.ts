@@ -374,9 +374,16 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
     },
 
     async exists(path: NotePath): Promise<boolean> {
+      // Asked of the listing, not of the file: fetching a file that is not
+      // there is a 404 the browser logs as an error on the console, and the
+      // usual reason to ask is exactly that it may not be there. The listing
+      // is small and never 404s.
       try {
-        const response = await request(`/api/file?path=${encodeURIComponent(normalizePath(path))}`, { method: 'GET' })
-        return response.ok
+        const target = normalizePath(path)
+        const response = await request('/api/files')
+        if (!response.ok) return false
+        const body = (await response.json()) as { files: RemoteFile[] }
+        return body.files.some((file) => normalizePath(file.path) === target)
       } catch {
         return false
       }
