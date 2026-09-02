@@ -25,7 +25,7 @@ import type {
   ViewMode,
 } from '../types'
 import { parseNote } from '../core/markdown/parse'
-import { buildIndex, emptyIndex, getBacklinks, resolveLinkTarget } from '../core/graph/index'
+import { buildIndex, cleanTarget, emptyIndex, getBacklinks, resolveLinkTarget } from '../core/graph/index'
 import { toVaultFile } from '../core/vault/paths'
 import {
   attachmentName,
@@ -943,16 +943,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
 
+    // Every note's `parsed` must describe its `content` before a single link
+    // offset is trusted. A big note mid-edit has its reparse deferred, and
+    // rewriting at offsets from the previous text splices the new name into
+    // whatever prose now sits there — which is how "an Old man" once became
+    // "an New man" three lines from the link that actually needed changing.
+    const settled = settleParses(notes)
     // Links are rewritten against the vault as it stands *before* the rename,
-    // so each one can be checked for where it actually pointed.
-    const before = currentIndex(state)
+    // so each one can be checked for where it actually pointed — and against
+    // the vault as it will stand *after*, so a rewritten link can be checked to
+    // still point there. The two differ only in where this note lives.
+    const before = settled !== notes ? buildIndex(settled) : currentIndex(state)
+    const moved = new Map(settled)
+    moved.delete(from)
+    moved.set(target, makeNote(target, note.content, note.mtime, note.lineEnding))
+    const after = buildIndex(moved)
+
     const newName = basename(target)
     const next = new Map<NotePath, Note>()
     const rewritten: NotePath[] = []
 
-    for (const [path, current] of notes) {
+    for (const [path, current] of settled) {
       if (path === from) continue
-      const updated = rewriteLinksTo(current, from, target, before)
+      const updated = rewriteLinksTo(current, from, target, before, after)
       if (updated !== current.content) {
         next.set(path, makeNote(path, updated, current.mtime, current.lineEnding))
         rewritten.push(path)
@@ -960,7 +973,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         next.set(path, current)
       }
     }
-    next.set(target, makeNote(target, note.content, note.mtime, note.lineEnding))
+    // The renamed note itself: its links to itself follow the rename like
+    // anyone else's, and a bare link it makes to a neighbour — which resolved
+    // against its old folder — is re-anchored so it still reaches that
+    // neighbour from the new one.
+    const own = settled.get(from) ?? note
+    const selfRewritten = rewriteLinksTo(own, from, target, before, after)
+    const asMoved = makeNote(target, selfRewritten, note.mtime, note.lineEnding)
+    const reanchored = reanchorLinks(asMoved, from, before, after)
+    next.set(target, reanchored === asMoved.content ? asMoved : makeNote(target, reanchored, note.mtime, note.lineEnding))
 
     const index = buildIndex(next)
     clearPendingIndex()
@@ -1353,41 +1374,80 @@ function withoutExtension(path: NotePath): string {
 }
 
 /**
- * Rewrite the links in `note` that point at `from` so they point at `to`,
- * leaving `[[Old|Alias]]`, `[[Old#Heading]]`, `[[Old#^block]]` and `![[Old]]`
- * decoration exactly as written.
+ * Rewrite every link in `note` that points at `from` so it points at `to`.
  *
- * A link is only rewritten when it *resolved* to `from` in `index` and names it
- * directly, so `[[Foo]]` that pointed at a different `Foo.md` in another folder
- * is left alone, and a path-form `[[Bar/Foo]]` that did point here is rewritten
- * in path form rather than left dangling. Only the links `parseNote` reported
- * are touched, which is what keeps `[[Foo]]` inside a fenced code block or an
- * inline code span verbatim.
+ * A link is rewritten when it *resolved* to `from` in `before` and named the
+ * file — by its name, or by a path in any spelling the resolver accepts:
+ * `[[Foo]]`, `[[Foo.md]]`, `[[Bar/Foo]]`, `[[./Bar/Foo]]`, `[[/Bar/Foo]]`,
+ * `[[Bar\\Foo]]`, even `[[Wrong/Foo]]`, which resolves by falling back to the
+ * bare name. An alias is not a name of the file, so renaming the file does not
+ * invalidate it. Only the links `parseNote` reported are touched, which is what
+ * keeps `[[Foo]]` inside a fenced code block or an inline code span verbatim.
+ *
+ * The new spelling keeps the form the old one had — bare name stays bare, path
+ * stays path, `.md` stays `.md` — unless a bare name would no longer reach `to`
+ * from this note in the vault as it stands `after`, because a note of the same
+ * name elsewhere would now win. Then it is written as a path, which is the one
+ * spelling that cannot be misread.
  */
-export function rewriteLinksTo(note: Note, from: NotePath, to: NotePath, index: VaultIndex): string {
+export function rewriteLinksTo(note: Note, from: NotePath, to: NotePath, before: VaultIndex, after: VaultIndex = before): string {
   if (from === to) return note.content
-  const names = new Set(
-    [basename(from), `${basename(from)}.md`, from, withoutExtension(from)].map((name) => name.toLowerCase()),
-  )
+  const fromName = withoutExtension(basename(from)).toLowerCase()
   let content = note.content
 
   // Right to left, so the offsets of the links still to come stay valid.
   for (let i = note.parsed.links.length - 1; i >= 0; i -= 1) {
     const link = note.parsed.links[i]!
     const written = link.target.trim()
-    // An alias — or any other spelling that happens to resolve here — is not a
-    // name of this file, so renaming the file does not invalidate it.
-    if (!names.has(written.toLowerCase())) continue
-    if (resolveLinkTarget(link.target, note.path, index) !== from) continue
+    if (resolveLinkTarget(link.target, note.path, before) !== from) continue
+    // Whatever was written, its last segment has to be this file's name for
+    // the rename to concern it. Anything else that resolved here is an alias.
+    const cleaned = cleanTarget(written)
+    const last = cleaned.slice(cleaned.lastIndexOf('/') + 1)
+    if (withoutExtension(last).toLowerCase() !== fromName) continue
 
-    const keepExtension = written.toLowerCase().endsWith('.md')
-    const replacement = written.includes('/')
-      ? keepExtension
-        ? to
-        : withoutExtension(to)
-      : keepExtension
-        ? `${basename(to)}.md`
-        : basename(to)
+    const keepExtension = last.toLowerCase().endsWith('.md')
+    const pathForm = keepExtension ? to : withoutExtension(to)
+    const nameForm = keepExtension ? `${basename(to)}.md` : basename(to)
+    // A bare name is kept bare only while it still lands on the moved note.
+    const replacement =
+      cleaned.includes('/') || resolveLinkTarget(nameForm, note.path, after) !== to ? pathForm : nameForm
+
+    // The parse must still describe this text: a link whose bytes have moved
+    // is left alone rather than spliced into whatever is there now.
+    const raw = content.slice(link.start, link.end)
+    const at = raw.indexOf(written, raw.indexOf('[[') + 2)
+    if (at === -1) continue
+    content =
+      content.slice(0, link.start) +
+      raw.slice(0, at) +
+      replacement +
+      raw.slice(at + written.length) +
+      content.slice(link.end)
+  }
+  return content
+}
+
+/**
+ * Keep a moved note's own links pointing where they did.
+ *
+ * A bare `[[Sibling]]` is resolved from the note's folder first, so moving the
+ * note can silently change which `Sibling.md` it means. Any link that reached
+ * one note from the old folder and a different one — or none — from the new
+ * folder is rewritten as the path of the note it used to reach.
+ */
+export function reanchorLinks(note: Note, oldPath: NotePath, before: VaultIndex, after: VaultIndex): string {
+  let content = note.content
+  for (let i = note.parsed.links.length - 1; i >= 0; i -= 1) {
+    const link = note.parsed.links[i]!
+    const written = link.target.trim()
+    const was = resolveLinkTarget(link.target, oldPath, before)
+    if (was === null || was === oldPath) continue
+    if (resolveLinkTarget(link.target, note.path, after) === was) continue
+
+    const cleaned = cleanTarget(written)
+    const keepExtension = cleaned.toLowerCase().endsWith('.md')
+    const replacement = keepExtension ? was : withoutExtension(was)
     const raw = content.slice(link.start, link.end)
     const at = raw.indexOf(written, raw.indexOf('[[') + 2)
     if (at === -1) continue

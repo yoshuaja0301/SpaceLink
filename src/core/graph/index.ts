@@ -100,7 +100,7 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
  * `|display` suffix and `#heading` / `^block` fragments removed, `\` folded to
  * `/`, leading `./` and `/` dropped. Case is preserved.
  */
-function cleanTarget(target: string): string {
+export function cleanTarget(target: string): string {
   if (!target) return ''
   let text = target.trim()
   const pipe = text.indexOf('|')

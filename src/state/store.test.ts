@@ -5,8 +5,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Note, NotePath, Pane } from '../types'
+import { buildIndex, resolveLinkTarget } from '../core/graph/index'
 import { createMemoryVault } from '../core/vault/memoryVault'
-import { buildIndex } from '../core/graph/index'
 import type { AppState } from './store'
 import {
   LAST_VAULT_KEY,
@@ -1028,5 +1028,128 @@ describe('attaching a file', () => {
     const toast = useAppStore.getState().toasts.at(-1)
     expect(toast?.kind).toBe('error')
     expect(toast?.message).toMatch(/read-only/i)
+  })
+})
+
+
+describe('renaming and moving: what a link is left pointing at', () => {
+  /** The links a note carries, as written. */
+  const written = (path: NotePath): string[] =>
+    [...(useAppStore.getState().notes.get(path)?.content ?? '').matchAll(/\[\[([^\]]*)\]\]/g)].map((m) => m[1]!)
+  const resolves = (target: string, from: NotePath): NotePath | null =>
+    resolveLinkTarget(target, from, useAppStore.getState().index)
+
+  it('rewrites the links a note makes to itself', async () => {
+    // These were skipped outright — the loop stepped over the note being
+    // renamed — so [[Note]], [[Note#Top]] and [[Note|me]] inside Note.md all
+    // dangled the moment it became New.md.
+    await openSeededVault({ 'Note.md': '# Note\n\nSee [[Note]], [[Note#Top]] and [[Note|me]].\n' })
+    await useAppStore.getState().renameNote('Note.md', 'New.md')
+
+    expect(useAppStore.getState().notes.get('New.md')?.content).toBe('# Note\n\nSee [[New]], [[New#Top]] and [[New|me]].\n')
+    expect(await useAppStore.getState().adapter!.read('New.md')).toBe('# Note\n\nSee [[New]], [[New#Top]] and [[New|me]].\n')
+    expect(useAppStore.getState().index.unresolved.size).toBe(0)
+  })
+
+  it('keeps a bare link on the note that moved, not on a namesake it now falls back to', async () => {
+    // [[Note]] from Ref.md meant the root Note.md. Move that into zzz/ and a
+    // bare [[Note]] would resolve to a/Note.md instead — the shortest path
+    // wins — so the link is written as a path, the one spelling that cannot
+    // be misread.
+    await openSeededVault({ 'Note.md': '# root\n', 'a/Note.md': '# other\n', 'Ref.md': 'see [[Note]]\n' })
+    expect(resolves('Note', 'Ref.md')).toBe('Note.md')
+
+    await useAppStore.getState().renameNote('Note.md', 'zzz/Note.md')
+
+    const [link] = written('Ref.md')
+    expect(resolves(link!, 'Ref.md')).toBe('zzz/Note.md')
+    expect(useAppStore.getState().index.incoming.get('zzz/Note.md')?.map((edge) => edge.from)).toEqual(['Ref.md'])
+  })
+
+  it('leaves a bare link bare when it still lands on the moved note', async () => {
+    // No namesake anywhere: the spelling the person chose is kept.
+    await openSeededVault({ 'Note.md': '# root\n', 'Ref.md': 'see [[Note]]\n' })
+    await useAppStore.getState().renameNote('Note.md', 'zzz/Note.md')
+    expect(written('Ref.md')).toEqual(['Note'])
+    expect(resolves('Note', 'Ref.md')).toBe('zzz/Note.md')
+  })
+
+  it('keeps a moved note’s own bare links pointing where they did', async () => {
+    // From inside sub/, [[Sibling]] is the sibling next door. From the root
+    // it would be the root’s Sibling.md — a different note — so the link is
+    // re-anchored to the one it always meant.
+    await openSeededVault({ 'sub/Note.md': 'see [[Sibling]]\n', 'sub/Sibling.md': '# local\n', 'Sibling.md': '# root\n' })
+    expect(resolves('Sibling', 'sub/Note.md')).toBe('sub/Sibling.md')
+
+    await useAppStore.getState().renameNote('sub/Note.md', 'Note.md')
+
+    const [link] = written('Note.md')
+    expect(resolves(link!, 'Note.md')).toBe('sub/Sibling.md')
+    expect(useAppStore.getState().index.outgoing.get('Note.md')?.map((edge) => edge.to)).toEqual(['sub/Sibling.md'])
+  })
+
+  for (const form of ['./f/Note', '/f/Note', 'f\\Note', 'x/Note']) {
+    it(`follows the rename when the link was written [[${form}]]`, async () => {
+      // The resolver accepts all of these for f/Note.md; the rewrite used to
+      // recognise only the exact spellings it expected, and left the rest
+      // pointing at a file that no longer existed.
+      await openSeededVault({ 'f/Note.md': '# Note\n', 'Ref.md': `see [[${form}]]\n` })
+      expect(resolves(form, 'Ref.md')).toBe('f/Note.md')
+
+      await useAppStore.getState().renameNote('f/Note.md', 'g/New.md')
+
+      const [link] = written('Ref.md')
+      expect(resolves(link!, 'Ref.md')).toBe('g/New.md')
+      expect(useAppStore.getState().index.unresolved.size).toBe(0)
+    })
+  }
+
+  it('does not touch an alias that happens to resolve to the renamed note', async () => {
+    await openSeededVault({
+      'Note.md': '---\naliases: [Nickname]\n---\n\n# Note\n',
+      'Ref.md': 'see [[Nickname]] and [[Note]]\n',
+    })
+    await useAppStore.getState().renameNote('Note.md', 'New.md')
+    // The alias still belongs to the note; only the name changed.
+    expect(written('Ref.md')).toEqual(['Nickname', 'New'])
+  })
+
+  describe('while a big note has a deferred parse', () => {
+    // A note big enough that parsing it costs more than the per-keystroke
+    // budget, so the store defers its reparse while typing — leaving
+    // `parsed.links` describing text that is no longer there.
+    const FILLER = Array.from({ length: 14_000 }, (_, i) => `${i}. A plain line of journal prose without any links at all.`).join('\n') + '\n'
+    // After 101 characters are inserted at the top, the stale link offsets
+    // land on the prose word "xHubyyy" instead of on `[[Hub]]`.
+    const PROSE = 'z'.repeat(10) + 'xHubyyy' + 'w'.repeat(89) + '\n'
+    const JOURNAL = FILLER + PROSE + 'See [[Hub]].\n'
+
+    async function seedAndDeferParse(): Promise<void> {
+      await openSeededVault({ 'Journal.md': JOURNAL, 'Hub.md': '# Hub\n' })
+      // First keystroke: parsed and timed, and it proves expensive.
+      useAppStore.getState().setNoteContent('Journal.md', JOURNAL + 'x')
+      // Second keystroke, before the settle: the parse is deferred, so
+      // `parsed.links` still carries offsets for the old text.
+      useAppStore.getState().setNoteContent('Journal.md', 'A'.repeat(100) + '\n' + JOURNAL + 'x')
+      const note = useAppStore.getState().notes.get('Journal.md')!
+      expect(note.content.startsWith('AAAA')).toBe(true)
+      expect(note.parsed.links[0]!.start).toBeLessThan(FILLER.length + PROSE.length + 10)
+    }
+
+    it('never splices the new name into prose at the stale offsets', async () => {
+      await seedAndDeferParse()
+      await useAppStore.getState().renameNote('Hub.md', 'Hub2.md')
+      const tail = useAppStore.getState().notes.get('Journal.md')!.content.slice(-140)
+      // This is what it used to do: "xHubyyy" three lines up became "xHub2yyy".
+      expect(tail).not.toContain('xHub2yyy')
+    })
+
+    it('still rewrites the link that really pointed at the renamed note', async () => {
+      await seedAndDeferParse()
+      await useAppStore.getState().renameNote('Hub.md', 'Hub2.md')
+      const tail = useAppStore.getState().notes.get('Journal.md')!.content.slice(-140)
+      expect(tail).toContain('[[Hub2]]')
+      expect(useAppStore.getState().index.unresolved.size).toBe(0)
+    })
   })
 })
