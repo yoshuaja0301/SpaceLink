@@ -290,8 +290,12 @@ describe('the app it builds', () => {
     expect(shared).toMatch(/RESOURCES\/server/)
     // Tests must not travel inside a shipped app.
     expect(shared).toMatch(/rm -f "\$RESOURCES\/server\/"\*\.test\.mjs/)
-    // Xcode hands a script phase almost no PATH, so Node has to be found.
-    expect(shared).toMatch(/opt\/homebrew\/bin/)
+    // Xcode hands a script phase almost no PATH, so Node has to be found —
+    // by node-path.sh, which the script must source and which must know the
+    // usual places.
+    expect(shared).toMatch(/\. "\$HERE\/node-path\.sh"/)
+    expect(shared).toMatch(/spacefore_add_node_paths/)
+    expect(readFileSync(join(HERE, 'node-path.sh'), 'utf8')).toMatch(/opt\/homebrew\/bin/)
 
     // `set -o pipefail` is not in POSIX sh, and a shell that does not know it
     // exits on the first line under `set -e` — leaving the bundle empty, with

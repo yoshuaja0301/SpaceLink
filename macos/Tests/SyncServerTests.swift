@@ -108,15 +108,64 @@ checking("returns nothing rather than a wrong guess when there is no Node") {
     return FileManager.default.isExecutableFile(atPath: found.path)
 }
 
+checking("orders versions by number, so v22 beats v9 and v10") {
+    // As text "v9.0.0" > "v22.1.0"; a plain sort picked the oldest Node.
+    ["v9.0.0", "v22.1.0", "v10.3.0"].sorted(by: NodeBinary.newerVersionFirst) == ["v22.1.0", "v10.3.0", "v9.0.0"]
+}
+
+/// A fake home directory holding Node shims, for testing where the app looks.
+let fakeHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacefore-home-\(UUID().uuidString)")
+func shim(_ relative: String) {
+    let url = fakeHome.appendingPathComponent(relative)
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? "#!/bin/sh\necho \(relative)\n".write(to: url, atomically: true, encoding: .utf8)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+}
+/// The first executable candidate that lives under the fake home. The host's
+/// own Node rightly comes before these; the order among them is the question.
+func firstInFakeHome() -> String? {
+    NodeBinary.candidates(home: fakeHome).filter { $0.hasPrefix(fakeHome.path) }.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+checking("nvm: the newest installed version is the one chosen") {
+    shim(".nvm/versions/node/v9.0.0/bin/node")
+    shim(".nvm/versions/node/v22.1.0/bin/node")
+    shim(".nvm/versions/node/v10.3.0/bin/node")
+    return firstInFakeHome()?.hasSuffix("v22.1.0/bin/node") == true
+}
+
+checking("Volta's shim is found, and outranks a version directory as PATH would") {
+    shim(".volta/bin/node")
+    return firstInFakeHome()?.hasSuffix(".volta/bin/node") == true
+}
+
+checking("fnm's nested layout is found") {
+    try? FileManager.default.removeItem(at: fakeHome.appendingPathComponent(".volta"))
+    try? FileManager.default.removeItem(at: fakeHome.appendingPathComponent(".nvm"))
+    shim("Library/Application Support/fnm/node-versions/v20.0.0/installation/bin/node")
+    defer { try? FileManager.default.removeItem(at: fakeHome) }
+    return firstInFakeHome()?.contains("fnm/node-versions/v20.0.0/installation/bin/node") == true
+}
+
 /* ------------------------------------------------------------------ *
  * Starting it
  * ------------------------------------------------------------------ */
 
 let server = SyncServer()
 var started: ServerAddress?
+let launchToken = SyncServer.freshToken()
+// A home of its own, so the token check can tell whether the server wrote one.
+let scratchHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacefore-scratch-home-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(at: scratchHome, withIntermediateDirectories: true)
+setenv("HOME", scratchHome.path, 1)
+
+checking("a fresh token is 32 random bytes, URL-safe, and different every time") {
+    let a = SyncServer.freshToken(), b = SyncServer.freshToken()
+    return a != b && a.count == 43 && a.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+}
 
 checking("starts the server and reads back where it is listening") {
-    let address = try server.start(node: node, entry: entry, vault: vault)
+    let address = try server.start(node: node, entry: entry, vault: vault, token: launchToken)
     started = address
     return address.port > 0 && address.token.count > 20 && address.url == "http://127.0.0.1:\(address.port)/"
 }
@@ -130,6 +179,17 @@ checking("reports the vault it was actually given") {
 checking("the server is genuinely answering at that address") {
     guard let address = started, let url = URL(string: "\(address.url)api/health") else { return false }
     return statusOf(url) == 200
+}
+
+checking("the token is the one this launch made up, and it never touched the disk") {
+    // The README promises a per-launch token that "never touches
+    // ~/.spacefore/server.json". Without --token the server would create that
+    // file; with HOME pointed somewhere empty, its absence afterwards is the
+    // proof that the app's token was used instead.
+    guard let address = started else { return false }
+    let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+    let configFile = URL(fileURLWithPath: home).appendingPathComponent(".spacefore/server.json")
+    return address.token == launchToken && !FileManager.default.fileExists(atPath: configFile.path)
 }
 
 checking("the token it reported is the one the server actually wants") {
@@ -158,6 +218,30 @@ checking("stopping it releases the port") {
 /* ------------------------------------------------------------------ *
  * Failing
  * ------------------------------------------------------------------ */
+
+checking("asked for the port it had last time, it gets the same port again") {
+    // The page's settings live under its origin, and the origin includes the
+    // port: the same port on relaunch is what makes them survive.
+    guard let previous = started else { return false }
+    let again = try server.start(node: node, entry: entry, vault: vault, port: previous.port)
+    defer { server.stop() }
+    return again.port == previous.port
+}
+
+checking("a port somebody else holds is refused rather than silently swapped") {
+    // The app falls back to port 0 itself; what start() must not do is claim
+    // one port and report another.
+    guard let previous = started else { return false }
+    let holder = try server.start(node: node, entry: entry, vault: vault, port: previous.port)
+    let other = SyncServer()
+    defer { server.stop(); other.stop() }
+    do {
+        _ = try other.start(node: node, entry: entry, vault: vault, port: holder.port, timeout: 10)
+        return false
+    } catch {
+        return true
+    }
+}
 
 checking("says so, rather than hanging, when the server cannot start") {
     let broken = SyncServer()

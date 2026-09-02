@@ -489,6 +489,46 @@ describe('being launched by another program', () => {
     }
   }, 30_000)
 
+  it('starts from a path with a space in it', async () => {
+    // Inside SpaceFore.app the server lives wherever the app was put — under
+    // "/Applications/My Apps/" or a home folder with a space in its name. The
+    // guard that decides "am I the program?" used to compare import.meta.url
+    // (percent-encoded) against a URL built from the raw argv path, which
+    // never matched such a path: the server loaded, ran nothing, and exited.
+    const { spawn } = await import('node:child_process')
+    const { cp, mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { fileURLToPath } = await import('node:url')
+
+    const root = await mkdtemp(join(tmpdir(), 'spacefore-spaced-'))
+    const copy = join(root, 'My Apps', 'SpaceFore.app', 'Contents', 'Resources', 'server')
+    await cp(fileURLToPath(new URL('./', import.meta.url)), copy, { recursive: true })
+    const child = spawn(process.execPath, [join(copy, 'index.mjs'), '--vault', join(root, 'vault'), '--port', '0', '--print-ready', '--token', TOKEN])
+
+    try {
+      const ready = await new Promise((resolvePromise, rejectPromise) => {
+        let buffered = ''
+        const timer = setTimeout(() => rejectPromise(new Error(`no ready line; stdout was:\n${buffered}`)), 15_000)
+        child.stdout.on('data', (chunk) => {
+          buffered += String(chunk)
+          const line = buffered.split('\n').find((candidate) => candidate.startsWith('{'))
+          if (!line) return
+          clearTimeout(timer)
+          resolvePromise(JSON.parse(line))
+        })
+        child.on('exit', (code) => {
+          clearTimeout(timer)
+          rejectPromise(new Error(`exited with ${code} before reporting ready — the program guard did not recognise its own path`))
+        })
+      })
+      expect(ready.spacefore).toBe('ready')
+      expect((await fetch(`${ready.url}api/health`)).status).toBe(200)
+    } finally {
+      child.kill('SIGTERM')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('stops by itself when whatever launched it goes away', async () => {
     const { spawn } = await import('node:child_process')
     const { mkdtemp, rm } = await import('node:fs/promises')

@@ -550,6 +550,11 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a program, not when imported by a test. Compared as paths: a file URL
+// percent-encodes a space or a non-ASCII letter (`My%20Apps`) while argv[1] is
+// the raw path, so building a URL by hand matched only paths that happened to
+// contain nothing worth encoding — and inside an app bundle under such a path
+// the server loaded, did nothing, and exited without a word.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void main()
 }

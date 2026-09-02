@@ -25,12 +25,17 @@ fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
-# Xcode hands a build script almost none of your shell's PATH, so the usual
-# places Node lives are added back.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"
+# Xcode hands a build script almost none of your shell's PATH — not Homebrew,
+# and not nvm, fnm, Volta or asdf, which live under $HOME and rely on the shell
+# to find them. node-path.sh knows where all of them keep Node.
+# shellcheck source=node-path.sh
+. "$HERE/node-path.sh"
+spacefore_add_node_paths
 
 if ! command -v npm >/dev/null 2>&1; then
-  echo "error: npm was not found. Install Node.js from nodejs.org or with: brew install node" >&2
+  echo "error: npm was not found. This build ran with almost no PATH (Xcode's script phases" >&2
+  echo "       start that way), and none of the usual places had Node: Homebrew, MacPorts," >&2
+  echo "       nvm, fnm, Volta, asdf, n. Install Node.js from nodejs.org or with: brew install node" >&2
   exit 1
 fi
 

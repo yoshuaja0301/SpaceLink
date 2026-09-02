@@ -18,25 +18,63 @@ import Foundation
 /// the `PATH` — so the usual places are checked directly. A copy inside the app
 /// bundle wins, which is what `build.sh --embed-node` puts there.
 enum NodeBinary {
-    static func locate(bundledAt bundled: URL?) -> URL? {
-        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled
-        }
-        var candidates = [
+    /// The places a Mac keeps Node, newest version first.
+    ///
+    /// A GUI app's PATH is /usr/bin:/bin:/usr/sbin:/sbin and nothing else, so
+    /// Homebrew, MacPorts and every version manager have to be looked up by
+    /// hand. `home` is a parameter so the search can be tested against a fake
+    /// one; the app passes the real home directory.
+    static func candidates(home: URL) -> [String] {
+        var found = [
             "/opt/homebrew/bin/node",     // Homebrew, Apple silicon
             "/usr/local/bin/node",        // Homebrew, Intel — and most installers
             "/usr/bin/node",
             "/opt/local/bin/node",        // MacPorts
+            home.appendingPathComponent(".volta/bin/node").path,    // Volta: a native shim, no shell needed
+            home.appendingPathComponent(".asdf/shims/node").path,   // asdf
+            home.appendingPathComponent(".nodenv/shims/node").path, // nodenv
+            home.appendingPathComponent("n/bin/node").path,         // n, with N_PREFIX=~/n
         ]
-        // Whatever `nvm` currently has, without running a shell to ask.
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let versions = home.appendingPathComponent(".nvm/versions/node")
-        if let found = try? FileManager.default.contentsOfDirectory(atPath: versions.path) {
-            for version in found.sorted().reversed() {
-                candidates.append(versions.appendingPathComponent("\(version)/bin/node").path)
+        // One directory per installed version. Newest first, by number rather
+        // than by string: as text, "v9" sorts after "v22".
+        for versions in [
+            home.appendingPathComponent(".nvm/versions/node"),
+            home.appendingPathComponent(".local/share/fnm/node-versions"),
+            home.appendingPathComponent("Library/Application Support/fnm/node-versions"),
+            home.appendingPathComponent(".asdf/installs/nodejs"),
+            home.appendingPathComponent(".nodenv/versions"),
+        ] {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: versions.path) else { continue }
+            for name in names.sorted(by: newerVersionFirst) {
+                let base = versions.appendingPathComponent(name)
+                // fnm nests one level deeper than the others.
+                found.append(base.appendingPathComponent("installation/bin/node").path)
+                found.append(base.appendingPathComponent("bin/node").path)
             }
         }
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }.map(URL.init(fileURLWithPath:))
+        return found
+    }
+
+    /// `v22.1.0` before `v10.3.0` before `v9.0.0`.
+    static func newerVersionFirst(_ a: String, _ b: String) -> Bool {
+        let av = numbers(in: a), bv = numbers(in: b)
+        for index in 0..<max(av.count, bv.count) {
+            let x = index < av.count ? av[index] : 0
+            let y = index < bv.count ? bv[index] : 0
+            if x != y { return x > y }
+        }
+        return a > b
+    }
+
+    private static func numbers(in name: String) -> [Int] {
+        name.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+    }
+
+    static func locate(bundledAt bundled: URL?, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL? {
+        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+        return candidates(home: home).first { FileManager.default.isExecutableFile(atPath: $0) }.map(URL.init(fileURLWithPath:))
     }
 }
 
@@ -97,13 +135,37 @@ final class SyncServer {
     /// Held open for as long as the server should live. See `start`.
     private var leashes: [Pipe] = []
 
+    /// A token for this launch: 32 random bytes, URL-safe.
+    ///
+    /// Generated here and handed to the server, so it lives in memory and in
+    /// the page the app opened, and nowhere on disk. Without one the server
+    /// would create and reuse `~/.spacefore/server.json` — the token of the
+    /// sync server a person runs by hand, which this app is not.
+    static func freshToken() -> String {
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
     /// Start the server and wait for it to say where it is listening.
     ///
+    /// `port` is a request, not a promise: 0 lets the system choose, and the
+    /// ready line says what was actually got. The app asks for the port it had
+    /// last time, because the web origin — scheme, host *and port* — is what
+    /// the page's settings and vault choice are stored under, and a new port
+    /// every launch would be a new, empty origin every launch.
+    ///
     /// - Throws: if the server exits, or never reports, within `timeout`.
-    func start(node: URL, entry: URL, vault: URL, timeout: TimeInterval = 30) throws -> ServerAddress {
+    func start(node: URL, entry: URL, vault: URL, token: String = SyncServer.freshToken(), port: Int = 0, timeout: TimeInterval = 30) throws -> ServerAddress {
         let task = Process()
         task.executableURL = node
-        task.arguments = [entry.path, "--vault", vault.path, "--port", "0", "--host", "127.0.0.1", "--print-ready"]
+        task.arguments = [
+            entry.path, "--vault", vault.path, "--port", String(port), "--host", "127.0.0.1",
+            "--token", token, "--print-ready",
+        ]
         // The server resolves `dist/` relative to its own file, so where we are
         // does not matter; set it anyway so any path it prints makes sense.
         task.currentDirectoryURL = entry.deletingLastPathComponent().deletingLastPathComponent()

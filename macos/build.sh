@@ -11,6 +11,8 @@
 #   ./macos/build.sh                 build it
 #   ./macos/build.sh --embed-node    ...and put a copy of Node inside, so the
 #                                    app works on a Mac without Node installed
+#                                    (NODE=/path/to/node chooses which; it must
+#                                    be the self-contained nodejs.org build)
 #   ./macos/build.sh --install       ...and move it into /Applications
 #
 set -euo pipefail
@@ -59,8 +61,13 @@ cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 "$HERE/copy-resources.sh" "$APP/Contents/Resources"
 
 if [[ "$EMBED_NODE" == "1" ]]; then
-  NODE_PATH="$(command -v node)"
-  echo "==> Embedding $(node --version) from $NODE_PATH"
+  # NODE=/path/to/node picks which one goes in; otherwise whatever is first on
+  # PATH. Either way it has to be self-contained: Homebrew's node links against
+  # twenty of Homebrew's own dylibs and dies on a Mac without them, which is
+  # the one Mac --embed-node exists for. embed-node-check.sh refuses those.
+  NODE_PATH="${NODE:-$(command -v node)}"
+  "$HERE/embed-node-check.sh" "$NODE_PATH"
+  echo "==> Embedding $("$NODE_PATH" --version) from $NODE_PATH"
   cp "$NODE_PATH" "$APP/Contents/Resources/node"
   chmod +x "$APP/Contents/Resources/node"
 fi

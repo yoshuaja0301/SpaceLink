@@ -105,23 +105,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             return
         }
 
-        do {
-            server.stop()
-            let address = try server.start(node: node, entry: entry, vault: vault)
-            VaultChoice.remember(vault)
-            window.title = vault.lastPathComponent
-
-            // The token goes in the fragment, which is never sent to a server
-            // and is cleared from the address by the page itself. The web app
-            // only accepts it because this is a loopback address.
-            let escaped = address.token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? address.token
-            guard let url = URL(string: "\(address.url)#token=\(escaped)") else {
-                fail("Could not open the vault.", "The server reported an address that makes no sense: \(address.url)")
-                return
+        server.stop()
+        window.title = "Starting…"
+        // Starting Node can take a moment — longer if macOS asks about access
+        // to the folder first — and waiting for it here would freeze the window
+        // that has just been shown. Wait on a background queue, come back for
+        // the UI.
+        let server = self.server
+        DispatchQueue.global(qos: .userInitiated).async {
+            // The port from last time, so the page keeps its origin — and with
+            // it its settings and its vault choice. If something else has that
+            // port now, the system picks another and the page starts afresh,
+            // which is the lesser evil.
+            let wanted = UserDefaults.standard.integer(forKey: "SpaceForePort")
+            let outcome = Result { () throws -> ServerAddress in
+                if wanted > 0, let address = try? server.start(node: node, entry: entry, vault: vault, port: wanted) {
+                    return address
+                }
+                return try server.start(node: node, entry: entry, vault: vault)
             }
-            webView.load(URLRequest(url: url))
-        } catch {
-            fail("Could not open the vault.", error.localizedDescription)
+            if case .success(let address) = outcome {
+                UserDefaults.standard.set(address.port, forKey: "SpaceForePort")
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch outcome {
+                case .success(let address):
+                    VaultChoice.remember(vault)
+                    self.window.title = vault.lastPathComponent
+                    // The token goes in the fragment, which is never sent to a
+                    // server and is cleared from the address by the page itself.
+                    // The web app only accepts it because this is a loopback
+                    // address.
+                    let escaped = address.token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? address.token
+                    guard let url = URL(string: "\(address.url)#token=\(escaped)") else {
+                        self.fail("Could not open the vault.", "The server reported an address that makes no sense: \(address.url)")
+                        return
+                    }
+                    self.webView.load(URLRequest(url: url))
+                case .failure(let error):
+                    self.fail("Could not open the vault.", error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -141,19 +166,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
+        #if DEBUG
+        // ⌘R from Xcode is a Debug build: let Safari's Develop menu inspect the
+        // page, or a blank first launch cannot be diagnosed at all.
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+        #endif
 
         window = NSWindow(
+            // A plain title bar, with the page starting below it. Full-size
+            // content would put the traffic lights and the title over the
+            // ribbon and the tab bar, which have no inset for them.
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
+        // Apple: "Swift and ARC clients need to set this property to false to
+        // avoid releasing the window too many times." It is held in a property.
+        window.isReleasedWhenClosed = false
         window.title = "SpaceFore"
-        window.titlebarAppearsTransparent = true
         window.contentView = webView
-        window.setFrameAutosaveName("SpaceForeWindow")
         window.minSize = NSSize(width: 720, height: 480)
-        window.center()
+        // Where it was last time, or the centre the first time. Centring after
+        // restoring would undo the restore on every launch.
+        if !window.setFrameUsingName("SpaceForeWindow") {
+            window.center()
+        }
+        window.setFrameAutosaveName("SpaceForeWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -165,7 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About SpaceFore", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Open Vault…", action: #selector(chooseVault), keyEquivalent: "o")
+        // ⌥⌘O: the page owns plain ⌘O (the quick switcher), and a web view hands
+        // Command chords to the page first once it has focus.
+        let openItem = appMenu.addItem(withTitle: "Open Vault…", action: #selector(chooseVault), keyEquivalent: "o")
+        openItem.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide SpaceFore", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit SpaceFore", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -188,7 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
-        viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        // ⌃⌘F, as everywhere else on the Mac; plain ⌘F is "find" wherever the
+        // page does not handle it itself.
+        let fullScreenItem = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreenItem.keyEquivalentModifierMask = [.command, .control]
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 
@@ -248,6 +295,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         download.delegate = self
     }
 
+    /// The file picker behind `<input type="file">` — "Import notes from JSON".
+    ///
+    /// On macOS, file uploads are disabled unless the UI delegate implements
+    /// this; without it the import control does nothing and says nothing.
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+    }
+
     // MARK: Downloads
 
     /// Where a download goes: wherever the reader says, defaulting to the name
@@ -289,11 +353,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         _ = alert.runModal()
     }
 
+    /// A load superseded by a newer one — ⌘R while still loading, choosing a
+    /// vault mid-load, a link handed to the browser — is reported as
+    /// `URLError.cancelled`. It is not a failure, and the alert below has only
+    /// "Choose Another Folder" and "Quit" on it.
+    private func isCancellation(_ error: Error) -> Bool {
+        (error as? URLError)?.code == .cancelled
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if isCancellation(error) { return }
         fail("SpaceFore could not load.", error.localizedDescription)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if isCancellation(error) { return }
         fail("SpaceFore could not reach its own server.", error.localizedDescription)
     }
 

@@ -112,6 +112,12 @@ open class WKWebView: NSView {
     weak open var uiDelegate: WKUIDelegate?
     /// webkit/wkwebview/allowsbackforwardnavigationgestures
     open var allowsBackForwardNavigationGestures: Bool = false
+    /// webkit/wkwebview/isinspectable — macOS 13.3+, default false
+    @available(macOS 13.3, *)
+    open var isInspectable: Bool {
+        get { false }
+        set {}
+    }
     /// webkit/wkwebview/load(_:)-5siv6
     @discardableResult open func load(_ request: URLRequest) -> WKNavigation? { nil }
     /// webkit/wkwebview/reload()
@@ -159,5 +165,35 @@ extension WKNavigationDelegate {
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {}
 }
 
+/// webkit/wkframeinfo
+open class WKFrameInfo: NSObject {
+    /// webkit/wkframeinfo/ismainframe
+    open var isMainFrame: Bool { true }
+    /// webkit/wkframeinfo/request
+    open var request: URLRequest { URLRequest(url: URL(string: "about:blank")!) }
+}
+
+/// webkit/wkopenpanelparameters — macOS 10.12+
+open class WKOpenPanelParameters: NSObject {
+    /// webkit/wkopenpanelparameters/allowsmultipleselection
+    open var allowsMultipleSelection: Bool { false }
+    /// webkit/wkopenpanelparameters/allowsdirectories
+    open var allowsDirectories: Bool { false }
+}
+
 /// webkit/wkuidelegate
 public protocol WKUIDelegate: AnyObject {}
+
+extension WKUIDelegate {
+    /// webkit/wkuidelegate/webview(_:runopenpanelwith:initiatedbyframe:completionhandler:) — macOS 10.12+
+    ///
+    /// "By default on macOS, file uploads are disabled if you don't implement
+    /// this method." Same note as the navigation delegate about the handler's
+    /// attributes.
+    public func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {}
+}

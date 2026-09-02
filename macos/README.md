@@ -37,18 +37,27 @@ build it. `macos/Tests/run.sh` does exactly that, then launches the real
   ok    prefers a copy inside the app bundle over anything on the system
   ok    falls back to the system when the bundle has no copy
   ok    returns nothing rather than a wrong guess when there is no Node
+  ok    orders versions by number, so v22 beats v9 and v10
+  ok    nvm: the newest installed version is the one chosen
+  ok    Volta's shim is found, and outranks a version directory as PATH would
+  ok    fnm's nested layout is found
+  ok    a fresh token is 32 random bytes, URL-safe, and different every time
   ok    starts the server and reads back where it is listening
   ok    reports the vault it was actually given
   ok    the server is genuinely answering at that address
+  ok    the token is the one this launch made up, and it never touched the disk
   ok    the token it reported is the one the server actually wants
   ok    stopping it releases the port
+  ok    asked for the port it had last time, it gets the same port again
+  ok    a port somebody else holds is refused rather than silently swapped
   ok    says so, rather than hanging, when the server cannot start
   ok    says so when Node itself is not where it was told
 ```
 
-Confirmed to be worth something by breaking it three ways — the wrong
-`--print-ready` argument, an impossible port, the stdin leash removed — and
-watching each one fail.
+Confirmed to be worth something by breaking it six ways — the wrong
+`--print-ready` argument, an impossible port, the stdin leash removed, the
+version sort made lexicographic again, `--token` dropped, the requested port
+ignored — and watching each one fail.
 
 This is the half where a mistake is expensive: it is what makes the app open
 to your notes rather than to an error.
@@ -134,6 +143,32 @@ a bug like that can take. The entry point is `@main` now and `build.sh` passes
 `-parse-as-library` too, so both paths compile the same thing. Verified against
 a real compiler, both before and after.
 
+### What a seven-lens pre-flight found
+
+Before anyone had built it, seven independent reviewers — one each for AppKit,
+WebKit, the Xcode project, the process lifecycle, the shell scripts, a
+step-by-step first ⌘R, and the web app inside a `WKWebView` — went over
+`macos/` against Apple's documentation and, where it mattered, WebKit's source.
+Each finding was checked here before it was acted on; every one below is either
+reproduced, or confirmed from the documentation it cites.
+
+| would have happened on the Mac | now |
+| --- | --- |
+| the server never started from a path with a space (`My Apps/`): its "am I the program?" guard compared a percent-encoded URL against the raw path | compares paths; `server.test.mjs` launches it from such a path |
+| **Import notes from JSON** did nothing: on macOS file uploads are off unless the UI delegate implements `runOpenPanelWith` | implemented; an `NSOpenPanel` |
+| every launch got a new port, so a new web origin, so the page's settings and vault choice were gone each time | the port is remembered and asked for again; only a taken port falls back |
+| the token was the one in `~/.spacefore/server.json`, not per-launch as promised | generated in Swift per launch, passed as `--token`, never written |
+| ⌘R while loading, or any superseded load, showed the fatal "could not reach its own server" alert | `URLError.cancelled` is not a failure |
+| the window was released twice under ARC (masked today, a crash the day anything closes it) | `isReleasedWhenClosed = false` |
+| the window's position was never restored: `center()` ran after the autosave name | `setFrameUsingName` first, centre only the first time |
+| the traffic lights and the title were drawn over the ribbon and the tab bar | a plain title bar; the page starts below it |
+| ⌘O opened the page's quick switcher, ⌘F went full screen outside the editor | ⌥⌘O and ⌃⌘F |
+| the window sat empty, then beachballed, for as long as Node took to start — up to 30 s behind a folder-access prompt | the server starts off the main thread |
+| a blank first launch could not be inspected | Debug builds are inspectable from Safari's Develop menu |
+| Node from Volta, fnm, asdf, nodenv or `n` was "not found", and nvm's oldest version won a text sort | all of them are looked up; versions sort by number |
+| the Xcode script phase could not find `npm` from nvm, fnm, Volta or asdf | `node-path.sh`, shared by the script and tested against fake homes |
+| `--embed-node` copied Homebrew's node, which needs twenty of Homebrew's dylibs and dies on the Mac it was meant for | `embed-node-check.sh` refuses it and points at the nodejs.org build |
+
 ### The rest
 
 | | |
@@ -173,7 +208,7 @@ it is safe to wire into anything.
 
 ## What it does
 
-1. Asks which folder holds your notes (`⌘O` to change it later), and remembers.
+1. Asks which folder holds your notes (`⌥⌘O` to change it later), and remembers.
 2. Starts `server/index.mjs` from inside the app bundle, against that folder, on
    a port the system picks, bound to `127.0.0.1`.
 3. Opens `http://127.0.0.1:<that port>` in a `WKWebView`, with the access token
@@ -230,6 +265,9 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 | `Tests/Stubs/` | AppKit and WebKit as Apple documents them, for that typecheck |
 | `Info.plist` | shared by both build paths |
 | `copy-resources.sh` | fills the bundle; the single description of what goes in |
+| `node-path.sh` | where a Mac keeps Node, for a build script that starts with no PATH |
+| `embed-node-check.sh` | refuses a Node that would not run on another Mac |
+| `*.test.mjs` | the checks for the three scripts above, with `sips`, `iconutil` and `otool` as shims |
 | `build.sh` | builds without Xcode |
 | `SpaceFore.xcodeproj` | builds with it |
 | `pbxproj.test.mjs` | checks the project file, since Xcode cannot be run here |
@@ -247,9 +285,11 @@ whose whole job is opening a folder on your own machine.
 Handing the `.app` to someone else needs a Developer ID and notarisation;
 without those, macOS will refuse it on their machine.
 
-**The token is per-launch.** It is generated when the app starts, lives only in
-memory and in the page it opened, and is gone when you quit. It never touches
-`~/.spacefore/server.json`, which is for the sync server you run yourself.
+**The token is per-launch.** It is generated in the app when it starts, handed
+to the server as `--token`, lives only in memory and in the page it opened, and
+is gone when you quit. It never touches `~/.spacefore/server.json`, which is
+for the sync server you run yourself — and a test starts the server with an
+empty home directory and checks that no such file appears.
 
 **Other devices are a separate thing.** This app serves loopback only, so
 nothing else can reach it. To read the same notes from a phone, run the sync

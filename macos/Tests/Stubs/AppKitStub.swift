@@ -43,6 +43,14 @@ public struct Selector {
 open class NSView: NSObject {}
 
 open class NSWindow: NSObject {
+    /// appkit/nswindow/isreleasedwhenclosed — default true; ARC clients set false
+    open var isReleasedWhenClosed: Bool = true
+    /// appkit/nswindow/setframeusingname(_:)
+    @discardableResult open func setFrameUsingName(_ name: NSWindow.FrameAutosaveName) -> Bool { false }
+    /// appkit/nswindow/titlevisibility-swift.property — default .visible
+    open var titleVisibility: NSWindow.TitleVisibility = .visible
+    /// appkit/nswindow/titlevisibility-swift.enum
+    public enum TitleVisibility { case visible, hidden }
     /// appkit/nswindow/stylemask-swift.struct
     public struct StyleMask: OptionSet {
         public let rawValue: UInt
@@ -142,6 +150,8 @@ extension NSApplicationDelegate {
 // appkit/nsmenu, appkit/nsmenuitem
 
 open class NSMenuItem: NSObject {
+    /// appkit/nsmenuitem/keyequivalentmodifiermask
+    open var keyEquivalentModifierMask: NSEvent.ModifierFlags = [.command]
     public override init() { super.init() }
     /// appkit/nsmenuitem/separator()
     public class func separator() -> NSMenuItem { NSMenuItem() }
@@ -188,6 +198,8 @@ open class NSSavePanel: NSObject {
 }
 
 open class NSOpenPanel: NSSavePanel {
+    /// appkit/nsopenpanel/urls
+    open var urls: [URL] { [] }
     /// appkit/nsopenpanel/canchoosefiles
     open var canChooseFiles: Bool = true
     /// appkit/nsopenpanel/canchoosedirectories
@@ -227,4 +239,22 @@ open class NSWorkspace: NSObject {
     @discardableResult open func open(_ url: URL) -> Bool { true }
     /// appkit/nsworkspace/activatefileviewerselecting(_:)
     open func activateFileViewerSelecting(_ fileURLs: [URL]) {}
+}
+
+
+/// appkit/nsevent
+open class NSEvent: NSObject {
+    /// appkit/nsevent/modifierflags-swift.struct
+    public struct ModifierFlags: OptionSet {
+        public let rawValue: UInt
+        public init(rawValue: UInt) { self.rawValue = rawValue }
+        /// appkit/nsevent/modifierflags-swift.struct/command
+        public static let command = ModifierFlags(rawValue: 1 << 20)
+        /// appkit/nsevent/modifierflags-swift.struct/option
+        public static let option = ModifierFlags(rawValue: 1 << 19)
+        /// appkit/nsevent/modifierflags-swift.struct/control
+        public static let control = ModifierFlags(rawValue: 1 << 18)
+        /// appkit/nsevent/modifierflags-swift.struct/shift
+        public static let shift = ModifierFlags(rawValue: 1 << 17)
+    }
 }
