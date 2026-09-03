@@ -246,13 +246,19 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
   const disconnect = useCallback(async () => {
     const pairing = loadRemoteConnection()
     if (!pairing) return
-    if (pairing.email) await signOut(pairing.url, pairing.token)
+    // This half first, and not waiting on the other. A fetch to a server that
+    // is asleep or off the network does not fail quickly; it hangs for as long
+    // as the connection takes to time out, and the local half used to wait
+    // behind it — so for that whole time the click did nothing visible and
+    // the device stayed paired. Measured with a sign-out that never answers.
     forgetRemoteConnection()
-    if (!mountedRef.current) return
-    setServerToken('')
-    setPassword('')
-    setPairings((count) => count + 1)
-    pushToast(pairing.email ? `Signed out of ${pairing.email}.` : 'This device is no longer paired.', 'info')
+    if (mountedRef.current) {
+      setServerToken('')
+      setPassword('')
+      setPairings((count) => count + 1)
+      pushToast(pairing.email ? `Signed out of ${pairing.email}.` : 'This device is no longer paired.', 'info')
+    }
+    if (pairing.email) await signOut(pairing.url, pairing.token)
   }, [pushToast])
 
   const browserDescription = stored?.present

@@ -467,6 +467,34 @@ describe('VaultPicker', () => {
       expect(useAppStore.getState().toasts.map((toast) => toast.message)).toContain('Signed out of me@example.com.')
     })
 
+    it('unpairs this device at once, even while the server has not answered', async () => {
+      // The reader is handing a laptop back and the server is asleep, off the
+      // network, or on a LAN this café is not on. A fetch to it does not fail
+      // quickly; it hangs for as long as the connection takes to time out.
+      // The local half of signing out — forgetting the pairing, saying so —
+      // waited on the remote half, so for that whole time the click did
+      // nothing visible and the device stayed paired.
+      vi.mocked(signOut).mockImplementation(() => new Promise(() => {}))
+      localStorage.setItem(
+        'spacelink.remote',
+        JSON.stringify({ url: 'http://mac.local:4899', token: 'session', name: 'Notebook', email: 'me@example.com' }),
+      )
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+      })
+
+      expect(vi.mocked(signOut), 'the server was not asked at all').toHaveBeenCalledWith('http://mac.local:4899', 'session')
+      expect(localStorage.getItem('spacelink.remote'), 'still paired while the server hangs').toBeNull()
+      expect(card('remote').textContent).toContain('Connect to a server')
+      expect(useAppStore.getState().toasts.map((toast) => toast.message), 'nothing said while the server hangs').toContain(
+        'Signed out of me@example.com.',
+      )
+    })
+
     it('forgets a token pairing without pretending to sign anything out', async () => {
       // There is no session to end: a token belongs to the server, not to a
       // device, and asking it to revoke one would be a call that means nothing.
