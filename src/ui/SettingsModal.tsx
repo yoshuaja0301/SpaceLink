@@ -26,7 +26,7 @@ const APP_VERSION = '0.1.0'
  * at a namespace nobody here owns, and the rename would have moved it to
  * another one. Change it if the repository moves.
  */
-const SOURCE_URL = 'https://github.com/yoshuaja0301/spacelink'
+const SOURCE_URL = 'https://github.com/yoshuaja0301/SpaceLink'
 
 const THEMES: { value: ThemeName; label: string }[] = [
   { value: 'system', label: 'System' },
