@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -798,6 +798,125 @@ describe('a vault with folders in it from the start', () => {
   })
 })
 
+/**
+ * A vault whose folder is not there any more.
+ *
+ * With accounts this stopped being exotic: a folder is named once, in a config
+ * file, and nothing checks it again. Somebody renames their notes folder, or an
+ * external drive is not mounted at login, and the server is still serving that
+ * account.
+ *
+ * On its own server, because the test removes the folder out from under it.
+ */
+describe('a vault whose folder has been moved away', () => {
+  /** @type {string} */
+  let home
+  /** @type {string} */
+  let notes
+  /** @type {import('node:http').Server} */
+  let listener
+  /** @type {string} */
+  let at
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacelink-gone-'))
+    notes = join(home, 'Notes')
+    await mkdir(join(notes, 'Ideas'), { recursive: true })
+    await writeFile(join(notes, 'Home.md'), '# Home\n')
+    await writeFile(join(notes, 'Ideas/Seed.md'), '# Seed\n')
+
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(home, '__no_dist__') })
+    listener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => listener.listen(0, '127.0.0.1', done))
+    const address = listener.address()
+    at = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  })
+
+  afterAll(async () => {
+    await new Promise((done) => listener.close(done))
+    await rm(home, { recursive: true, force: true })
+  })
+
+  const ask = (path, init = {}) =>
+    fetch(`${at}${path}`, { ...init, headers: { authorization: `Bearer ${TOKEN}`, ...(init.headers ?? {}) } })
+
+  it('lists what is there while it is there', async () => {
+    const { files } = await (await ask('/api/files')).json()
+    expect(files.map((file) => file.path).sort()).toEqual(['Home.md', 'Ideas/Seed.md'])
+  })
+
+  it('does not report a folder it cannot see as a vault with no notes in it', async () => {
+    // The defect this exists for. `list()` swallowed every readdir failure, so
+    // a moved folder came back as `200 {"files":[]}` — the app told, with a
+    // success, that the person has no notes. "I cannot see your notes" and
+    // "you have no notes" are not the same sentence and must not share a reply.
+    await rename(notes, join(home, 'Notes-moved'))
+    try {
+      const response = await ask('/api/files')
+      expect(response.status, 'a missing vault answered as an empty one').not.toBe(200)
+      expect(response.status).toBe(503)
+      expect((await response.json()).error).toMatch(/not there|moved|mounted/i)
+    } finally {
+      await rename(join(home, 'Notes-moved'), notes)
+    }
+  })
+
+  it('says the same thing when a whole vault is asked for, rather than dropping the connection', async () => {
+    // `/api/bundle` wrote its head before listing anything, so a failure after
+    // that could only kill the socket: the app saw a network error where a
+    // sentence would have done.
+    await rename(notes, join(home, 'Notes-moved'))
+    try {
+      const response = await ask('/api/bundle')
+      expect(response.status).toBe(503)
+      expect((await response.json()).error).toMatch(/not there|moved|mounted/i)
+    } finally {
+      await rename(join(home, 'Notes-moved'), notes)
+    }
+  })
+
+  it('says it plainly on a save, rather than as an unexplained fault', async () => {
+    await rename(notes, join(home, 'Notes-moved'))
+    try {
+      const response = await ask('/api/file?path=New.md', { method: 'PUT', body: 'x' })
+      expect(response.status).toBe(503)
+      const { error } = await response.json()
+      expect(error).toMatch(/not there|moved|mounted/i)
+      // And never Node's own wording, which names the whole path on disk.
+      expect(error).not.toMatch(/ENOENT|realpath/)
+      expect(error).not.toContain(home)
+    } finally {
+      await rename(join(home, 'Notes-moved'), notes)
+    }
+  })
+
+  it('comes back by itself once the folder is back', async () => {
+    // The failure must not be remembered: an unmounted drive is mounted again,
+    // and the app should simply start working rather than need a restart.
+    //
+    // Where the root really is gets worked out once and kept, so this has to
+    // provoke that lookup *while the folder is missing* — a failure left in
+    // that memory outlives the problem, and the server refuses until somebody
+    // restarts it.
+    await rename(notes, join(home, 'Notes-moved'))
+    expect((await ask('/api/files')).status).toBe(503)
+    expect((await ask('/api/file?path=Nope.md', { method: 'PUT', body: 'x' })).status).toBe(503)
+    await rename(join(home, 'Notes-moved'), notes)
+
+    const response = await ask('/api/files')
+    expect(response.status).toBe(200)
+    expect((await response.json()).files.map((file) => file.path).sort()).toEqual(['Home.md', 'Ideas/Seed.md'])
+
+    // And a *write*, which is the path that remembers where the root really
+    // is. A failure kept in that memory would outlast the problem: the drive
+    // comes back and the server still refuses, until somebody restarts it.
+    const written = await ask('/api/file?path=Back.md', { method: 'PUT', body: '# Back\n' })
+    expect(written.status, 'the vault stayed unreachable after its folder returned').toBe(200)
+    await rm(join(notes, 'Back.md'), { force: true })
+  })
+
+})
+
 describe('a folder that vanishes while the watcher is scanning it', () => {
   /** A server of its own, so emitting an error here cannot disturb the rest. */
   async function watched() {
@@ -1173,6 +1292,7 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
   /** @type {string} */ let primaryVault
   /** @type {string} */ let myVault
   /** @type {string} */ let theirVault
+  /** @type {string} */ let teamVault
   /** @type {import('node:http').Server} */ let accountsListener
   /** @type {string} */ let at
   /** @type {ReturnType<typeof createSyncServer>} */ let accountsSync
@@ -1184,7 +1304,9 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     primaryVault = join(home, 'Primary')
     myVault = join(home, 'MyNotes')
     theirVault = join(home, 'TheirNotes')
-    for (const folder of [primaryVault, myVault, theirVault]) await mkdir(folder, { recursive: true })
+    teamVault = join(home, 'TeamNotes')
+    for (const folder of [primaryVault, myVault, theirVault, teamVault]) await mkdir(folder, { recursive: true })
+    await writeFile(join(teamVault, 'Plan.md'), '# Plan\n')
     await writeFile(join(primaryVault, 'Shared.md'), '# Shared\n')
     await writeFile(join(myVault, 'Mine.md'), '# Mine\n')
     await writeFile(join(theirVault, 'Theirs.md'), '# Theirs\n')
@@ -1198,6 +1320,9 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     // added to another test's run and tripping the rate limiter.
     await addAccount({ file: accountsFile, email: 'timing@example.com', password: MY_PASSWORD, vault: myVault })
     await addAccount({ file: accountsFile, email: 'clears@example.com', password: MY_PASSWORD, vault: myVault })
+    // Two people, one folder — and not the folder the server was started on.
+    await addAccount({ file: accountsFile, email: 'ana@example.com', password: MY_PASSWORD, vault: teamVault })
+    await addAccount({ file: accountsFile, email: 'budi@example.com', password: MY_PASSWORD, vault: teamVault })
 
     accountsSync = createSyncServer({
       vault: primaryVault,
@@ -1443,6 +1568,44 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     } finally {
       await stream.close()
       await rm(join(primaryVault, 'Both.md'), { force: true })
+    }
+  })
+
+  it('gives two accounts that share a folder one view of it, not two', async () => {
+    // The guide's own "several people, several vaults" section describes two
+    // accounts on one folder, and the rule that a folder is opened once was
+    // written for the folder named on the command line only. Two accounts on
+    // any *other* shared folder each got their own watcher and their own echo
+    // window over the same files.
+    //
+    // The tell is what the second person hears: the write itself, named with
+    // who made it, rather than the filesystem noticing a moment later and
+    // saying so anonymously.
+    const ana = await signIn('ana@example.com', MY_PASSWORD)
+    const budi = await signIn('budi@example.com', MY_PASSWORD)
+    expect(await notesFor(ana.token)).toEqual(await notesFor(budi.token))
+
+    const stream = await openStream(budi.token)
+    try {
+      await settle(100)
+      const written = await as(ana.token, '/api/file?path=Together.md', {
+        method: 'PUT',
+        body: '# Together\n',
+        headers: { 'x-spacelink-client': 'ana-laptop' },
+      })
+      expect(written.status).toBe(200)
+      await settle()
+      expect(stream.events).toEqual([
+        {
+          type: 'upsert',
+          path: 'Together.md',
+          hash: hashOf(Buffer.from('# Together\n')),
+          origin: 'ana-laptop',
+        },
+      ])
+    } finally {
+      await stream.close()
+      await rm(join(teamVault, 'Together.md'), { force: true })
     }
   })
 

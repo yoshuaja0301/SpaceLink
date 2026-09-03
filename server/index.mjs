@@ -314,8 +314,15 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
   // what an account gets when none was chosen for it.
   const primary = createVault(vault)
 
-  /** @type {Map<string, ReturnType<typeof createVault>>} One per signed-in account, made on first use. */
-  const byAccount = new Map()
+  /**
+   * One context per *folder*, not per account, keyed by its resolved path.
+   *
+   * Two accounts can name the same folder — the guide's own "several people,
+   * several vaults" section describes exactly that — and giving each its own
+   * would put two watchers and two echo windows over one folder. The folder on
+   * the command line is simply the first entry.
+   */
+  const byFolder = new Map([[resolve(vault), primary]])
   /** Held so a vault opened after the server started is watched too. */
   let watchSignal = null
 
@@ -349,14 +356,15 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
 
   /** The vault an account owns, opened and watched the first time it is asked for. */
   function vaultFor(account) {
-    const existing = byAccount.get(account.id)
+    const root = resolve(account.vault)
+    const existing = byFolder.get(root)
+    // Whether that is the folder the server was started on or one another
+    // account is already using: a folder is watched once and its changes are
+    // announced once, to everyone reading it.
     if (existing) return existing
-    // An account whose folder is the one on the command line shares that vault
-    // rather than opening a second view of the same files — two watchers and
-    // two echo windows over one folder would announce each other's writes.
-    const context = resolve(account.vault) === resolve(vault) ? primary : createVault(account.vault)
-    byAccount.set(account.id, context)
-    if (context !== primary && watchSignal && !watchSignal.aborted) context.startWatching(watchSignal)
+    const context = createVault(account.vault)
+    byFolder.set(root, context)
+    if (watchSignal && !watchSignal.aborted) context.startWatching(watchSignal)
     return context
   }
 
@@ -483,6 +491,14 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // on disk — the vault's whole path — which is nobody's business.
       const known = typeof error?.status === 'number' && error instanceof Error
       if (!known) process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
+      if (response.headersSent) {
+        // A streamed response that failed part-way. The status is already out
+        // and cannot be revised; all that is left is to stop cleanly rather
+        // than throw a second error on top of the first.
+        process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} stopped part-way (${error?.message ?? error}).\n`)
+        response.end()
+        return
+      }
       const body = { error: known ? error.message : 'Something went wrong.' }
       if (error instanceof VaultConflictError) body.currentHash = error.currentHash
       sendJson(response, known ? error.status : 500, body)
@@ -516,13 +532,18 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     // the vault takes minutes to appear. It streams, so neither the server nor
     // the client ever holds the whole vault in memory as one string.
     if (url.pathname === '/api/bundle' && request.method === 'GET') {
+      // Listed before a byte of the response goes out. Once the head is
+      // written the status cannot be taken back, so a failure after it —
+      // a vault whose folder is not there, a disk that stopped answering —
+      // can only drop the connection, and the app is left with a socket error
+      // where a sentence would have done.
+      const files = await context.store.list()
       response.writeHead(200, {
         'content-type': 'application/x-ndjson; charset=utf-8',
         'cache-control': 'no-store',
         // Nothing downstream should try to buffer this to add a length.
         'transfer-encoding': 'chunked',
       })
-      const files = await context.store.list()
       // A device that goes away half-way through — a tab closed, a phone that
       // lost its signal — must release this handler: waiting on a `drain`
       // that a closed socket will never send would keep the vault's files
@@ -727,7 +748,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
   function startWatching(signal, mode) {
     watchSignal = signal ?? null
     const watcher = primary.startWatching(signal, mode)
-    for (const context of byAccount.values()) {
+    for (const context of byFolder.values()) {
       if (context !== primary) context.startWatching(signal, mode)
     }
     return watcher

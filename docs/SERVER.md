@@ -212,9 +212,14 @@ npm run server -- --vault ~/Shared --add-account them@example.com
 npm run server -- --vault ~/Notes --host 0.0.0.0
 ```
 
-Signed in as one account, the other's notes are not listed, cannot be opened by
-name, and — the part that is easy to get wrong — its live change feed never
-reaches you. The server keeps one change stream per folder rather than one for
+Two accounts may also name the *same* folder, which is how two people share one
+set of notes. A folder is opened once however many accounts reach it, so it is
+watched once and a save is announced once, to everyone reading it — named with
+who made it rather than noticed anonymously by the filesystem a moment later.
+
+Signed in as accounts with *different* folders, the other's notes are not
+listed, cannot be opened by name, and — the part that is easy to get wrong —
+its live change feed never reaches you. The server keeps one change stream per folder rather than one for
 the whole process, and a test signs two accounts in at once to prove that a
 write by one is not announced to the other.
 
@@ -490,6 +495,13 @@ against the same folder puts the account back.
 should not happen — `~/.spacefore` is read when `~/.spacelink` does not exist —
 but if both are there, the new one wins and holds a different token. Move the
 old files across (`mv ~/.spacefore/*.json ~/.spacelink/`) and restart.
+
+**"The folder this vault lives in is not there."** Exactly what it says: that
+account's folder has been moved, renamed, or is on a drive that is not mounted.
+The server answers `503` rather than reporting an empty vault, because "I cannot
+see your notes" and "you have no notes" are not the same sentence. Put the folder
+back, or point the account at where it went with a new `--add-account`, and it
+starts working again by itself — no restart.
 
 **A device says it cannot reach the server.** Check the server is running, that
 it was started with `--host 0.0.0.0` if the device is not the same machine, and

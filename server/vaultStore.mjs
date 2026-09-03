@@ -50,6 +50,24 @@ export class VaultNotFoundError extends Error {
   }
 }
 
+/**
+ * The vault's own folder is not there.
+ *
+ * Its own class because the honest answer differs from every other failure
+ * here: a missing *note* is a 404 the app can act on, while a missing *vault*
+ * means nothing the app is showing can be trusted. 503, because it is very
+ * often temporary — an unmounted drive, a folder being moved — and the app
+ * should come back rather than conclude anything.
+ */
+export class VaultUnreachableError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message)
+    this.name = 'VaultUnreachableError'
+    this.status = 503
+  }
+}
+
 export class VaultConflictError extends Error {
   /**
    * @param {string} message
@@ -192,7 +210,22 @@ export class VaultStore {
   async resolveOnDisk(inputPath) {
     const entry = this.resolvePath(inputPath)
     this.realRoot ??= realpath(this.root)
-    const realRoot = await this.realRoot
+    /** @type {string} */
+    let realRoot
+    try {
+      realRoot = await this.realRoot
+    } catch (error) {
+      // The vault's folder is not there. Said plainly, and not cached as a
+      // rejected promise: the drive may be mounted again a moment later, and a
+      // remembered failure would outlast the problem.
+      this.realRoot = undefined
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+        throw new VaultUnreachableError(
+          'The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.',
+        )
+      }
+      throw error
+    }
     let probe = entry.absolute
     for (;;) {
       /** @type {string | null} */
@@ -258,13 +291,24 @@ export class VaultStore {
      * @param {string} absolute
      * @param {string} prefix
      */
-    const walk = async (absolute, prefix) => {
+    const walk = async (absolute, prefix, isRoot = false) => {
       /** @type {import('node:fs').Dirent[]} */
       let contents
       try {
         contents = await readdir(absolute, { withFileTypes: true })
-      } catch {
-        return
+      } catch (error) {
+        // A folder inside the vault that went away mid-scan is nothing to
+        // report: the walk simply has no more to say about it.
+        //
+        // The vault's own root is a different question, and answering it the
+        // same way was a real defect. A folder that has been moved, renamed or
+        // left on an unmounted drive would list as an empty vault — the app
+        // told, with a 200, that the person has no notes. "I cannot see your
+        // notes" and "you have no notes" must never be the same answer.
+        if (!isRoot) return
+        throw new VaultUnreachableError(
+          `The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.`,
+        )
       }
       for (const entry of contents) {
         if (entry.name.startsWith('.') || SKIP_DIRECTORIES.has(entry.name)) continue
@@ -292,7 +336,7 @@ export class VaultStore {
       }
     }
 
-    await walk(this.root, '')
+    await walk(this.root, '', true)
     entries.sort((a, b) => a.path.localeCompare(b.path))
     return entries
   }
