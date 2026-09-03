@@ -551,17 +551,45 @@ export function createAttemptLimiter({
    * long as it is fed. Expired entries go first; if that is not enough, the
    * least recently touched go, which is exactly the run nobody is still making.
    */
-  const prune = (now) => {
+  const prune = (now, except) => {
     for (const [key, record] of seen) {
       if (now - record.last > forgetAfterMs) seen.delete(key)
     }
     // Map iterates in insertion order and `fail` re-inserts, so the front is
     // the least recently touched.
-    while (seen.size > maxKeys) {
-      const oldest = seen.keys().next()
-      if (oldest.done) break
-      seen.delete(oldest.value)
+    //
+    // Not any key, though: a key that is serving a lock-out is the one the
+    // cap must not give up. Measured with the cap at 50 — lock a target out
+    // for 64 s, then fail 60 made-up addresses once each, and the target's
+    // wait was 0: its record had been evicted to make room, and the five free
+    // guesses were back. At the real cap that is ten thousand requests, each
+    // paying a hash, to buy five more guesses at one account — dear from one
+    // address, which its own limiter shuts, and cheap from many. So the run
+    // of fresh keys evicts fresh keys. Only when every key held is serving a
+    // lock-out does the oldest of those go, which is what keeps this a cap.
+    //
+    // Never the key that was just counted, though. With the map full of
+    // locked-out keys it was the one unlocked key, and so the one evicted —
+    // on every attempt, so it never accumulated a count and never locked out.
+    // Sixty thousand requests to fill the map that way, and then guesses at
+    // one account were free of this limiter for as long as the fill lasted.
+    if (seen.size <= maxKeys) return
+    for (const [key, record] of seen) {
+      if (seen.size <= maxKeys) return
+      if (key === except) continue
+      if (record.failures > freeAttempts && lockedUntil(record) > now) continue
+      seen.delete(key)
     }
+    for (const key of seen.keys()) {
+      if (seen.size <= maxKeys) return
+      if (key !== except) seen.delete(key)
+    }
+  }
+
+  /** When `record`'s current wait, if any, is over. */
+  const lockedUntil = (record) => {
+    if (record.failures <= freeAttempts) return 0
+    return record.last + Math.min(maxDelayMs, 1000 * 2 ** (record.failures - freeAttempts - 1))
   }
 
   /** How long `key` must wait before another attempt is worth making. */
@@ -572,9 +600,7 @@ export function createAttemptLimiter({
       seen.delete(key)
       return 0
     }
-    if (record.failures <= freeAttempts) return 0
-    const delay = Math.min(maxDelayMs, 1000 * 2 ** (record.failures - freeAttempts - 1))
-    return Math.max(0, record.last + delay - now)
+    return Math.max(0, lockedUntil(record) - now)
   }
 
   return {
@@ -599,7 +625,7 @@ export function createAttemptLimiter({
       seen.delete(key)
       if (!record || now - record.last > forgetAfterMs) seen.set(key, { failures: 1, last: now })
       else seen.set(key, { failures: record.failures + 1, last: now })
-      prune(now)
+      prune(now, key)
     },
     /** A password that worked clears the run — the person is who they said. */
     succeed(key) {

@@ -566,3 +566,82 @@ describe('slowing down a password guesser', () => {
     expect(limiter.size).toBe(1)
   })
 })
+
+describe('the attempt limiter, under a run of made-up addresses', () => {
+  const t0 = 1_000_000
+
+  it('keeps a lock-out through a run of fresh keys that would otherwise push it out', () => {
+    // Every attempt names its own key, so the map has a cap, and the cap
+    // evicts the least recently touched. Measured with the cap at 50: lock a
+    // target out for 64 s, fail 60 made-up addresses once each, and the
+    // target's wait was 0 — its record had been evicted to make room, and the
+    // five free guesses were back. At the real cap that is ten thousand
+    // requests to buy five more guesses at one account.
+    const limiter = createAttemptLimiter({ freeAttempts: 5, maxKeys: 50 })
+    for (let i = 0; i < 12; i += 1) limiter.fail('victim@example.com', t0)
+    const wait = limiter.retryAfter('victim@example.com', t0)
+    expect(wait).toBeGreaterThan(60_000)
+
+    for (let i = 0; i < 60; i += 1) limiter.fail(`nobody${i}@example.com`, t0 + 1)
+
+    expect(limiter.retryAfter('victim@example.com', t0 + 2), 'the lock-out was evicted by fresh keys').toBe(wait - 2)
+    expect(limiter.size, 'the cap was not held').toBeLessThanOrEqual(50)
+  })
+
+  it('still holds the cap when every key it has is serving a lock-out', () => {
+    // Keeping locked-out keys must not turn the cap into a suggestion: a run
+    // that locks out thirty keys against a cap of ten still holds ten.
+    const limiter = createAttemptLimiter({ freeAttempts: 1, maxKeys: 10 })
+    for (let key = 0; key < 30; key += 1) {
+      for (let attempt = 0; attempt < 3; attempt += 1) limiter.fail(`locked${key}`, t0 + key)
+    }
+    expect(limiter.size).toBe(10)
+  })
+
+  it('evicts the least recently touched fresh key, not the locked one it is older than', () => {
+    // Whether a key is serving a lock-out decides first; among the rest, the
+    // least recently touched goes, as before.
+    const limiter = createAttemptLimiter({ freeAttempts: 1, maxKeys: 3 })
+    for (let attempt = 0; attempt < 3; attempt += 1) limiter.fail('locked', t0)
+    limiter.fail('fresh-a', t0 + 1)
+    limiter.fail('fresh-b', t0 + 2)
+    limiter.fail('fresh-c', t0 + 3) // over the cap by one
+    expect(limiter.retryAfter('locked', t0 + 4), 'the oldest key went, and it was the locked one').toBeGreaterThan(0)
+    expect(limiter.size).toBe(3)
+    // Which fresh key went can only be seen by counting again: a key that
+    // survived is at two failures and locked; one that was evicted starts over.
+    limiter.fail('fresh-b', t0 + 5)
+    expect(limiter.retryAfter('fresh-b', t0 + 5), 'fresh-b, touched more recently, was the one evicted').toBeGreaterThan(0)
+    limiter.fail('fresh-a', t0 + 6)
+    expect(limiter.retryAfter('fresh-a', t0 + 6), 'fresh-a, the least recently touched, survived').toBe(0)
+  })
+
+  it('never evicts the key that was just counted, even with every other key locked out', () => {
+    // The map full of locked-out keys made the one being counted the only
+    // unlocked key, and so the one evicted — on every attempt. It never
+    // accumulated a count and never locked out: sixty thousand requests to
+    // fill the map that way bought unlimited guesses at one account for as
+    // long as the fill lasted.
+    const limiter = createAttemptLimiter({ freeAttempts: 5, maxKeys: 10 })
+    for (let key = 0; key < 10; key += 1) {
+      for (let attempt = 0; attempt < 7; attempt += 1) limiter.fail(`locked${key}`, t0)
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) limiter.fail('victim@example.com', t0 + 1)
+    expect(limiter.retryAfter('victim@example.com', t0 + 1), 'the guessed-at key never accumulated a count').toBeGreaterThan(0)
+    expect(limiter.size).toBe(10)
+  })
+
+  it('stops protecting a key once its lock-out has elapsed', () => {
+    // A key whose wait is over is an ordinary key again, and the oldest of
+    // those goes first — otherwise a map of once-locked keys could never be
+    // pruned of them until the hour that forgets a run.
+    const limiter = createAttemptLimiter({ freeAttempts: 1, maxKeys: 3 })
+    for (let attempt = 0; attempt < 2; attempt += 1) limiter.fail('was-locked', t0) // a one-second wait
+    limiter.fail('fresh-a', t0 + 1)
+    limiter.fail('fresh-b', t0 + 2)
+    limiter.fail('fresh-c', t0 + 5000) // the wait on was-locked is long over
+    expect(limiter.size).toBe(3)
+    limiter.fail('fresh-a', t0 + 5001)
+    expect(limiter.retryAfter('fresh-a', t0 + 5001), 'fresh-a went instead of the key whose wait was over').toBeGreaterThan(0)
+  })
+})
