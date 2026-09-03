@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const PROJECT = join(HERE, 'SpaceFore.xcodeproj')
+const PROJECT = join(HERE, 'SpaceLink.xcodeproj')
 const source = readFileSync(join(PROJECT, 'project.pbxproj'), 'utf8')
 
 /* ------------------------------------------------------------------ *
@@ -202,10 +202,10 @@ describe('the app it builds', () => {
 
   it('is one macOS application target', () => {
     expect(withIsa('PBXNativeTarget')).toHaveLength(1)
-    expect(target.name).toBe('SpaceFore')
+    expect(target.name).toBe('SpaceLink')
     expect(target.productType).toBe('com.apple.product-type.application')
     expect(root.targets).toEqual([targetId])
-    expect(objects[target.productReference].path).toBe('SpaceFore.app')
+    expect(objects[target.productReference].path).toBe('SpaceLink.app')
   })
 
   it('compiles the Swift that is actually there', () => {
@@ -214,7 +214,7 @@ describe('the app it builds', () => {
     const compiled = sources.files.map((id) => objects[objects[id].fileRef].path)
     // Both of them: a target missing SyncServer.swift compiles the app against
     // a type that is not there, and fails with "cannot find SyncServer in scope".
-    expect(compiled.slice().sort()).toEqual(['SpaceForeApp.swift', 'SyncServer.swift'])
+    expect(compiled.slice().sort()).toEqual(['SpaceLinkApp.swift', 'SyncServer.swift'])
     for (const name of compiled) expect(existsSync(join(HERE, 'Sources', name)), name).toBe(true)
   })
 
@@ -235,7 +235,7 @@ describe('the app it builds', () => {
 
     for (const config of configs) {
       const settings = config.buildSettings
-      expect(settings.PRODUCT_BUNDLE_IDENTIFIER).toBe('md.spacefore.app')
+      expect(settings.PRODUCT_BUNDLE_IDENTIFIER).toBe('md.spacelink.app')
       expect(settings.INFOPLIST_FILE).toBe('Info.plist')
       // Ad-hoc signing, so it builds with no Apple account attached.
       expect(settings.CODE_SIGN_IDENTITY).toBe('-')
@@ -283,7 +283,7 @@ describe('the app it builds', () => {
     const shared = readFileSync(join(HERE, 'copy-resources.sh'), 'utf8')
     const standalone = readFileSync(join(HERE, 'build.sh'), 'utf8')
 
-    // `SpaceForeApp.swift` looks for `server/index.mjs` and expects `dist/`
+    // `SpaceLinkApp.swift` looks for `server/index.mjs` and expects `dist/`
     // beside it, because the server resolves `dist/` relative to its own file.
     expect(shared).toMatch(/npm run build/)
     expect(shared).toMatch(/RESOURCES\/dist/)
@@ -294,7 +294,7 @@ describe('the app it builds', () => {
     // by node-path.sh, which the script must source and which must know the
     // usual places.
     expect(shared).toMatch(/\. "\$HERE\/node-path\.sh"/)
-    expect(shared).toMatch(/spacefore_add_node_paths/)
+    expect(shared).toMatch(/spacelink_add_node_paths/)
     expect(readFileSync(join(HERE, 'node-path.sh'), 'utf8')).toMatch(/opt\/homebrew\/bin/)
 
     // `set -o pipefail` is not in POSIX sh, and a shell that does not know it
@@ -314,7 +314,7 @@ describe('the app it builds', () => {
 
   it('compiles the app the same way Xcode does', () => {
     const standalone = readFileSync(join(HERE, 'build.sh'), 'utf8')
-    const app = readFileSync(join(HERE, 'Sources', 'SpaceForeApp.swift'), 'utf8')
+    const app = readFileSync(join(HERE, 'Sources', 'SpaceLinkApp.swift'), 'utf8')
 
     // Xcode builds an application target with `-parse-as-library`, and under
     // that flag a statement at the top of a file is an error rather than a
@@ -324,7 +324,7 @@ describe('the app it builds', () => {
     expect(app).toMatch(/^@main$/m)
     expect(standalone).toMatch(/-parse-as-library/)
     // Every source in the target, in the order the project lists them.
-    for (const name of ['SyncServer.swift', 'SpaceForeApp.swift']) {
+    for (const name of ['SyncServer.swift', 'SpaceLinkApp.swift']) {
       expect(standalone).toMatch(new RegExp(`Sources/${name.replace('.', '\\.')}`))
     }
   })
@@ -342,7 +342,7 @@ describe('the app it builds', () => {
 
 describe('the project directory', () => {
   it('has a shared scheme, so the project is usable the moment it opens', () => {
-    const scheme = join(PROJECT, 'xcshareddata', 'xcschemes', 'SpaceFore.xcscheme')
+    const scheme = join(PROJECT, 'xcshareddata', 'xcschemes', 'SpaceLink.xcscheme')
     expect(existsSync(scheme)).toBe(true)
     const xml = readFileSync(scheme, 'utf8')
 
@@ -350,8 +350,8 @@ describe('the project directory', () => {
     // configured for this action", which reads like a broken project.
     const [targetId] = withIsa('PBXNativeTarget')[0]
     expect(xml).toMatch(new RegExp(`BlueprintIdentifier = "${targetId}"`))
-    expect(xml).toMatch(/BuildableName = "SpaceFore\.app"/)
-    expect(xml).toMatch(/ReferencedContainer = "container:SpaceFore\.xcodeproj"/)
+    expect(xml).toMatch(/BuildableName = "SpaceLink\.app"/)
+    expect(xml).toMatch(/ReferencedContainer = "container:SpaceLink\.xcodeproj"/)
   })
 
   it('has the workspace file Xcode looks for', () => {
@@ -370,7 +370,7 @@ describe('the project directory', () => {
       )
     }
     // …while everything that makes the project open correctly stays tracked.
-    for (const kept of ['SpaceFore.xcodeproj/project.pbxproj', 'SpaceFore.xcodeproj/xcshareddata/xcschemes/SpaceFore.xcscheme']) {
+    for (const kept of ['SpaceLink.xcodeproj/project.pbxproj', 'SpaceLink.xcodeproj/xcshareddata/xcschemes/SpaceLink.xcscheme']) {
       expect(existsSync(join(HERE, kept)), kept).toBe(true)
     }
   })
@@ -380,8 +380,8 @@ describe('the project directory', () => {
     const [, target] = withIsa('PBXNativeTarget')[0]
     const settings = objects[target.buildConfigurationList].buildConfigurations.map((id) => objects[id].buildSettings)
 
-    expect(plist).toMatch(/<string>md\.spacefore\.app<\/string>/)
-    expect(plist).toMatch(/<key>CFBundleExecutable<\/key>\s*<string>SpaceFore<\/string>/)
+    expect(plist).toMatch(/<string>md\.spacelink\.app<\/string>/)
+    expect(plist).toMatch(/<key>CFBundleExecutable<\/key>\s*<string>SpaceLink<\/string>/)
     for (const setting of settings) {
       expect(setting.PRODUCT_NAME).toBe('$(TARGET_NAME)')
       expect(setting.MARKETING_VERSION).toBe('0.1.0')

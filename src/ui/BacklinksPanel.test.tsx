@@ -355,12 +355,12 @@ describe('BacklinksPanel — linked mentions', () => {
     const openPath = vi.fn()
     seed(VAULT, { openPath })
     const listen = vi.fn()
-    window.addEventListener('spacefore:reveal-line', listen)
+    window.addEventListener('spacelink:reveal-line', listen)
 
     const { container } = render(<BacklinksPanel path="Zettelkasten.md" />)
     fireEvent.click([...section(container, 'Linked mentions').querySelectorAll('.backlink-context')][1]!)
 
-    window.removeEventListener('spacefore:reveal-line', listen)
+    window.removeEventListener('spacelink:reveal-line', listen)
     expect(openPath).toHaveBeenCalledWith('Method.md')
     expect((listen.mock.calls[0]![0] as CustomEvent).detail).toEqual({ path: 'Method.md', line: 5 })
   })
@@ -515,7 +515,7 @@ describe('BacklinksPanel — collapse', () => {
   })
 
   it('survives unreadable storage', () => {
-    localStorage.setItem('spacefore.backlinksCollapsed', 'not json')
+    localStorage.setItem('spacelink.backlinksCollapsed', 'not json')
     expect(loadCollapse()).toEqual({ linked: false, unlinked: false })
   })
 })

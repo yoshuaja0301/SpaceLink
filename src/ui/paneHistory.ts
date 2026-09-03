@@ -1,5 +1,5 @@
 /**
- * SpaceFore — per-pane navigation history.
+ * SpaceLink — per-pane navigation history.
  *
  * A browser-style back/forward stack for every workspace pane, plus a single
  * global stack of recently closed tabs ("reopen closed tab").

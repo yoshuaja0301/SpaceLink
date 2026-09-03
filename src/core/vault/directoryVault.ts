@@ -2,7 +2,7 @@
  * Real-folder vault, backed by the File System Access API.
  *
  * This is the "local-first" backend: the user points at a folder on disk and
- * SpaceFore reads and writes plain markdown files in it, exactly like Obsidian.
+ * SpaceLink reads and writes plain markdown files in it, exactly like Obsidian.
  * Only Chromium browsers implement the API, so every entry point here is
  * feature-detected and the app falls back to `browserVault` elsewhere.
  *
@@ -243,7 +243,7 @@ export function createDirectoryVault(handle: FileSystemDirectoryHandle, name: st
         // apart (APFS and NTFS by default): opening `home.md` opened Home.md
         // itself, so the copy below would write the file onto itself and the
         // delete would then remove the only copy. Go through a third name.
-        const temporary = `${target}.spacefore-renaming`
+        const temporary = `${target}.spacelink-renaming`
         await writeFile(temporary, contents)
         await removeFile(source)
         await writeFile(target, contents)

@@ -46,7 +46,7 @@ echo "==> Running"
 # ---------------------------------------------------------------- the AppKit half
 
 echo
-echo "==> Typechecking SpaceForeApp.swift against the API as Apple documents it"
+echo "==> Typechecking SpaceLinkApp.swift against the API as Apple documents it"
 
 # The AppKit half cannot run off a Mac, but it can be typechecked against stubs
 # whose every declaration was copied from Apple's documentation for that symbol.
@@ -65,10 +65,10 @@ swiftc -emit-module -module-name WebKit -emit-module-path "$OUT/WebKit.swiftmodu
 
 # Objective-C interop does not exist here, so `#selector(…)` and `@objc` — and
 # only those — are rewritten first. Everything else is the real source.
-node "$HERE/Stubs/rewrite.mjs" "$HERE/../Sources/SpaceForeApp.swift" "$OUT/SpaceForeApp.swift"
+node "$HERE/Stubs/rewrite.mjs" "$HERE/../Sources/SpaceLinkApp.swift" "$OUT/SpaceLinkApp.swift"
 
 swiftc -typecheck -parse-as-library -I "$OUT" \
   "$HERE/../Sources/SyncServer.swift" \
-  "$OUT/SpaceForeApp.swift"
+  "$OUT/SpaceLinkApp.swift"
 
-echo "  ok    SpaceForeApp.swift typechecks against the documented API"
+echo "  ok    SpaceLinkApp.swift typechecks against the documented API"

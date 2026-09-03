@@ -11,7 +11,7 @@
  */
 import { bootIn, hasEngine, must, report, step } from './lib.mjs'
 
-const BASE = process.env.SPACEFORE_E2E_URL ?? 'http://localhost:4173/'
+const BASE = process.env.SPACELINK_E2E_URL ?? 'http://localhost:4173/'
 
 if (!(await hasEngine('chromium'))) {
   console.log('== 12. chromium is not installed, skipping ==')

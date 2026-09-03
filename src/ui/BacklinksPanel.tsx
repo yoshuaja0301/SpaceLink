@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the backlinks pane.
+ * SpaceLink — the backlinks pane.
  *
  * Two sections, both about the same question: what else in the vault talks
  * about this note?
@@ -382,7 +382,7 @@ function splitAt(context: string, start: number, length: number): ContextParts {
  * Collapse state
  * ------------------------------------------------------------------ */
 
-const COLLAPSE_KEY = 'spacefore.backlinksCollapsed'
+const COLLAPSE_KEY = 'spacelink.backlinksCollapsed'
 
 export interface BacklinksCollapse {
   linked: boolean
@@ -435,7 +435,7 @@ function useReveal(): (path: NotePath, line: number) => void {
   return useCallback((path: NotePath, line: number): void => {
     if (typeof window === 'undefined' || typeof window.CustomEvent !== 'function') return
     const fire = (): void => {
-      window.dispatchEvent(new CustomEvent('spacefore:reveal-line', { detail: { path, line } }))
+      window.dispatchEvent(new CustomEvent('spacelink:reveal-line', { detail: { path, line } }))
     }
     fire()
     if (timer.current !== null) clearTimeout(timer.current)

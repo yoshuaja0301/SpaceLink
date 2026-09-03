@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the note property card.
+ * SpaceLink — the note property card.
  *
  * Everything a reader might want to know about a note that is not the note
  * itself: where it lives, how big it is, how well connected it is, and what its

@@ -1,5 +1,5 @@
 //
-//  Just enough WebKit to typecheck SpaceForeApp.swift off a Mac.
+//  Just enough WebKit to typecheck SpaceLinkApp.swift off a Mac.
 //
 //  As with the AppKit stub beside it, every declaration was copied from
 //  Apple's documentation for that symbol rather than written from memory, and

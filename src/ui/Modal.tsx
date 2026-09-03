@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the shared modal shell.
+ * SpaceLink — the shared modal shell.
  *
  * Deliberately portal-free: the app shell renders modals last, and
  * `.modal-backdrop` is `position: fixed` with a z-index above every pane, so a

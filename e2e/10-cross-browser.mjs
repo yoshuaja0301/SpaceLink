@@ -127,7 +127,7 @@ for (const engine of ENGINES) {
     })
 
     await step(`${engine}: the folder option is honest about this browser`, async () => {
-      await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
       await page.waitForTimeout(900)
       const verdict = await page.evaluate(() => {
         const card = [...document.querySelectorAll('.vault-picker button')].find((button) =>

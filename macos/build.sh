@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Build SpaceFore.app, without opening Xcode.
+# Build SpaceLink.app, without opening Xcode.
 #
-# There is an Xcode project beside this — SpaceFore.xcodeproj — and it builds
+# There is an Xcode project beside this — SpaceLink.xcodeproj — and it builds
 # the same app. This script is the one to use from a terminal or a Makefile: it
 # needs only `swiftc`, which comes with the Command Line Tools, and it says in
 # one screen exactly what ends up in the bundle. Both call copy-resources.sh, so
@@ -19,7 +19,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-APP="$HERE/build/SpaceFore.app"
+APP="$HERE/build/SpaceLink.app"
 
 EMBED_NODE=0
 INSTALL=0
@@ -50,7 +50,7 @@ command -v node >/dev/null 2>&1 || {
 
 # ---------------------------------------------------------- the app bundle
 
-echo "==> Assembling SpaceFore.app"
+echo "==> Assembling SpaceLink.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
@@ -84,9 +84,9 @@ swiftc \
   -target "$(uname -m)-apple-macosx12.0" \
   -framework AppKit \
   -framework WebKit \
-  -o "$APP/Contents/MacOS/SpaceFore" \
+  -o "$APP/Contents/MacOS/SpaceLink" \
   "$HERE/Sources/SyncServer.swift" \
-  "$HERE/Sources/SpaceForeApp.swift"
+  "$HERE/Sources/SpaceLinkApp.swift"
 
 # An ad-hoc signature is enough to run it on the Mac that built it, and keeps
 # macOS from asking about an unsigned binary every launch. Distributing it to
@@ -98,9 +98,9 @@ fi
 
 if [[ "$INSTALL" == "1" ]]; then
   echo "==> Installing to /Applications"
-  rm -rf "/Applications/SpaceFore.app"
+  rm -rf "/Applications/SpaceLink.app"
   cp -R "$APP" /Applications/
-  APP="/Applications/SpaceFore.app"
+  APP="/Applications/SpaceLink.app"
 fi
 
 echo

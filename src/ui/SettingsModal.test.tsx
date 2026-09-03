@@ -505,7 +505,7 @@ describe('SettingsModal', () => {
     useAppStore.setState({ adapter: createMemoryVault({}, { name: 'Notebook' }), vaultName: 'Notebook' })
     const onClose = vi.fn()
     const heard = vi.fn()
-    window.addEventListener('spacefore:open-vault-picker', heard)
+    window.addEventListener('spacelink:open-vault-picker', heard)
     render(<SettingsModal open onClose={onClose} />)
 
     expect(screen.getByText('Notebook')).toBeTruthy()
@@ -515,7 +515,7 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /switch vault/i }))
     expect(heard).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
-    window.removeEventListener('spacefore:open-vault-picker', heard)
+    window.removeEventListener('spacelink:open-vault-picker', heard)
   })
 
   it('disables the export button for an empty vault and downloads otherwise', async () => {

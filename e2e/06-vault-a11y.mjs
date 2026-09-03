@@ -3,7 +3,7 @@ const { browser, page, problems } = await boot()
 console.log('== 6. vault picker, persistence, keyboard ==')
 
 await step('the vault picker offers the three vault kinds', async () => {
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(900)
   const t = await page.locator('.vault-picker').innerText()
   for (const kind of ['demo', 'browser', 'folder'])
@@ -53,7 +53,7 @@ await step('a note written to the browser vault survives a reload', async () => 
 })
 
 await step('back to the demo vault leaves the browser vault alone', async () => {
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(800)
   await page.locator('.vault-picker button').filter({ hasText: /demo/i }).first().click()
   await page.waitForTimeout(2200)

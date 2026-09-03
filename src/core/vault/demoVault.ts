@@ -1,7 +1,7 @@
 /**
  * The demo vault.
  *
- * This is the first thing most people ever see in SpaceFore, so it doubles as
+ * This is the first thing most people ever see in SpaceLink, so it doubles as
  * the product tour: a small but genuinely interlinked knowledge base about
  * personal knowledge management that happens to exercise every feature of the
  * app — frontmatter, wiki links in all four forms, embeds, nested tags, tasks,
@@ -36,7 +36,7 @@ aliases: [Welcome, Read Me First]
 
 # Start Here
 
-Welcome to **SpaceFore**, a local-first knowledge base built on nothing more
+Welcome to **SpaceLink**, a local-first knowledge base built on nothing more
 exotic than a folder of markdown files. Every note you are reading is a plain
 \`.md\` file: no database, no lock-in, no account. Open the same folder in any
 other editor and everything still works.
@@ -173,7 +173,7 @@ tags: [guide, markdown]
 
 Markdown is a way of writing formatted text that still reads fine as plain
 text. That last part matters more than it sounds: it is why these notes will
-still open in 2046. This guide covers the syntax the SpaceFore preview
+still open in 2046. This guide covers the syntax the SpaceLink preview
 understands; [[Sandbox/Formatting Playground]] shows all of it rendered at once.
 
 ## Structure
@@ -257,7 +257,7 @@ tags: [guide, linking]
 # Linking Notes
 
 A pile of notes becomes a knowledge base at the moment the notes start pointing
-at each other. In SpaceFore that is a wiki link: two square brackets around the
+at each other. In SpaceLink that is a wiki link: two square brackets around the
 name of another note.
 
 ## The four forms
@@ -678,7 +678,7 @@ are the interesting ones — that is the whole payoff, and
   system working.
 
 > [!note] Tools are downstream of the habit
-> Luhmann used paper and did fine. What SpaceFore adds is search, backlinks and
+> Luhmann used paper and did fine. What SpaceLink adds is search, backlinks and
 > a graph — see [[Linking Notes]] — not the method.
 
 [^luhmann]: Luhmann described the box as a conversation partner: "Ohne zu

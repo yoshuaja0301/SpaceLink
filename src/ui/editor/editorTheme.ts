@@ -1,5 +1,5 @@
 /**
- * SpaceFore — CodeMirror theme.
+ * SpaceLink — CodeMirror theme.
  *
  * Every colour here is a `var(--…)` from `src/styles/theme.css`, so the editor
  * follows the app's light/dark tokens for free and there is exactly one place

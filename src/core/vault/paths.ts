@@ -9,7 +9,7 @@
  */
 import type { NotePath, VaultFile } from '../../types'
 
-/** The one extension SpaceFore treats as a note. Everything else is an attachment. */
+/** The one extension SpaceLink treats as a note. Everything else is an attachment. */
 const MARKDOWN_EXTENSION = 'md'
 
 /** Best-effort content types, used when handing a stored file back as a `Blob`. */

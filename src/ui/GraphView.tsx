@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the graph view.
+ * SpaceLink — the graph view.
  *
  * A canvas rendering of the vault's link graph: notes as circles, links as
  * lines, tags and unresolved links as optional extra nodes. The component

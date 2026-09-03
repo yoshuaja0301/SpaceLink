@@ -8,12 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		3679B7A1EDE7952244DAB882 /* SyncServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6C401784CA25A1E7775FA1 /* SyncServer.swift */; };
-		CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */; };
+		CED196D1BABF371185244B1F /* SpaceLinkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF34C3D058F8CFD1B6648A05 /* SpaceLinkApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		228C34D683AE0FB06C9E6E2B /* SpaceFore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpaceFore.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceForeApp.swift; sourceTree = "<group>"; };
+		228C34D683AE0FB06C9E6E2B /* SpaceLink.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpaceLink.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF34C3D058F8CFD1B6648A05 /* SpaceLinkApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceLinkApp.swift; sourceTree = "<group>"; };
 		AE6C401784CA25A1E7775FA1 /* SyncServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncServer.swift; sourceTree = "<group>"; };
 		151E55719C768F051220F257 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -41,7 +41,7 @@
 		1D70E3728E36337BE25DD673 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				EF34C3D058F8CFD1B6648A05 /* SpaceForeApp.swift */,
+				EF34C3D058F8CFD1B6648A05 /* SpaceLinkApp.swift */,
 				AE6C401784CA25A1E7775FA1 /* SyncServer.swift */,
 			);
 			path = Sources;
@@ -50,7 +50,7 @@
 		4A7F7F9E1AA13DC0660B558B /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				228C34D683AE0FB06C9E6E2B /* SpaceFore.app */,
+				228C34D683AE0FB06C9E6E2B /* SpaceLink.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -58,9 +58,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		1FF27E2C3F53A1460A29362F /* SpaceFore */ = {
+		1FF27E2C3F53A1460A29362F /* SpaceLink */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceFore" */;
+			buildConfigurationList = 486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceLink" */;
 			buildPhases = (
 				8C664474735A5E6FA7740D56 /* Sources */,
 				7ED168ADBCA60F913B149558 /* Frameworks */,
@@ -71,9 +71,9 @@
 			);
 			dependencies = (
 			);
-			name = SpaceFore;
-			productName = SpaceFore;
-			productReference = 228C34D683AE0FB06C9E6E2B /* SpaceFore.app */;
+			name = SpaceLink;
+			productName = SpaceLink;
+			productReference = 228C34D683AE0FB06C9E6E2B /* SpaceLink.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -91,7 +91,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceFore" */;
+			buildConfigurationList = 7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceLink" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -104,7 +104,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				1FF27E2C3F53A1460A29362F /* SpaceFore */,
+				1FF27E2C3F53A1460A29362F /* SpaceLink */,
 			);
 		};
 /* End PBXProject section */
@@ -146,7 +146,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CED196D1BABF371185244B1F /* SpaceForeApp.swift in Sources */,
+				CED196D1BABF371185244B1F /* SpaceLinkApp.swift in Sources */,
 				3679B7A1EDE7952244DAB882 /* SyncServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -208,7 +208,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = md.spacefore.app;
+				PRODUCT_BUNDLE_IDENTIFIER = md.spacelink.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 			};
@@ -231,7 +231,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = md.spacefore.app;
+				PRODUCT_BUNDLE_IDENTIFIER = md.spacelink.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 			};
@@ -240,7 +240,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceFore" */ = {
+		7D6577931F13EEB210A66673 /* Build configuration list for PBXProject "SpaceLink" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				2D197439579372E192251F52 /* Debug */,
@@ -249,7 +249,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceFore" */ = {
+		486EB597B701D59B38EDF7EF /* Build configuration list for PBXNativeTarget "SpaceLink" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C51035688466510BFE3B5D96 /* Debug */,

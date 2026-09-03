@@ -307,11 +307,11 @@ describe('StarredPanel', () => {
     fireEvent.drop(rows()[0]!)
 
     expect(starredTitles(container)).toEqual(['Cherries', 'Apples', 'Bananas'])
-    expect(JSON.parse(localStorage.getItem('spacefore.starredOrder') ?? '[]')).toEqual(['c.md', 'a.md', 'b.md'])
+    expect(JSON.parse(localStorage.getItem('spacelink.starredOrder') ?? '[]')).toEqual(['c.md', 'a.md', 'b.md'])
   })
 
   it('restores a remembered order on mount, newly starred notes last', () => {
-    localStorage.setItem('spacefore.starredOrder', JSON.stringify(['c.md', 'a.md']))
+    localStorage.setItem('spacelink.starredOrder', JSON.stringify(['c.md', 'a.md']))
     seed(STARRED_VAULT, { starred: ['a.md', 'b.md', 'c.md'] })
     const { container } = render(<StarredPanel />)
 

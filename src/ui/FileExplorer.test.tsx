@@ -432,7 +432,7 @@ describe('FileExplorer — folders', () => {
 
     fireEvent.click(row('Notes'))
     expect(queryRow('Notes/A.md')).not.toBeNull()
-    expect(JSON.parse(localStorage.getItem('spacefore.explorer.open') ?? '[]')).toEqual(['Notes'])
+    expect(JSON.parse(localStorage.getItem('spacelink.explorer.open') ?? '[]')).toEqual(['Notes'])
 
     cleanup()
     render(<FileExplorer />)
@@ -441,11 +441,11 @@ describe('FileExplorer — folders', () => {
 
     fireEvent.click(row('Notes'))
     expect(queryRow('Notes/A.md')).toBeNull()
-    expect(JSON.parse(localStorage.getItem('spacefore.explorer.open') ?? '[]')).toEqual([])
+    expect(JSON.parse(localStorage.getItem('spacelink.explorer.open') ?? '[]')).toEqual([])
   })
 
   it('survives corrupt persisted state', () => {
-    localStorage.setItem('spacefore.explorer.open', '{not json')
+    localStorage.setItem('spacelink.explorer.open', '{not json')
     seed({ 'Notes/A.md': '# A' })
     render(<FileExplorer />)
     expect(queryRow('Notes/A.md')).toBeNull()
@@ -460,7 +460,7 @@ describe('FileExplorer — folders', () => {
 
     fireEvent.click(row('Notes'), { altKey: true })
     expect(queryRow('Notes/Sub')).toBeNull()
-    expect(JSON.parse(localStorage.getItem('spacefore.explorer.open') ?? '[]')).toEqual([])
+    expect(JSON.parse(localStorage.getItem('spacelink.explorer.open') ?? '[]')).toEqual([])
   })
 
   it('collapses everything from the header button', () => {

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the command table.
+ * SpaceLink — the command table.
  *
  * Everything the app can do on demand lives here exactly once: the palette
  * renders this list, `useHotkeys` binds the shortcuts on it, and nothing else
@@ -198,7 +198,7 @@ function confirmed(title: string, message: string): Promise<boolean> {
 }
 
 /** App.tsx owns the settings modal and vault picker and listens for these. */
-function emit(type: 'spacefore:open-settings' | 'spacefore:open-vault-picker'): void {
+function emit(type: 'spacelink:open-settings' | 'spacelink:open-vault-picker'): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent(type))
 }
@@ -427,7 +427,7 @@ export function buildCommands(context: CommandContext): Command[] {
       id: 'file:open-folder',
       title: 'Open a folder as vault',
       section: 'File',
-      run: () => emit('spacefore:open-vault-picker'),
+      run: () => emit('spacelink:open-vault-picker'),
     },
     {
       id: 'file:export-note',
@@ -454,7 +454,7 @@ export function buildCommands(context: CommandContext): Command[] {
         // the same object literal, and only one of them would ever have been
         // remembered when the shape changed.
         const { payload, skipped } = await buildExport(state)
-        const name = `${sanitizeFileName(state.vaultName || 'spacefore-vault')}.json`
+        const name = `${sanitizeFileName(state.vaultName || 'spacelink-vault')}.json`
         if (!downloadFile(name, JSON.stringify(payload, null, 2), 'application/json')) {
           state.pushToast('Downloads are not available in this browser', 'error')
           return
@@ -700,7 +700,7 @@ export function buildCommands(context: CommandContext): Command[] {
       title: 'Open settings',
       section: 'View',
       shortcut: 'Mod+,',
-      run: () => emit('spacefore:open-settings'),
+      run: () => emit('spacelink:open-settings'),
     },
   ]
 

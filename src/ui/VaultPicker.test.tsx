@@ -41,7 +41,7 @@ const STORED_NOTES: Record<NotePath, string> = {
 }
 
 function browserAdapter(files: Record<NotePath, string> = {}): VaultAdapter {
-  return { ...createMemoryVault(files, { name: 'SpaceFore' }), kind: 'browser' }
+  return { ...createMemoryVault(files, { name: 'SpaceLink' }), kind: 'browser' }
 }
 
 /** Render and let the "what is in browser storage?" probe settle. */
@@ -399,7 +399,7 @@ describe('VaultPicker', () => {
       expect(useAppStore.getState().vaultName).toBe('Notebook')
       expect(onReady).toHaveBeenCalledTimes(1)
 
-      const remembered = JSON.parse(localStorage.getItem('spacefore.remote') ?? '{}') as Record<string, unknown>
+      const remembered = JSON.parse(localStorage.getItem('spacelink.remote') ?? '{}') as Record<string, unknown>
       expect(remembered).toEqual({
         url: 'http://mac.local:4899',
         token: 'session-token',
@@ -407,7 +407,7 @@ describe('VaultPicker', () => {
         email: 'me@example.com',
       })
       // The password is not in storage, and not left in the field either.
-      expect(localStorage.getItem('spacefore.remote')).not.toContain('a long enough password')
+      expect(localStorage.getItem('spacelink.remote')).not.toContain('a long enough password')
       expect((screen.queryByLabelText('Password') as HTMLInputElement | null)?.value ?? '').toBe('')
     })
 
@@ -422,13 +422,13 @@ describe('VaultPicker', () => {
 
       expect(screen.getByRole('alert').textContent).toContain('do not match an account')
       expect(vi.mocked(createRemoteVault)).not.toHaveBeenCalled()
-      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+      expect(localStorage.getItem('spacelink.remote')).toBeNull()
       expect(onReady).not.toHaveBeenCalled()
     })
 
     it('starts on the token form for a device that was paired with a token', async () => {
       localStorage.setItem(
-        'spacefore.remote',
+        'spacelink.remote',
         JSON.stringify({ url: 'http://mac.local:4899', token: 'the-token', name: 'Notes' }),
       )
       await show()
@@ -444,7 +444,7 @@ describe('VaultPicker', () => {
       // for its full thirty days, which is the opposite of what someone
       // handing a laptop back is asking for.
       localStorage.setItem(
-        'spacefore.remote',
+        'spacelink.remote',
         JSON.stringify({ url: 'http://mac.local:4899', token: 'session', name: 'Notebook', email: 'me@example.com' }),
       )
       await show()
@@ -456,7 +456,7 @@ describe('VaultPicker', () => {
       })
 
       expect(vi.mocked(signOut)).toHaveBeenCalledWith('http://mac.local:4899', 'session')
-      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+      expect(localStorage.getItem('spacelink.remote')).toBeNull()
       // And the card stops offering a pairing this device no longer has.
       expect(card('remote').textContent).toContain('Connect to a server')
       expect(useAppStore.getState().toasts.map((toast) => toast.message)).toContain('Signed out of me@example.com.')
@@ -466,7 +466,7 @@ describe('VaultPicker', () => {
       // There is no session to end: a token belongs to the server, not to a
       // device, and asking it to revoke one would be a call that means nothing.
       localStorage.setItem(
-        'spacefore.remote',
+        'spacelink.remote',
         JSON.stringify({ url: 'http://mac.local:4899', token: 'the-token', name: 'Notes' }),
       )
       await show()
@@ -478,7 +478,7 @@ describe('VaultPicker', () => {
       })
 
       expect(vi.mocked(signOut)).not.toHaveBeenCalled()
-      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+      expect(localStorage.getItem('spacelink.remote')).toBeNull()
     })
 
     it('offers nothing to disconnect on a device that never paired', async () => {
@@ -492,7 +492,7 @@ describe('VaultPicker', () => {
 
     it('says who a returning device was signed in as', async () => {
       localStorage.setItem(
-        'spacefore.remote',
+        'spacelink.remote',
         JSON.stringify({ url: 'http://mac.local:4899', token: 'session', name: 'Notebook', email: 'me@example.com' }),
       )
       await show()

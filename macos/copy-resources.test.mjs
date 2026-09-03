@@ -35,7 +35,7 @@ const APPLE_ICONSET = [
 
 /** Run the script with sips/iconutil replaced by recorders; return what they saw. */
 function runWithShims() {
-  const scratch = mkdtempSync(join(tmpdir(), 'spacefore-icon-'))
+  const scratch = mkdtempSync(join(tmpdir(), 'spacelink-icon-'))
   const bin = join(scratch, 'bin')
   mkdirSync(bin)
   const log = join(scratch, 'calls.log')
@@ -96,8 +96,8 @@ describe('the iconset copy-resources.sh builds', () => {
   })
 
   it('writes the .icns the Info.plist names', () => {
-    // CFBundleIconFile is "SpaceFore"; macOS appends .icns.
-    expect(existsSync(join(resources, 'SpaceFore.icns'))).toBe(true)
+    // CFBundleIconFile is "SpaceLink"; macOS appends .icns.
+    expect(existsSync(join(resources, 'SpaceLink.icns'))).toBe(true)
     rmSync(scratch, { recursive: true, force: true })
   })
 })

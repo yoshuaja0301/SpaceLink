@@ -1,5 +1,5 @@
 //
-//  SpaceFore for macOS
+//  SpaceLink for macOS
 //
 //  A window around the app you already have.
 //
@@ -45,7 +45,7 @@ enum VaultChoice {
     static func ask() -> URL? {
         let panel = NSOpenPanel()
         panel.title = "Choose your notes folder"
-        panel.message = "SpaceFore reads and writes the Markdown files in this folder. Nothing is converted or moved."
+        panel.message = "SpaceLink reads and writes the Markdown files in this folder. Nothing is converted or moved."
         panel.prompt = "Use This Folder"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -88,15 +88,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let resources = Bundle.main.resourceURL
         guard let entry = resources?.appendingPathComponent("server/index.mjs"),
               FileManager.default.fileExists(atPath: entry.path) else {
-            fail("This copy of SpaceFore is incomplete.", "The notes server is missing from the app bundle. Build it again with macos/build.sh.")
+            fail("This copy of SpaceLink is incomplete.", "The notes server is missing from the app bundle. Build it again with macos/build.sh.")
             return
         }
         guard let node = NodeBinary.locate(bundledAt: resources?.appendingPathComponent("node")) else {
             fail(
                 "Node.js is needed, and could not be found.",
                 """
-                SpaceFore runs its notes server on Node. Install it from nodejs.org \
-                or with `brew install node`, then open SpaceFore again.
+                SpaceLink runs its notes server on Node. Install it from nodejs.org \
+                or with `brew install node`, then open SpaceLink again.
 
                 If Node is already installed somewhere unusual, rebuild with \
                 `macos/build.sh --embed-node` to put a copy inside the app.
@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             // it its settings and its vault choice. If something else has that
             // port now, the system picks another and the page starts afresh,
             // which is the lesser evil.
-            let wanted = UserDefaults.standard.integer(forKey: "SpaceForePort")
+            let wanted = UserDefaults.standard.integer(forKey: "SpaceLinkPort")
             let outcome = Result { () throws -> ServerAddress in
                 if wanted > 0, let address = try? server.start(node: node, entry: entry, vault: vault, port: wanted) {
                     return address
@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 return try server.start(node: node, entry: entry, vault: vault)
             }
             if case .success(let address) = outcome {
-                UserDefaults.standard.set(address.port, forKey: "SpaceForePort")
+                UserDefaults.standard.set(address.port, forKey: "SpaceLinkPort")
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -186,15 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Apple: "Swift and ARC clients need to set this property to false to
         // avoid releasing the window too many times." It is held in a property.
         window.isReleasedWhenClosed = false
-        window.title = "SpaceFore"
+        window.title = "SpaceLink"
         window.contentView = webView
         window.minSize = NSSize(width: 720, height: 480)
         // Where it was last time, or the centre the first time. Centring after
         // restoring would undo the restore on every launch.
-        if !window.setFrameUsingName("SpaceForeWindow") {
+        if !window.setFrameUsingName("SpaceLinkWindow") {
             window.center()
         }
-        window.setFrameAutosaveName("SpaceForeWindow")
+        window.setFrameAutosaveName("SpaceLinkWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -204,15 +204,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About SpaceFore", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About SpaceLink", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         // ⌥⌘O: the page owns plain ⌘O (the quick switcher), and a web view hands
         // Command chords to the page first once it has focus.
         let openItem = appMenu.addItem(withTitle: "Open Vault…", action: #selector(chooseVault), keyEquivalent: "o")
         openItem.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide SpaceFore", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Quit SpaceFore", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Hide SpaceLink", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Quit SpaceLink", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 
@@ -363,12 +363,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if isCancellation(error) { return }
-        fail("SpaceFore could not load.", error.localizedDescription)
+        fail("SpaceLink could not load.", error.localizedDescription)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if isCancellation(error) { return }
-        fail("SpaceFore could not reach its own server.", error.localizedDescription)
+        fail("SpaceLink could not reach its own server.", error.localizedDescription)
     }
 
     // MARK: Saying what went wrong
@@ -397,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 /// two build paths that disagree about what a program is would be worse than
 /// either being wrong.
 @main
-enum SpaceFore {
+enum SpaceLink {
     /// `NSApplication.delegate` does not retain what it is given, so this does.
     private static let delegate = AppDelegate()
 

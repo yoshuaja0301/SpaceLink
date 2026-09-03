@@ -1,5 +1,5 @@
 /**
- * SpaceFore — global keyboard shortcuts.
+ * SpaceLink — global keyboard shortcuts.
  *
  * A `Command` carries its binding as the *display* string the palette shows:
  * `Ctrl+Shift+D` on Windows/Linux, `⇧⌘D` on a Mac. That keeps one source of

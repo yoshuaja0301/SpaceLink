@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the command palette.
+ * SpaceLink — the command palette.
  *
  * One modal serves three jobs, chosen by `store.palette`:
  *

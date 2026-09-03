@@ -1,5 +1,5 @@
 /**
- * SpaceFore — link index and graph model.
+ * SpaceLink — link index and graph model.
  *
  * This module owns everything derived from *links between* notes: the vault
  * index (`buildIndex`), Obsidian-style link resolution (`resolveLinkTarget`),

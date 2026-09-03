@@ -24,7 +24,7 @@ export interface RemoteConnection {
   email?: string
 }
 
-export const REMOTE_KEY = 'spacefore.remote'
+export const REMOTE_KEY = 'spacelink.remote'
 
 export function loadRemoteConnection(): RemoteConnection | null {
   try {

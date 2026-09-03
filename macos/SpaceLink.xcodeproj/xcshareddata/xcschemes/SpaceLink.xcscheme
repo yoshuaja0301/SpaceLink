@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "1FF27E2C3F53A1460A29362F"
-               BuildableName = "SpaceFore.app"
-               BlueprintName = "SpaceFore"
-               ReferencedContainer = "container:SpaceFore.xcodeproj">
+               BuildableName = "SpaceLink.app"
+               BlueprintName = "SpaceLink"
+               ReferencedContainer = "container:SpaceLink.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -45,9 +45,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1FF27E2C3F53A1460A29362F"
-            BuildableName = "SpaceFore.app"
-            BlueprintName = "SpaceFore"
-            ReferencedContainer = "container:SpaceFore.xcodeproj">
+            BuildableName = "SpaceLink.app"
+            BlueprintName = "SpaceLink"
+            ReferencedContainer = "container:SpaceLink.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -62,9 +62,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1FF27E2C3F53A1460A29362F"
-            BuildableName = "SpaceFore.app"
-            BlueprintName = "SpaceFore"
-            ReferencedContainer = "container:SpaceFore.xcodeproj">
+            BuildableName = "SpaceLink.app"
+            BlueprintName = "SpaceLink"
+            ReferencedContainer = "container:SpaceLink.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

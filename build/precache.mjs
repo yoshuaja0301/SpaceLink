@@ -79,7 +79,7 @@ export async function walk(directory) {
  */
 export function precachePlugin() {
   return {
-    name: 'spacefore-precache',
+    name: 'spacelink-precache',
     apply: 'build',
     // `closeBundle` sees the finished directory, `public/` copies and all —
     // which is the point: the list should describe what shipped, not what the
@@ -103,8 +103,8 @@ export function precachePlugin() {
       const source = await readFile(join(outDir, 'sw.js'), 'utf8')
       const preamble =
         '/* Written by build/precache.mjs. The worker runs without it, offline is what suffers. */\n' +
-        `self.__SPACEFORE_PRECACHE__ = ${JSON.stringify(wanted)}\n` +
-        `self.__SPACEFORE_BUILD__ = ${JSON.stringify(buildId(entries))}\n`
+        `self.__SPACELINK_PRECACHE__ = ${JSON.stringify(wanted)}\n` +
+        `self.__SPACELINK_BUILD__ = ${JSON.stringify(buildId(entries))}\n`
       await writeFile(join(outDir, 'sw.js'), `${preamble}${source}`)
 
       const bytes = entries.reduce((total, entry) => total + entry.bytes.length, 0)

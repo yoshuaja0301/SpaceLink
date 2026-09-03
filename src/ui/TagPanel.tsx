@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the tag pane.
+ * SpaceLink — the tag pane.
  *
  * `getTagTree` already nests `project/alpha` under `project` and sorts every
  * level by how many notes hang off it, so this component only has to decide

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — starred notes and recent files.
+ * SpaceLink — starred notes and recent files.
  *
  * The store owns *which* notes are starred (`starred`, persisted with the rest
  * of the app state); it has no action for re-ordering them, so the order the
@@ -17,7 +17,7 @@ import type { NotePath } from '../types'
 import { basename, useAppStore } from '../state/store'
 import { Icon } from './Icon'
 
-const ORDER_KEY = 'spacefore.starredOrder'
+const ORDER_KEY = 'spacelink.starredOrder'
 /** How many entries the "Recent files" section shows. */
 export const RECENT_LIMIT = 15
 

@@ -79,7 +79,7 @@ guard arguments.count >= 3 else {
 let node = URL(fileURLWithPath: arguments[1])
 let entry = URL(fileURLWithPath: arguments[2])
 
-let vault = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacefore-swift-\(UUID().uuidString)")
+let vault = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacelink-swift-\(UUID().uuidString)")
 try? FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
 try? "# Beranda\n\nHalo dari Swift. [[Ide]]\n".write(to: vault.appendingPathComponent("Beranda.md"), atomically: true, encoding: .utf8)
 
@@ -114,7 +114,7 @@ checking("orders versions by number, so v22 beats v9 and v10") {
 }
 
 /// A fake home directory holding Node shims, for testing where the app looks.
-let fakeHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacefore-home-\(UUID().uuidString)")
+let fakeHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacelink-home-\(UUID().uuidString)")
 func shim(_ relative: String) {
     let url = fakeHome.appendingPathComponent(relative)
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -155,7 +155,7 @@ let server = SyncServer()
 var started: ServerAddress?
 let launchToken = SyncServer.freshToken()
 // A home of its own, so the token check can tell whether the server wrote one.
-let scratchHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacefore-scratch-home-\(UUID().uuidString)")
+let scratchHome = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacelink-scratch-home-\(UUID().uuidString)")
 try? FileManager.default.createDirectory(at: scratchHome, withIntermediateDirectories: true)
 setenv("HOME", scratchHome.path, 1)
 
@@ -183,12 +183,12 @@ checking("the server is genuinely answering at that address") {
 
 checking("the token is the one this launch made up, and it never touched the disk") {
     // The README promises a per-launch token that "never touches
-    // ~/.spacefore/server.json". Without --token the server would create that
+    // ~/.spacelink/server.json". Without --token the server would create that
     // file; with HOME pointed somewhere empty, its absence afterwards is the
     // proof that the app's token was used instead.
     guard let address = started else { return false }
     let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
-    let configFile = URL(fileURLWithPath: home).appendingPathComponent(".spacefore/server.json")
+    let configFile = URL(fileURLWithPath: home).appendingPathComponent(".spacelink/server.json")
     return address.token == launchToken && !FileManager.default.fileExists(atPath: configFile.path)
 }
 

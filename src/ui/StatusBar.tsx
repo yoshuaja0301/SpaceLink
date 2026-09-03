@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the status bar.
+ * SpaceLink — the status bar.
  *
  * Vault identity on the left (and the way back to the vault picker), readouts
  * for the note in the active pane on the right. With no note open the right
@@ -21,7 +21,7 @@ function plural(count: number, singular: string): string {
 /** Ask the shell to show the vault picker. App listens for this on `window`. */
 export function requestVaultPicker(): void {
   if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
-  window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker'))
+  window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker'))
 }
 
 export function StatusBar(): JSX.Element {

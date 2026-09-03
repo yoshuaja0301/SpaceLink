@@ -57,8 +57,8 @@ async function openSeededVault(seed: Record<NotePath, string> = SEED): Promise<v
  * that is already imported can never exercise it.
  */
 async function bootStore(starred: string | null): Promise<AppState> {
-  if (starred === null) localStorage.removeItem('spacefore.starred')
-  else localStorage.setItem('spacefore.starred', starred)
+  if (starred === null) localStorage.removeItem('spacelink.starred')
+  else localStorage.setItem('spacelink.starred', starred)
   vi.resetModules()
   const fresh = await import('./store')
   return fresh.useAppStore.getState()
@@ -722,7 +722,7 @@ describe('starred persistence', () => {
     await openSeededVault()
     useAppStore.getState().toggleStar('Concepts/Zettelkasten.md')
 
-    const restored = await bootStore(localStorage.getItem('spacefore.starred'))
+    const restored = await bootStore(localStorage.getItem('spacelink.starred'))
 
     expect(Array.isArray(restored.starred)).toBe(true)
     expect(restored.starred).toEqual(['Concepts/Zettelkasten.md'])
@@ -741,11 +741,11 @@ describe('starred persistence', () => {
   })
 
   it('still merges an object-shaped setting over the defaults', async () => {
-    localStorage.setItem('spacefore.settings', JSON.stringify({ fontSize: 22 }))
+    localStorage.setItem('spacelink.settings', JSON.stringify({ fontSize: 22 }))
     expect((await bootStore(null)).settings.fontSize).toBe(22)
     expect((await bootStore(null)).settings.dailyNoteFormat).toBe('YYYY-MM-DD')
 
-    localStorage.setItem('spacefore.settings', JSON.stringify(['nonsense']))
+    localStorage.setItem('spacelink.settings', JSON.stringify(['nonsense']))
     expect((await bootStore(null)).settings.fontSize).toBe(16)
   })
 
@@ -754,10 +754,10 @@ describe('starred persistence', () => {
     useAppStore.getState().toggleStar('Concepts/Zettelkasten.md')
 
     await useAppStore.getState().renameNote('Concepts/Zettelkasten.md', 'Concepts/Slip Box.md')
-    expect((await bootStore(localStorage.getItem('spacefore.starred'))).starred).toEqual(['Concepts/Slip Box.md'])
+    expect((await bootStore(localStorage.getItem('spacelink.starred'))).starred).toEqual(['Concepts/Slip Box.md'])
 
     await useAppStore.getState().deleteNote('Concepts/Slip Box.md')
-    expect((await bootStore(localStorage.getItem('spacefore.starred'))).starred).toEqual([])
+    expect((await bootStore(localStorage.getItem('spacelink.starred'))).starred).toEqual([])
   })
 })
 
@@ -1217,7 +1217,7 @@ describe('where an edit can be lost, and now is not', () => {
     await useAppStore.getState().adapter!.rename('A.md', 'B.md')
     await useAppStore.getState().applyVaultChange({ type: 'rename', from: 'A.md', to: 'B.md' })
     expect(useAppStore.getState().starred).toEqual(['B.md'])
-    expect(JSON.parse(localStorage.getItem('spacefore.starred')!)).toEqual(['B.md'])
+    expect(JSON.parse(localStorage.getItem('spacelink.starred')!)).toEqual(['B.md'])
   })
 
   it('a remote delete blanks the tab, so keystrokes are not swallowed by a note that is gone', async () => {

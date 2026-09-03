@@ -37,7 +37,7 @@ let home
 let file
 
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'spacefore-accounts-'))
+  home = await mkdtemp(join(tmpdir(), 'spacelink-accounts-'))
   file = join(home, 'accounts.json')
 })
 

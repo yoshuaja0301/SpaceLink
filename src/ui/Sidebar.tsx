@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the left sidebar shell.
+ * SpaceLink — the left sidebar shell.
  *
  * Picks the panel the ribbon asked for and adds the drag handle that sets its
  * width. The surrounding `.sidebar` element (owned by `App`) supplies the

@@ -3,7 +3,7 @@
  * Every macOS API the app uses, checked against the version the app promises
  * to run on — without a Mac.
  *
- * `Tests/run.sh` typechecks `SpaceForeApp.swift` against stubs, which catches a
+ * `Tests/run.sh` typechecks `SpaceLinkApp.swift` against stubs, which catches a
  * wrong label or a wrong type. What it cannot catch is *when* an API arrived:
  * Swift only applies `@available(macOS …)` when it is compiling for macOS, and
  * on Linux it is inert. That was confirmed, not assumed — a stub property
@@ -28,7 +28,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 const STUBS = ['Tests/Stubs/WebKitStub.swift', 'Tests/Stubs/AppKitStub.swift']
 /** The app's own sources — what actually ships, and what Xcode will compile. */
-const SOURCES = ['Sources/SpaceForeApp.swift', 'Sources/SyncServer.swift']
+const SOURCES = ['Sources/SpaceLinkApp.swift', 'Sources/SyncServer.swift']
 
 const read = (path) => readFileSync(join(HERE, path), 'utf8')
 
@@ -54,7 +54,7 @@ function compareVersions(a, b) {
 
 /** What the project promises to run on. Both configurations must agree. */
 function deploymentTarget() {
-  const pbxproj = read('SpaceFore.xcodeproj/project.pbxproj')
+  const pbxproj = read('SpaceLink.xcodeproj/project.pbxproj')
   const found = [...pbxproj.matchAll(/MACOSX_DEPLOYMENT_TARGET = ([\d.]+);/g)].map((match) => match[1])
   if (found.length === 0) throw new Error('the project sets no MACOSX_DEPLOYMENT_TARGET')
   const distinct = [...new Set(found)]
@@ -249,7 +249,7 @@ describe('the macOS versions the app asks for', () => {
   it('would notice an unguarded use', () => {
     // The check is only worth having if it fails when it should. Same source,
     // same rules, with the guard taken away.
-    const source = read('Sources/SpaceForeApp.swift').replace(/if #available\(macOS 13\.3, \*\) \{/, 'if true {')
+    const source = read('Sources/SpaceLinkApp.swift').replace(/if #available\(macOS 13\.3, \*\) \{/, 'if true {')
     expect(source).not.toMatch(/#available/)
     const symbol = NEWER.find((candidate) => candidate.name === 'isInspectable')
     const offsets = usesOf(source, symbol)

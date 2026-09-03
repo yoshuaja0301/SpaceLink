@@ -808,13 +808,13 @@ describe('StatusBar', () => {
 
   it('asks the shell for the vault picker', () => {
     const listener = vi.fn()
-    window.addEventListener('spacefore:open-vault-picker', listener)
+    window.addEventListener('spacelink:open-vault-picker', listener)
     render(<StatusBar />)
 
     fireEvent.click(screen.getByRole('button', { name: /Open the vault picker/ }))
 
     expect(listener).toHaveBeenCalledTimes(1)
-    window.removeEventListener('spacefore:open-vault-picker', listener)
+    window.removeEventListener('spacelink:open-vault-picker', listener)
   })
 })
 

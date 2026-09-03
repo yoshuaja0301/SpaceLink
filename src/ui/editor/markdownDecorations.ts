@@ -1,5 +1,5 @@
 /**
- * SpaceFore — live markdown decorations for the CodeMirror editor.
+ * SpaceLink — live markdown decorations for the CodeMirror editor.
  *
  * The editor is a *source* editor, not a WYSIWYG one: the markdown stays in the
  * document and we paint it. Two pieces live here:

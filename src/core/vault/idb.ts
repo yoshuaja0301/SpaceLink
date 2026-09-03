@@ -13,7 +13,17 @@
  * what silently auto-closes transactions in real browsers.
  */
 
-/** Default database name; `openDB()` accepts an override so vaults can be namespaced. */
+/**
+ * Default database name; `openDB()` accepts an override so vaults can be
+ * namespaced.
+ *
+ * It stays `spacefore` through the rename to SpaceLink, and that is deliberate:
+ * a database name is an address, not a brand. Nobody ever sees it, and changing
+ * it would not move a single note — it would point the app at a new, empty
+ * database and leave every note a reader kept in a browser vault sitting in one
+ * that nothing opens any more. The one visible cost of the old name is this
+ * comment.
+ */
 export const DEFAULT_DB_NAME = 'spacefore'
 /** Object store holding one record per file, keyed by path. */
 export const FILES_STORE = 'files'
@@ -56,7 +66,7 @@ function toError(error: unknown, fallback: string): Error {
 }
 
 /**
- * Open (and, on first use, create) the SpaceFore database.
+ * Open (and, on first use, create) the SpaceLink database.
  * Rejects with a readable error when IndexedDB is unavailable or blocked.
  */
 export function openDB(name: string = DEFAULT_DB_NAME): Promise<IDBDatabase> {

@@ -1,6 +1,6 @@
 {
-  "name": "SpaceFore",
-  "short_name": "SpaceFore",
+  "name": "SpaceLink",
+  "short_name": "SpaceLink",
   "description": "A local-first, plain-text knowledge base: wiki-links, backlinks and a graph of your notes.",
   "start_url": "./",
   "scope": "./",

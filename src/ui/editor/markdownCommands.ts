@@ -1,5 +1,5 @@
 /**
- * SpaceFore — markdown editing commands.
+ * SpaceLink — markdown editing commands.
  *
  * These are plain CodeMirror `Command`s so they can sit in a keymap, and they
  * are also what the command palette runs against `getActiveEditor()`.

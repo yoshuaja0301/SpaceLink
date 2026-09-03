@@ -33,7 +33,7 @@ let watching
 let watcher
 
 beforeAll(async () => {
-  vault = await mkdtemp(join(tmpdir(), 'spacefore-server-'))
+  vault = await mkdtemp(join(tmpdir(), 'spacelink-server-'))
   sync = createSyncServer({ vault, token: TOKEN, distDir: join(vault, '__no_dist__') })
   listener = createServer((request, response) => void sync.handle(request, response))
   await new Promise((resolve) => listener.listen(0, '127.0.0.1', resolve))
@@ -76,7 +76,7 @@ describe('access control', () => {
   it('answers health without a token, and nothing else', async () => {
     const health = await fetch(`${base}/api/health`)
     expect(health.status).toBe(200)
-    expect(await health.json()).toMatchObject({ ok: true, service: 'spacefore' })
+    expect(await health.json()).toMatchObject({ ok: true, service: 'spacelink' })
 
     const files = await fetch(`${base}/api/files`)
     expect(files.status).toBe(401)
@@ -431,14 +431,14 @@ describe('change events', () => {
         await call('/api/file?path=Home.md', { method: 'PUT', body: '# Home\n\natomic\n' })
       },
     )
-    expect(events.some((event) => String(event.path ?? '').includes('.spacefore-tmp-'))).toBe(false)
+    expect(events.some((event) => String(event.path ?? '').includes('.spacelink-tmp-'))).toBe(false)
     expect(events.some((event) => String(event.path ?? '').endsWith('.tmp'))).toBe(false)
   })
 
   it('notices a note the server itself saved being deleted, and put back, outside the app', async () => {
     // Every save the server makes is an atomic replace; Node's emulated
     // recursive watch on Linux reports nothing more about a file after one.
-    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacefore-client': 'device-a' }, body: '# Home\n\nsaved\n' })
+    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacelink-client': 'device-a' }, body: '# Home\n\nsaved\n' })
     await new Promise((resolve) => setTimeout(resolve, 300))
 
     const gone = await waitFor(
@@ -459,7 +459,7 @@ describe('change events', () => {
   })
 
   it('announces the notes inside a folder that arrived whole', async () => {
-    const staging = await mkdtemp(join(tmpdir(), 'spacefore-moved-'))
+    const staging = await mkdtemp(join(tmpdir(), 'spacelink-moved-'))
     await mkdir(join(staging, 'Deeper'), { recursive: true })
     await writeFile(join(staging, 'Inside.md'), '# Inside\n')
     await writeFile(join(staging, 'Deeper/Further.md'), '# Further\n')
@@ -487,7 +487,7 @@ describe('change events', () => {
     // moving the folder away is seen only by its parent, which says nothing
     // about what was inside.
     await call('/api/files') // so the store has seen Ideas/Seed.md
-    const parked = await mkdtemp(join(tmpdir(), 'spacefore-parked-'))
+    const parked = await mkdtemp(join(tmpdir(), 'spacelink-parked-'))
     try {
       const { found, events } = await waitFor(
         (event) => event.type === 'remove' && event.path === 'Ideas/Seed.md',
@@ -507,7 +507,7 @@ describe('change events', () => {
       async () => {
         await call('/api/file?path=Home.md', {
           method: 'PUT',
-          headers: { 'x-spacefore-client': 'device-a' },
+          headers: { 'x-spacelink-client': 'device-a' },
           body: '# Home\n\ntagged\n',
         })
       },
@@ -526,7 +526,7 @@ describe('being launched by another program', () => {
     const { tmpdir } = await import('node:os')
     const { fileURLToPath } = await import('node:url')
 
-    const folder = await mkdtemp(join(tmpdir(), 'spacefore-ready-'))
+    const folder = await mkdtemp(join(tmpdir(), 'spacelink-ready-'))
     const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
     const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--print-ready', '--token', TOKEN])
 
@@ -544,7 +544,7 @@ describe('being launched by another program', () => {
         child.on('error', rejectPromise)
       })
 
-      expect(ready.spacefore).toBe('ready')
+      expect(ready.spacelink).toBe('ready')
       expect(ready.token).toBe(TOKEN)
       expect(ready.vault).toBe(folder)
       // The whole point: a real port, not the 0 that was asked for.
@@ -554,7 +554,7 @@ describe('being launched by another program', () => {
       // …and it is genuinely listening there.
       const health = await fetch(`${ready.url}api/health`)
       expect(health.status).toBe(200)
-      expect(await health.json()).toMatchObject({ ok: true, service: 'spacefore' })
+      expect(await health.json()).toMatchObject({ ok: true, service: 'spacelink' })
     } finally {
       child.kill('SIGTERM')
       await rm(folder, { recursive: true, force: true })
@@ -562,7 +562,7 @@ describe('being launched by another program', () => {
   }, 30_000)
 
   it('starts from a path with a space in it', async () => {
-    // Inside SpaceFore.app the server lives wherever the app was put — under
+    // Inside SpaceLink.app the server lives wherever the app was put — under
     // "/Applications/My Apps/" or a home folder with a space in its name. The
     // guard that decides "am I the program?" used to compare import.meta.url
     // (percent-encoded) against a URL built from the raw argv path, which
@@ -572,8 +572,8 @@ describe('being launched by another program', () => {
     const { tmpdir } = await import('node:os')
     const { fileURLToPath } = await import('node:url')
 
-    const root = await mkdtemp(join(tmpdir(), 'spacefore-spaced-'))
-    const copy = join(root, 'My Apps', 'SpaceFore.app', 'Contents', 'Resources', 'server')
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-spaced-'))
+    const copy = join(root, 'My Apps', 'SpaceLink.app', 'Contents', 'Resources', 'server')
     await cp(fileURLToPath(new URL('./', import.meta.url)), copy, { recursive: true })
     const child = spawn(process.execPath, [join(copy, 'index.mjs'), '--vault', join(root, 'vault'), '--port', '0', '--print-ready', '--token', TOKEN])
 
@@ -593,7 +593,7 @@ describe('being launched by another program', () => {
           rejectPromise(new Error(`exited with ${code} before reporting ready — the program guard did not recognise its own path`))
         })
       })
-      expect(ready.spacefore).toBe('ready')
+      expect(ready.spacelink).toBe('ready')
       expect((await fetch(`${ready.url}api/health`)).status).toBe(200)
     } finally {
       child.kill('SIGTERM')
@@ -607,7 +607,7 @@ describe('being launched by another program', () => {
     const { tmpdir } = await import('node:os')
     const { fileURLToPath } = await import('node:url')
 
-    const folder = await mkdtemp(join(tmpdir(), 'spacefore-leash-'))
+    const folder = await mkdtemp(join(tmpdir(), 'spacelink-leash-'))
     const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
     const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--print-ready', '--token', TOKEN], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -654,7 +654,7 @@ describe('being launched by another program', () => {
     const { tmpdir } = await import('node:os')
     const { fileURLToPath } = await import('node:url')
 
-    const folder = await mkdtemp(join(tmpdir(), 'spacefore-quiet-'))
+    const folder = await mkdtemp(join(tmpdir(), 'spacelink-quiet-'))
     const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
     const child = spawn(process.execPath, [entry, '--vault', folder, '--port', '0', '--token', TOKEN])
 
@@ -669,7 +669,7 @@ describe('being launched by another program', () => {
       })
       // The banner still shows a person their token — that is what it is for —
       // but no machine-readable line appears for a caller that did not ask.
-      expect(output).not.toMatch(/"spacefore":"ready"/)
+      expect(output).not.toMatch(/"spacelink":"ready"/)
     } finally {
       child.kill('SIGTERM')
       await rm(folder, { recursive: true, force: true })
@@ -768,7 +768,7 @@ describe('a vault with folders in it from the start', () => {
   it('notices a note inside one of them changing in place', async () => {
     // The root is watched before the tree is walked; the walk must still
     // reach the folders that were already there.
-    const root = await mkdtemp(join(tmpdir(), 'spacefore-tree-'))
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-tree-'))
     await mkdir(join(root, 'Ideas/Deeper'), { recursive: true })
     await writeFile(join(root, 'Ideas/Seed.md'), '# Seed\n')
     await writeFile(join(root, 'Ideas/Deeper/Leaf.md'), '# Leaf\n')
@@ -801,7 +801,7 @@ describe('a vault with folders in it from the start', () => {
 describe('a folder that vanishes while the watcher is scanning it', () => {
   /** A server of its own, so emitting an error here cannot disturb the rest. */
   async function watched() {
-    const root = await mkdtemp(join(tmpdir(), 'spacefore-watch-'))
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-watch-'))
     await writeFile(join(root, 'Home.md'), '# Home\n')
     const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(root, '__no_dist__') })
     const controller = new AbortController()
@@ -869,7 +869,7 @@ describe('a folder that vanishes while the watcher is scanning it', () => {
   })
 
   it('does not start at all once the signal is already aborted', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'spacefore-watch-'))
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-watch-'))
     const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(root, '__no_dist__') })
     const controller = new AbortController()
     controller.abort()
@@ -962,7 +962,7 @@ describe('a request path that begins with two slashes', () => {
     const health = await fetch(`${base}//api/health`)
     expect(health.status).toBeLessThan(500)
     // Whatever it answers, it is not the health endpoint answering.
-    expect(await health.text()).not.toMatch(/"service"\s*:\s*"spacefore"/)
+    expect(await health.text()).not.toMatch(/"service"\s*:\s*"spacelink"/)
 
     // …while the API itself is unmoved.
     expect((await fetch(`${base}/api/health`)).status).toBe(200)
@@ -987,8 +987,8 @@ describe('two devices saving the same note at the same moment', () => {
   it('answers one PUT with 200 and the other with 409 over HTTP', async () => {
     const etag = (await call('/api/file?path=Home.md')).headers.get('etag')
     const [a, b] = await Promise.all([
-      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacefore-client': 'device-a' }, body: 'device A edit\n' }),
-      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacefore-client': 'device-b' }, body: 'device B edit\n' }),
+      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacelink-client': 'device-a' }, body: 'device A edit\n' }),
+      call('/api/file?path=Home.md', { method: 'PUT', headers: { 'if-match': etag, 'x-spacelink-client': 'device-b' }, body: 'device B edit\n' }),
     ])
     expect([a.status, b.status].sort()).toEqual([200, 409])
     const refused = a.status === 409 ? a : b
@@ -1001,7 +1001,7 @@ describe('a link inside the vault', () => {
   let outside
 
   beforeAll(async () => {
-    outside = await mkdtemp(join(tmpdir(), 'spacefore-outside-'))
+    outside = await mkdtemp(join(tmpdir(), 'spacelink-outside-'))
     await writeFile(join(outside, 'secret.md'), 'top secret\n')
     await writeFile(join(outside, 'victim.md'), 'keep me\n')
     await symlink(outside, join(vault, 'link'))
@@ -1069,7 +1069,7 @@ describe('what the watcher tells the other devices', { timeout: 20_000 }, () => 
 
   it('announces a note that was deleted and then put back with the same bytes after an API write', async () => {
     const body = '# Home\n\nsaved by device A\n'
-    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacefore-client': 'device-a' }, body })
+    await call('/api/file?path=Home.md', { method: 'PUT', headers: { 'x-spacelink-client': 'device-a' }, body })
     await sleep(400) // the watcher's echo of that write goes by, suppressed as it should be
     captured.length = 0
 
@@ -1095,7 +1095,7 @@ describe('what the watcher tells the other devices', { timeout: 20_000 }, () => 
   it('does not echo an API rename back as an anonymous write of the new name', async () => {
     const response = await call('/api/rename', {
       method: 'POST',
-      headers: { 'x-spacefore-client': 'device-a', 'content-type': 'application/json' },
+      headers: { 'x-spacelink-client': 'device-a', 'content-type': 'application/json' },
       body: JSON.stringify({ from: 'Ideas/Seed.md', to: 'Ideas/Moved.md' }),
     })
     expect(response.status).toBe(200)
@@ -1179,7 +1179,7 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
   /** @type {AbortController} */ let accountsWatching
 
   beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), 'spacefore-accounts-'))
+    home = await mkdtemp(join(tmpdir(), 'spacelink-accounts-'))
     accountsFile = join(home, 'accounts.json')
     primaryVault = join(home, 'Primary')
     myVault = join(home, 'MyNotes')
@@ -1431,7 +1431,7 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
       const written = await as(TOKEN, '/api/file?path=Both.md', {
         method: 'PUT',
         body: 'z',
-        headers: { 'x-spacefore-client': 'the-mac-app' },
+        headers: { 'x-spacelink-client': 'the-mac-app' },
       })
       expect(written.status).toBe(200)
       await settle()
@@ -1575,7 +1575,7 @@ describe('a page served from somewhere else', () => {
     expect(preflight.status).toBe(204)
     expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
     const allowed = (preflight.headers.get('access-control-allow-headers') ?? '').toLowerCase()
-    for (const header of ['authorization', 'content-type', 'if-match', 'x-spacefore-client', 'x-spacefore-device']) {
+    for (const header of ['authorization', 'content-type', 'if-match', 'x-spacelink-client', 'x-spacelink-device']) {
       expect(allowed, header).toContain(header)
     }
     // And the header that says how long to wait after too many guesses, so a
@@ -1596,7 +1596,7 @@ describe('the account commands', { timeout: 60_000 }, () => {
   let entry
 
   beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), 'spacefore-cli-'))
+    home = await mkdtemp(join(tmpdir(), 'spacelink-cli-'))
     const { fileURLToPath } = await import('node:url')
     entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
     await mkdir(join(home, 'Notes'), { recursive: true })
@@ -1718,6 +1718,104 @@ describe('the account commands', { timeout: 60_000 }, () => {
       expect(help.out, flag).toContain(flag)
     }
     expect(help.out).toMatch(/no sign-up page/i)
+  })
+})
+
+/**
+ * Where the token and the accounts live after the app was renamed.
+ *
+ * This is the one piece of state a rename can strand: the folder is addressed
+ * by name, and a server that quietly started against a fresh one would mint a
+ * new token, find no accounts, and turn every paired device away with nothing
+ * explaining why. Run as a child process with `HOME` pointed at a temporary
+ * directory, because the path is resolved once when the module loads.
+ */
+describe('the folder the server keeps its token in', { timeout: 60_000 }, () => {
+  /** @type {string} */
+  let entry
+
+  beforeAll(async () => {
+    const { fileURLToPath } = await import('node:url')
+    entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+  })
+
+  /** Run the CLI with `HOME` pointed somewhere of our choosing. */
+  async function runAt(home, ...args) {
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, [entry, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HOME: home },
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += String(chunk)))
+    child.stderr.on('data', (chunk) => (err += String(chunk)))
+    const code = await new Promise((done) => child.on('close', done))
+    return { code, out, err }
+  }
+
+  it('is ~/.spacelink on a machine that has never run this server', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      await mkdir(join(home, 'Notes'), { recursive: true })
+      const made = await runAt(home, '--vault', join(home, 'Notes'), '--add-account', 'me@example.com', '--password', 'a long enough password')
+      expect(made.code, made.err).toBe(0)
+      expect(JSON.parse(await readFile(join(home, '.spacelink', 'accounts.json'), 'utf8')).accounts).toHaveLength(1)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('is the old ~/.spacefore when that is the only one there', async () => {
+    // Someone who ran this server before the rename. Starting against an empty
+    // ~/.spacelink would issue a new token and find no accounts, and every
+    // device already paired would simply stop working.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      await mkdir(join(home, 'Notes'), { recursive: true })
+      await mkdir(join(home, '.spacefore'), { recursive: true })
+      const made = await runAt(
+        home,
+        '--vault', join(home, 'Notes'),
+        '--accounts', join(home, '.spacefore', 'accounts.json'),
+        '--add-account', 'me@example.com',
+        '--password', 'a long enough password',
+      )
+      expect(made.code, made.err).toBe(0)
+
+      // Now ask without naming the file: it must find the old folder.
+      const listed = await runAt(home, '--list-accounts')
+      expect(listed.code, listed.err).toBe(0)
+      expect(listed.out).toContain(join(home, '.spacefore', 'accounts.json'))
+      expect(listed.out).toContain('me@example.com')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers ~/.spacelink once it exists, so nothing is read from two places', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      await mkdir(join(home, 'Notes'), { recursive: true })
+      await mkdir(join(home, '.spacefore'), { recursive: true })
+      await runAt(
+        home,
+        '--vault', join(home, 'Notes'),
+        '--accounts', join(home, '.spacefore', 'accounts.json'),
+        '--add-account', 'me@example.com',
+        '--password', 'a long enough password',
+      )
+      expect((await runAt(home, '--list-accounts')).out).toContain('.spacefore')
+
+      await mkdir(join(home, '.spacelink'), { recursive: true })
+      const listed = await runAt(home, '--list-accounts')
+      expect(listed.code, listed.err).toBe(0)
+      // The new folder wins outright — it is empty, and that is what it says.
+      expect(listed.out).not.toContain(join(home, '.spacefore'))
+      expect(listed.out).toContain('No accounts yet')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
   })
 })
 

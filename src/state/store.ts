@@ -1,5 +1,5 @@
 /**
- * SpaceFore — central application store.
+ * SpaceLink — central application store.
  *
  * This module owns all mutable app state. Core modules (markdown, graph,
  * search, vault) are pure and are called from here; UI components read state
@@ -73,10 +73,10 @@ export const DEFAULT_SETTINGS: Settings = {
   graphChargeStrength: -180,
 }
 
-const SETTINGS_KEY = 'spacefore.settings'
+const SETTINGS_KEY = 'spacelink.settings'
 /** Which kind of vault was last opened, so a reload comes back to the same one. */
-export const LAST_VAULT_KEY = 'spacefore.vault'
-const STARRED_KEY = 'spacefore.starred'
+export const LAST_VAULT_KEY = 'spacelink.vault'
+const STARRED_KEY = 'spacelink.starred'
 
 /**
  * Read a persisted value, keeping the fallback's shape.

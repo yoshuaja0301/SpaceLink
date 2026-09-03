@@ -92,7 +92,7 @@ describe('buildId', () => {
 
 describe('walk', () => {
   it('finds nested files, with forward slashes whatever the platform', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'spacefore-precache-'))
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-precache-'))
     await mkdir(join(root, 'assets'), { recursive: true })
     await writeFile(join(root, 'index.html'), 'x')
     await writeFile(join(root, 'assets', 'a-1.js'), 'y')

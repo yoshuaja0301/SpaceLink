@@ -86,7 +86,7 @@ for (const [phone, engine] of PHONES) {
     await step(`${phone}: never two drawers over the note at once`, async () => {
       await page.locator('.ribbon button').first().tap()
       await page.waitForTimeout(600)
-      await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-right-sidebar')))
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-right-sidebar')))
       await page.keyboard.press('Control+i')
       await page.waitForTimeout(700)
       const open = (await page.locator('.sidebar').count()) + (await page.locator('.right-sidebar').count())

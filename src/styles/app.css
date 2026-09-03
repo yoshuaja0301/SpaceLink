@@ -1,5 +1,5 @@
 /*
- * SpaceFore — application styles.
+ * SpaceLink — application styles.
  *
  * Load order matters: tokens first, then rendered-note typography, then the
  * shell. Nothing below hardcodes a colour — every value is a token from

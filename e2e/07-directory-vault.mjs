@@ -117,7 +117,7 @@ await step('a folder of markdown files opens as a vault', async () => {
   await page.reload({ waitUntil: 'networkidle' })
   await page.waitForTimeout(1600)
 
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(800)
   await page.locator('.vault-picker button').filter({ hasText: /folder/i }).first().click()
   await page.waitForTimeout(2500)
@@ -257,7 +257,7 @@ await step('switching vaults mid-edit does not clobber the file on disk', async 
   await page.keyboard.type('\nEdited immediately before switching away.\n')
 
   // Switch while the autosave debounce is still armed.
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(250)
   await page.locator('.vault-picker button').filter({ hasText: /demo/i }).first().click()
   await page.waitForTimeout(3000)
@@ -294,7 +294,7 @@ await step('switching vaults mid-edit does not clobber the file on disk', async 
 await step('a file changed by another editor shows up on reload', async () => {
   // Reopen the folder, then edit a file behind the app's back — exactly what
   // happens when the same vault is open in another editor or synced.
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(800)
   await page.locator('.vault-picker button').filter({ hasText: /folder/i }).first().click()
   await page.waitForTimeout(2500)
@@ -516,15 +516,15 @@ await step('importing it into an empty vault brings the attachment back', async 
 
   // A browser vault is a different backend entirely, which is the point: the
   // export has to be enough on its own.
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(800)
   await page.locator('.vault-picker button').filter({ hasText: /browser/i }).first().click()
   await page.waitForTimeout(2500)
 
-  const carrier = join(tmpdir(), `spacefore-export-${Date.now()}.json`)
+  const carrier = join(tmpdir(), `spacelink-export-${Date.now()}.json`)
   await writeFile(carrier, JSON.stringify(exported))
   try {
-    await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-settings')))
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-settings')))
     await page.waitForSelector('.modal input[type="file"]', { timeout: 15_000 })
     await page.locator('.modal input[type="file"]').setInputFiles(carrier)
     await page.waitForTimeout(3500)
@@ -535,7 +535,7 @@ await step('importing it into an empty vault brings the attachment back', async 
       // The browser vault names its database after the vault, so ask rather
       // than assume — and say which ones exist if the expected one is missing.
       const names = (await indexedDB.databases()).map((entry) => entry.name)
-      const chosen = names.includes('SpaceFore') ? 'SpaceFore' : names[0]
+      const chosen = names.includes('SpaceLink') ? 'SpaceLink' : names[0]
       if (!chosen) return { paths: [], bytes: [], databases: names }
       const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open(chosen)

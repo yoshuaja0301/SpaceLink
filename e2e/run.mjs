@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PORT = Number(process.env.SPACEFORE_E2E_PORT ?? 4173)
+const PORT = Number(process.env.SPACELINK_E2E_PORT ?? 4173)
 const URL = `http://localhost:${PORT}/`
 
 async function waitForServer(timeoutMs = 30_000) {
@@ -94,7 +94,7 @@ try {
     const code = await new Promise((resolve) => {
       const run = spawn(process.execPath, [join(here, suite)], {
         stdio: 'inherit',
-        env: { ...process.env, SPACEFORE_E2E_URL: URL },
+        env: { ...process.env, SPACELINK_E2E_URL: URL },
       })
       run.on('exit', (value) => resolve(value ?? 1))
     })

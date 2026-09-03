@@ -1,9 +1,9 @@
 {
-  "name": "spacefore",
+  "name": "spacelink",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "SpaceFore — a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
+  "description": "SpaceLink — a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
   "scripts": {
     "build": "tsc -b && vite build",
     "dev": "vite",

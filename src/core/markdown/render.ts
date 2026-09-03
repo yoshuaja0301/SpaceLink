@@ -1,10 +1,10 @@
 /**
- * SpaceFore — markdown → sanitized HTML.
+ * SpaceLink — markdown → sanitized HTML.
  *
  * Everything here is implemented as markdown-it rules (block / inline / core)
  * plus renderer rules. That matters: a naive "render then regex the HTML"
  * approach corrupts code fences, code spans and attribute values. Because the
- * SpaceFore extensions live inside the tokenizer, `[[link]]`, `#tag` and `$x$`
+ * SpaceLink extensions live inside the tokenizer, `[[link]]`, `#tag` and `$x$`
  * inside a fence or a backtick span are left completely untouched — the
  * tokenizer never offers those characters to our rules in the first place.
  *

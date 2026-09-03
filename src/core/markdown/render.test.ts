@@ -677,7 +677,7 @@ describe('code blocks', () => {
     expect(pre.querySelector('code')!.className).toBe('')
   })
 
-  it('leaves SpaceFore syntax inside a fence completely untouched', () => {
+  it('leaves SpaceLink syntax inside a fence completely untouched', () => {
     const source = '```md\n[[Target]] #tag $x^2$ ![[Note]] - [ ] task\n```'
     const el = render(source, vaultCtx)
     expect(el.querySelector('a')).toBeNull()

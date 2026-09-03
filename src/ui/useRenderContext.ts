@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the bridge between the store and the markdown renderer.
+ * SpaceLink — the bridge between the store and the markdown renderer.
  *
  * `renderMarkdown` is a pure, *synchronous* function: it asks the
  * `RenderContext` for a link target, an embedded note's text or an asset URL

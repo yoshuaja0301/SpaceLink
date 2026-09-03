@@ -229,7 +229,7 @@ describe('file commands', () => {
     let exported: Blob | null = null
     const createObjectURL = vi.fn((blob: Blob) => {
       exported = blob
-      return 'blob:spacefore'
+      return 'blob:spacelink'
     })
     Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
@@ -384,7 +384,7 @@ describe('navigation commands', () => {
     act(() => localGraph().run())
 
     expect(useAppStore.getState().rightSidebarOpen).toBe(true)
-    expect(localStorage.getItem('spacefore.rightSidebarTab')).toBe('graph')
+    expect(localStorage.getItem('spacelink.rightSidebarTab')).toBe('graph')
   })
 
   it('reopens the last closed tab', () => {
@@ -544,10 +544,10 @@ describe('view commands', () => {
 
   it('asks App to open the settings modal', () => {
     const listener = vi.fn()
-    window.addEventListener('spacefore:open-settings', listener)
+    window.addEventListener('spacelink:open-settings', listener)
     find(commands().current, 'view:settings').run()
     expect(listener).toHaveBeenCalledTimes(1)
-    window.removeEventListener('spacefore:open-settings', listener)
+    window.removeEventListener('spacelink:open-settings', listener)
   })
 })
 

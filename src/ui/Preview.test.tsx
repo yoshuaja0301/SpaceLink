@@ -457,14 +457,14 @@ describe('Preview — scrolling', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:editor-scroll', { detail: { paneId: pane, ratio: 0.5 } }),
+        new CustomEvent('spacelink:editor-scroll', { detail: { paneId: pane, ratio: 0.5 } }),
       )
     })
     expect(element.scrollTop).toBe(300)
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:editor-scroll', { detail: { paneId: 'pane-b', ratio: 1 } }),
+        new CustomEvent('spacelink:editor-scroll', { detail: { paneId: 'pane-b', ratio: 1 } }),
       )
     })
     expect(element.scrollTop).toBe(300)
@@ -472,7 +472,7 @@ describe('Preview — scrolling', () => {
     // Out-of-range ratios are clamped rather than thrown away.
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:editor-scroll', { detail: { paneId: pane, ratio: 4 } }),
+        new CustomEvent('spacelink:editor-scroll', { detail: { paneId: pane, ratio: 4 } }),
       )
     })
     expect(element.scrollTop).toBe(600)
@@ -488,7 +488,7 @@ describe('Preview — scrolling', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:editor-scroll', { detail: { paneId: pane, ratio: 0.5 } }),
+        new CustomEvent('spacelink:editor-scroll', { detail: { paneId: pane, ratio: 0.5 } }),
       )
     })
     expect(element.scrollTop).toBe(0)
@@ -681,7 +681,7 @@ describe('Preview — the window event contract', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-line', { detail: { path: 'B.md', line: 6 } }),
+        new CustomEvent('spacelink:reveal-line', { detail: { path: 'B.md', line: 6 } }),
       )
     })
     expect(first).not.toHaveBeenCalled()
@@ -690,14 +690,14 @@ describe('Preview — the window event contract', () => {
     // `beta` sits under the second heading, `alpha` under the first.
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 6 } }),
+        new CustomEvent('spacelink:reveal-line', { detail: { path: 'A.md', line: 6 } }),
       )
     })
     expect(second).toHaveBeenCalledTimes(1)
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 2 } }),
+        new CustomEvent('spacelink:reveal-line', { detail: { path: 'A.md', line: 2 } }),
       )
     })
     expect(first).toHaveBeenCalledTimes(1)
@@ -705,7 +705,7 @@ describe('Preview — the window event contract', () => {
     unmount()
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-line', { detail: { path: 'A.md', line: 6 } }),
+        new CustomEvent('spacelink:reveal-line', { detail: { path: 'A.md', line: 6 } }),
       )
     })
     expect(second).toHaveBeenCalledTimes(1)
@@ -720,7 +720,7 @@ describe('Preview — the window event contract', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-heading', {
+        new CustomEvent('spacelink:reveal-heading', {
           detail: { path: 'Other.md', slug: 'two', line: 4 },
         }),
       )
@@ -729,7 +729,7 @@ describe('Preview — the window event contract', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-heading', {
+        new CustomEvent('spacelink:reveal-heading', {
           detail: { path: 'A.md', slug: 'two', line: 4 },
         }),
       )
@@ -739,7 +739,7 @@ describe('Preview — the window event contract', () => {
     unmount()
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('spacefore:reveal-heading', {
+        new CustomEvent('spacelink:reveal-heading', {
           detail: { path: 'A.md', slug: 'two', line: 4 },
         }),
       )
@@ -756,7 +756,7 @@ describe('Preview — the window event contract', () => {
 
     const seen: unknown[] = []
     const listener = (event: Event): void => void seen.push((event as CustomEvent).detail)
-    window.addEventListener('spacefore:preview-scroll', listener)
+    window.addEventListener('spacelink:preview-scroll', listener)
 
     stubTop(element, 0)
     stubTop(h1, -40)
@@ -777,7 +777,7 @@ describe('Preview — the window event contract', () => {
 
     unmount()
     expect(seen).toHaveLength(2)
-    window.removeEventListener('spacefore:preview-scroll', listener)
+    window.removeEventListener('spacelink:preview-scroll', listener)
   })
 })
 
@@ -904,7 +904,7 @@ describe('useRenderContext — asset cache', () => {
     let issued = 0
     vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
       issued += 1
-      return `blob:spacefore/${issued}`
+      return `blob:spacelink/${issued}`
     })
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url: string) => void revoked.push(url))
 
@@ -928,7 +928,7 @@ describe('useRenderContext — asset cache', () => {
     await waitFor(() => {
       expect(container.querySelector('img.embed-image')?.getAttribute('src')).not.toBe(before)
     })
-    expect(container.querySelector('img.embed-image')?.getAttribute('src')).toBe('blob:spacefore/2')
+    expect(container.querySelector('img.embed-image')?.getAttribute('src')).toBe('blob:spacelink/2')
     expect(revoked).toContain(before)
   })
 })
@@ -943,7 +943,7 @@ describe('Preview — the asset cache keeps what is on screen', () => {
     let issued = 0
     vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
       issued += 1
-      return `blob:spacefore/${issued}`
+      return `blob:spacelink/${issued}`
     })
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url: string) => void revoked.push(url))
 
