@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the outline pane.
+ * SpaceLink — the outline pane.
  *
  * A flat list of the active note's headings, indented purely through
  * `data-level` so the rendered order is also the reading order. The heading
@@ -7,11 +7,11 @@
  * what is visible (the filter) and what is current.
  *
  * "Current" is not something the outline can know on its own — it depends on
- * where the reader is in the note — so it listens for `spacefore:preview-scroll`
+ * where the reader is in the note — so it listens for `spacelink:preview-scroll`
  * events carrying `{ path, slug }`. Until one arrives (or when it names another
  * note) nothing is highlighted, which is the honest answer.
  *
- * Clicking a heading fires `spacefore:reveal-heading` for the editor/preview to
+ * Clicking a heading fires `spacelink:reveal-heading` for the editor/preview to
  * act on, and brings the pane showing that note back to the front so the
  * keyboard lands where the reader is now looking.
  */
@@ -71,8 +71,8 @@ export function OutlinePanel({ path }: OutlinePanelProps): JSX.Element {
       if (detail.path !== path) return
       setActiveSlug(typeof detail.slug === 'string' && detail.slug ? detail.slug : null)
     }
-    window.addEventListener('spacefore:preview-scroll', onScroll)
-    return () => window.removeEventListener('spacefore:preview-scroll', onScroll)
+    window.addEventListener('spacelink:preview-scroll', onScroll)
+    return () => window.removeEventListener('spacelink:preview-scroll', onScroll)
   }, [path])
 
   /** Bring the pane showing this note forward, so the reveal has somewhere to land. */
@@ -94,7 +94,7 @@ export function OutlinePanel({ path }: OutlinePanelProps): JSX.Element {
       setActiveSlug(heading.slug)
       if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
         window.dispatchEvent(
-          new CustomEvent('spacefore:reveal-heading', {
+          new CustomEvent('spacelink:reveal-heading', {
             detail: { path, slug: heading.slug, line: heading.line },
           }),
         )

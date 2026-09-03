@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const CHECK = join(dirname(fileURLToPath(import.meta.url)), 'embed-node-check.sh')
-const bin = mkdtempSync(join(tmpdir(), 'spacefore-otool-'))
+const bin = mkdtempSync(join(tmpdir(), 'spacelink-otool-'))
 
 writeFileSync(
   join(bin, 'otool'),

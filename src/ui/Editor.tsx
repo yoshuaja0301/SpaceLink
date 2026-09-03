@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the markdown editor pane.
+ * SpaceLink — the markdown editor pane.
  *
  * The tricky part of hosting CodeMirror inside React is ownership of the
  * document. React must not re-render the text: a controlled `value` prop would
@@ -17,8 +17,8 @@
  * undo history survives them.
  *
  * The editor is also one end of two window-event seams (see the table at the
- * bottom of docs/CONTRACTS.md): it listens for `spacefore:reveal-line` /
- * `spacefore:reveal-heading` and emits `spacefore:editor-scroll`. Both
+ * bottom of docs/CONTRACTS.md): it listens for `spacelink:reveal-line` /
+ * `spacelink:reveal-heading` and emits `spacelink:editor-scroll`. Both
  * listeners hang off `window` and read the current view through a ref, so
  * swapping notes can never leave one bound to a view that is gone.
  */
@@ -187,7 +187,7 @@ export function Editor({ path, paneId }: { path: NotePath; paneId: string }): Re
           scrollFrameRef.current = null
           if (typeof window === 'undefined' || typeof window.CustomEvent !== 'function') return
           window.dispatchEvent(
-            new CustomEvent('spacefore:editor-scroll', { detail: { paneId, ratio: scrollRatio(scrolled) } }),
+            new CustomEvent('spacelink:editor-scroll', { detail: { paneId, ratio: scrollRatio(scrolled) } }),
           )
         })
       },
@@ -301,11 +301,11 @@ export function Editor({ path, paneId }: { path: NotePath; paneId: string }): Re
       }, FLASH_MS)
     }
     // `reveal-heading` carries a slug for the preview and a line for us.
-    window.addEventListener('spacefore:reveal-line', onReveal)
-    window.addEventListener('spacefore:reveal-heading', onReveal)
+    window.addEventListener('spacelink:reveal-line', onReveal)
+    window.addEventListener('spacelink:reveal-heading', onReveal)
     return () => {
-      window.removeEventListener('spacefore:reveal-line', onReveal)
-      window.removeEventListener('spacefore:reveal-heading', onReveal)
+      window.removeEventListener('spacelink:reveal-line', onReveal)
+      window.removeEventListener('spacelink:reveal-heading', onReveal)
       if (flashTimerRef.current !== null) {
         clearTimeout(flashTimerRef.current)
         flashTimerRef.current = null

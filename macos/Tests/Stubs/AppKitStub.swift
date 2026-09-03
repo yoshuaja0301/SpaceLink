@@ -1,5 +1,5 @@
 //
-//  Just enough AppKit to typecheck SpaceForeApp.swift off a Mac.
+//  Just enough AppKit to typecheck SpaceLinkApp.swift off a Mac.
 //
 //  Every declaration below was copied from Apple's own documentation for the
 //  symbol — fetched, not remembered — so checking the app against this is a

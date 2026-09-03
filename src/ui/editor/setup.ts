@@ -1,5 +1,5 @@
 /**
- * SpaceFore — CodeMirror extension assembly.
+ * SpaceLink — CodeMirror extension assembly.
  *
  * One function builds the whole extension list for an editor. Things that can
  * change while the editor is alive (line numbers, spellcheck, font) go behind

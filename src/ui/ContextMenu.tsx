@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the shared right-click menu.
+ * SpaceLink — the shared right-click menu.
  *
  * Pure presentation on top of `useContextMenu`: it positions itself at the
  * pointer, flips when it would spill out of the viewport, and closes on the

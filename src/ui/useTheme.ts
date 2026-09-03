@@ -1,5 +1,5 @@
 /**
- * SpaceFore — theme application.
+ * SpaceLink — theme application.
  *
  * `settings.theme` is the *choice* ('dark' | 'light' | 'system'); the attribute
  * on `<html>` is the *result*. `src/styles/theme.css` defines the light tokens

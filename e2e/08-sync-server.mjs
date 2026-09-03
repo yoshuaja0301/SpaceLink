@@ -24,7 +24,7 @@ import { boot, must, openDevice, report, step } from './lib.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOKEN = 'e2e-token-'.padEnd(48, 'x')
 
-const vault = await mkdtemp(join(tmpdir(), 'spacefore-sync-e2e-'))
+const vault = await mkdtemp(join(tmpdir(), 'spacelink-sync-e2e-'))
 await mkdir(join(vault, 'Ideas'), { recursive: true })
 await writeFile(join(vault, 'Home.md'), '# Home\n\nStart at [[Ideas/Seed]].\n')
 await writeFile(join(vault, 'Ideas/Seed.md'), '# Seed\n\nBack to [[Home]].\n')
@@ -47,7 +47,7 @@ await writeFile(join(vault, 'Ideas/Seed.md'), '# Seed\n\nBack to [[Home]].\n')
  * if this process is killed outright.
  */
 const ACCOUNT = { email: 'e2e@example.com', password: 'a long enough password' }
-const accountsFile = join(vault, '..', `spacefore-e2e-accounts-${process.pid}.json`)
+const accountsFile = join(vault, '..', `spacelink-e2e-accounts-${process.pid}.json`)
 
 /**
  * Make the account, as a person would: one command, on the machine that holds
@@ -80,7 +80,7 @@ const server = spawn(
   [
     join(HERE, '..', 'server', 'index.mjs'),
     '--vault', vault,
-    '--port', String(process.env.SPACEFORE_SYNC_PORT ?? 0),
+    '--port', String(process.env.SPACELINK_SYNC_PORT ?? 0),
     '--token', TOKEN,
     '--accounts', accountsFile,
     '--print-ready',
@@ -117,8 +117,8 @@ const ready = await new Promise((resolve, reject) => {
   server.once('exit', (code) => {
     clearTimeout(timer)
     const why = /EADDRINUSE/.test(complaint)
-      ? `something else is already listening on port ${process.env.SPACEFORE_SYNC_PORT}. ` +
-        'Leave SPACEFORE_SYNC_PORT unset and the server will pick a free one.'
+      ? `something else is already listening on port ${process.env.SPACELINK_SYNC_PORT}. ` +
+        'Leave SPACELINK_SYNC_PORT unset and the server will pick a free one.'
       : complaint.trim().split('\n').slice(-3).join(' ') || 'it said nothing'
     reject(new Error(`the server exited with ${code} before reporting ready: ${why}`))
   })
@@ -148,7 +148,7 @@ const listDisk = async () => {
 
 /** Open the connect form on the picker. */
 async function openConnectForm(page) {
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
   await page.waitForTimeout(700)
   // By its own identifier, not by its wording: the card describes itself
   // differently once this device has signed in, and a test that reads the
@@ -209,7 +209,7 @@ let phoneProblems = []
 try {
   await step('the server serves the app itself', async () => {
     const title = await laptop.title()
-    must(title.toLowerCase().includes('spacefore'), `page title is ${title}`)
+    must(title.toLowerCase().includes('spacelink'), `page title is ${title}`)
     must(await laptop.locator('.app').count() > 0, 'the app did not render')
     return title
   })
@@ -431,14 +431,14 @@ try {
     try {
       await signInDevice(borrowed.page)
       const session = await borrowed.page.evaluate(
-        () => JSON.parse(localStorage.getItem('spacefore.remote') ?? '{}').token ?? null,
+        () => JSON.parse(localStorage.getItem('spacelink.remote') ?? '{}').token ?? null,
       )
       must(typeof session === 'string' && session.length > 20, 'no session was kept: ' + session)
 
       const before = await fetch(`${ORIGIN}/api/files`, { headers: { authorization: `Bearer ${session}` } })
       must(before.status === 200, `the session did not work before signing out: ${before.status}`)
 
-      await borrowed.page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+      await borrowed.page.evaluate(() => window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker')))
       await borrowed.page.waitForTimeout(700)
       await borrowed.page.locator('.vault-picker-option[data-choice="remote"]').click()
       await borrowed.page.waitForTimeout(400)
@@ -448,7 +448,7 @@ try {
       const after = await fetch(`${ORIGIN}/api/files`, { headers: { authorization: `Bearer ${session}` } })
       must(after.status === 401, `the session still worked after signing out: ${after.status}`)
 
-      const stored = await borrowed.page.evaluate(() => localStorage.getItem('spacefore.remote'))
+      const stored = await borrowed.page.evaluate(() => localStorage.getItem('spacelink.remote'))
       must(stored === null, 'the pairing was kept on the device: ' + stored)
       return `200 before, ${after.status} after`
     } finally {
@@ -464,7 +464,7 @@ try {
       const alert = await wrong.page.locator('[role="alert"]').first().innerText()
       must(/do not match an account/i.test(alert), 'the app said: ' + alert)
       // Nothing was remembered, so a reload does not retry the bad sign-in.
-      const stored = await wrong.page.evaluate(() => localStorage.getItem('spacefore.remote'))
+      const stored = await wrong.page.evaluate(() => localStorage.getItem('spacelink.remote'))
       must(stored === null, 'a refused sign-in was remembered: ' + stored)
       return alert.split('\n')[0]
     } finally {

@@ -1,4 +1,4 @@
-# SpaceFore — module contracts
+# SpaceLink — module contracts
 
 `src/types.ts` holds the domain types. `src/state/store.ts` holds all mutable
 state. Everything below is the **exact** public surface each module must export.
@@ -322,7 +322,7 @@ export interface RemoteConnection {
   /** The account this device signed in as; absent when it was paired with a token. */
   email?: string
 }
-export const REMOTE_KEY = 'spacefore.remote'
+export const REMOTE_KEY = 'spacelink.remote'
 
 export function loadRemoteConnection(): RemoteConnection | null
 export function saveRemoteConnection(connection: RemoteConnection): void
@@ -431,12 +431,12 @@ rather than by threading props through the workspace. Both sides are binding.
 
 | Event | `detail` | Emitted by | Handled by |
 | --- | --- | --- | --- |
-| `spacefore:reveal-line` | `{ path: NotePath; line: number }` (0-based) | SearchPanel result rows, BacklinksPanel context lines | **Editor** — if its `path` matches, scroll the line into view and put the cursor on it. **Preview** — scroll to the rendered block carrying that line. |
-| `spacefore:reveal-heading` | `{ path: NotePath; slug: string; line: number }` | OutlinePanel | **Editor** — scroll to `line`. **Preview** — scroll the heading whose id is `headingElementId(slug)` into view. |
-| `spacefore:editor-scroll` | `{ paneId: string; ratio: number }` (0–1) | Editor, on scroll | **Preview** in the same pane, when `scrollSync` is on. |
-| `spacefore:preview-scroll` | `{ path: NotePath; slug: string }` | Preview, as a heading crosses the top of the viewport | **OutlinePanel** — highlights the current heading. |
-| `spacefore:open-vault-picker` | — | StatusBar, SettingsModal, commands | **App** |
-| `spacefore:open-settings` | — | commands | **App** |
+| `spacelink:reveal-line` | `{ path: NotePath; line: number }` (0-based) | SearchPanel result rows, BacklinksPanel context lines | **Editor** — if its `path` matches, scroll the line into view and put the cursor on it. **Preview** — scroll to the rendered block carrying that line. |
+| `spacelink:reveal-heading` | `{ path: NotePath; slug: string; line: number }` | OutlinePanel | **Editor** — scroll to `line`. **Preview** — scroll the heading whose id is `headingElementId(slug)` into view. |
+| `spacelink:editor-scroll` | `{ paneId: string; ratio: number }` (0–1) | Editor, on scroll | **Preview** in the same pane, when `scrollSync` is on. |
+| `spacelink:preview-scroll` | `{ path: NotePath; slug: string }` | Preview, as a heading crosses the top of the viewport | **OutlinePanel** — highlights the current heading. |
+| `spacelink:open-vault-picker` | — | StatusBar, SettingsModal, commands | **App** |
+| `spacelink:open-settings` | — | commands | **App** |
 
 Rules: emit with `window.dispatchEvent(new CustomEvent(name, { detail }))`;
 every listener must ignore events for a different `path`/`paneId`, and must be

@@ -1,5 +1,5 @@
 /*
- * SpaceFore — rendered note typography.
+ * SpaceLink — rendered note typography.
  *
  * Scoped to `.markdown-preview`, the container `Preview.tsx` fills with the
  * sanitised HTML from `core/markdown/render.ts`. Colours come only from the

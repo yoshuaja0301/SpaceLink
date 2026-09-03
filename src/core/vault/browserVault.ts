@@ -18,7 +18,7 @@ import { createMemoryVault } from './memoryVault'
 import { comparePaths, mimeTypeOf, normalizePath, toVaultFile } from './paths'
 
 /** Default vault (and IndexedDB database) name. */
-const DEFAULT_VAULT_NAME = 'SpaceFore'
+const DEFAULT_VAULT_NAME = 'SpaceLink'
 
 const encoder = new TextEncoder()
 

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — autocompletion for `[[wiki links]]` and `#tags`.
+ * SpaceLink — autocompletion for `[[wiki links]]` and `#tags`.
  *
  * The source is deliberately a *single* `CompletionSource`: `[[` and `#` never
  * apply at the same cursor position, and one source means one pass over the

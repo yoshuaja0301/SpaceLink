@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the reading view.
+ * SpaceLink — the reading view.
  *
  * The note is rendered once into an HTML string (already sanitized by
  * `renderMarkdown`) and dropped into the DOM in one go. Everything
@@ -111,7 +111,7 @@ interface HoverCard {
 export interface PreviewProps {
   path: NotePath
   paneId: string
-  /** Follow `spacefore:editor-scroll` events from the editor in this pane. */
+  /** Follow `spacelink:editor-scroll` events from the editor in this pane. */
   scrollSync?: boolean
 }
 
@@ -364,7 +364,7 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
     }
     if (slug === reportedSlug.current) return
     reportedSlug.current = slug
-    window.dispatchEvent(new CustomEvent('spacefore:preview-scroll', { detail: { path, slug } }))
+    window.dispatchEvent(new CustomEvent('spacelink:preview-scroll', { detail: { path, slug } }))
   }, [path])
 
   const handleScroll = useCallback(() => {
@@ -388,8 +388,8 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       if (range <= 0) return
       host.scrollTop = Math.max(0, Math.min(1, ratio)) * range
     }
-    window.addEventListener('spacefore:editor-scroll', onEditorScroll)
-    return () => window.removeEventListener('spacefore:editor-scroll', onEditorScroll)
+    window.addEventListener('spacelink:editor-scroll', onEditorScroll)
+    return () => window.removeEventListener('spacelink:editor-scroll', onEditorScroll)
   }, [paneId, scrollSync])
 
   /** Bring a heading into view. The note may still be mounting, so retry once. */
@@ -454,11 +454,11 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
       if (typeof slug === 'string' && slug) scrollToHeading(slug)
       else if (typeof detail.line === 'number') scrollToLine(detail.line)
     }
-    window.addEventListener('spacefore:reveal-line', onRevealLine)
-    window.addEventListener('spacefore:reveal-heading', onRevealHeading)
+    window.addEventListener('spacelink:reveal-line', onRevealLine)
+    window.addEventListener('spacelink:reveal-heading', onRevealHeading)
     return () => {
-      window.removeEventListener('spacefore:reveal-line', onRevealLine)
-      window.removeEventListener('spacefore:reveal-heading', onRevealHeading)
+      window.removeEventListener('spacelink:reveal-line', onRevealLine)
+      window.removeEventListener('spacelink:reveal-heading', onRevealHeading)
     }
   }, [path, scrollToHeading, scrollToLine])
 

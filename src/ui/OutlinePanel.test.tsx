@@ -162,15 +162,15 @@ describe('OutlinePanel', () => {
  * ------------------------------------------------------------------ */
 
 describe('OutlinePanel — reveal', () => {
-  it('dispatches spacefore:reveal-heading with the slug and line', () => {
+  it('dispatches spacelink:reveal-heading with the slug and line', () => {
     seed()
     const listen = vi.fn()
-    window.addEventListener('spacefore:reveal-heading', listen)
+    window.addEventListener('spacelink:reveal-heading', listen)
 
     const { container } = render(<OutlinePanel path="Guide.md" />)
     fireEvent.click([...container.querySelectorAll('.outline-item')][2]!)
 
-    window.removeEventListener('spacefore:reveal-heading', listen)
+    window.removeEventListener('spacelink:reveal-heading', listen)
 
     const details = headingsOf('Guide.md')[2]!
     expect((listen.mock.calls[0]![0] as CustomEvent).detail).toEqual({
@@ -213,11 +213,11 @@ describe('OutlinePanel — reveal', () => {
 describe('OutlinePanel — current heading', () => {
   const scroll = (detail: unknown): void => {
     act(() => {
-      window.dispatchEvent(new CustomEvent('spacefore:preview-scroll', { detail }))
+      window.dispatchEvent(new CustomEvent('spacelink:preview-scroll', { detail }))
     })
   }
 
-  it('highlights the heading named by spacefore:preview-scroll', () => {
+  it('highlights the heading named by spacelink:preview-scroll', () => {
     seed()
     const { container } = render(<OutlinePanel path="Guide.md" />)
 
@@ -256,7 +256,7 @@ describe('OutlinePanel — current heading', () => {
     const remove = vi.spyOn(window, 'removeEventListener')
     render(<OutlinePanel path="Guide.md" />).unmount()
 
-    expect(remove.mock.calls.some(([type]) => type === 'spacefore:preview-scroll')).toBe(true)
+    expect(remove.mock.calls.some(([type]) => type === 'spacelink:preview-scroll')).toBe(true)
   })
 })
 

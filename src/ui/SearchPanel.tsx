@@ -1,5 +1,5 @@
 /**
- * SpaceFore — full-text search.
+ * SpaceLink — full-text search.
  *
  * The query lives in the store (`searchQuery`), not in this component, so that
  * anything else can drive it: clicking a tag in the tag panel writes
@@ -15,7 +15,7 @@
  * one per shown line match — which keeps ArrowUp/ArrowDown honest about what is
  * actually on screen (a collapsed note contributes no match rows).
  *
- * Opening a line match fires a `spacefore:reveal-line` CustomEvent that the
+ * Opening a line match fires a `spacelink:reveal-line` CustomEvent that the
  * editor listens for; see {@link useReveal} for why it is fired twice.
  */
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
@@ -34,7 +34,7 @@ export const RESULT_LIMIT = 200
 /** Line matches rendered per note before the rest are summarised in the badge. */
 export const MATCHES_PER_NOTE = 5
 
-const RECENT_KEY = 'spacefore.recentSearches'
+const RECENT_KEY = 'spacelink.recentSearches'
 const RECENT_MAX = 8
 
 /* ------------------------------------------------------------------ *
@@ -195,7 +195,7 @@ function useReveal(): (path: NotePath, line: number) => void {
   return useCallback((path: NotePath, line: number): void => {
     if (typeof window === 'undefined' || typeof window.CustomEvent !== 'function') return
     const fire = (): void => {
-      window.dispatchEvent(new CustomEvent('spacefore:reveal-line', { detail: { path, line } }))
+      window.dispatchEvent(new CustomEvent('spacelink:reveal-line', { detail: { path, line } }))
     }
     fire()
     if (timer.current !== null) clearTimeout(timer.current)

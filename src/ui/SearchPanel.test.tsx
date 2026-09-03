@@ -159,11 +159,11 @@ describe('buildRows', () => {
 
 describe('loadRecentSearches', () => {
   it('survives junk in localStorage', () => {
-    localStorage.setItem('spacefore.recentSearches', 'not json')
+    localStorage.setItem('spacelink.recentSearches', 'not json')
     expect(loadRecentSearches()).toEqual([])
-    localStorage.setItem('spacefore.recentSearches', '{"a":1}')
+    localStorage.setItem('spacelink.recentSearches', '{"a":1}')
     expect(loadRecentSearches()).toEqual([])
-    localStorage.setItem('spacefore.recentSearches', '["a", 3, "", "b"]')
+    localStorage.setItem('spacelink.recentSearches', '["a", 3, "", "b"]')
     expect(loadRecentSearches()).toEqual(['a', 'b'])
   })
 })
@@ -327,14 +327,14 @@ describe('SearchPanel opening', () => {
     const listen = (event: Event): void => {
       seen.push((event as CustomEvent<{ path: string; line: number }>).detail)
     }
-    window.addEventListener('spacefore:reveal-line', listen)
+    window.addEventListener('spacelink:reveal-line', listen)
     try {
       // Source line 1 is the `# Zettelkasten` heading, line 3 the first body
       // hit; the event contract counts from 0, so they go out as 0 and 2.
       fireEvent.click(matchRows(container)[0]!)
       fireEvent.click(matchRows(container)[1]!)
     } finally {
-      window.removeEventListener('spacefore:reveal-line', listen)
+      window.removeEventListener('spacelink:reveal-line', listen)
     }
 
     expect(openPath).toHaveBeenCalledWith('Zettelkasten.md', { newTab: false })
@@ -347,11 +347,11 @@ describe('SearchPanel opening', () => {
     const { container } = render(<SearchPanel />)
 
     const listen = vi.fn()
-    window.addEventListener('spacefore:reveal-line', listen)
+    window.addEventListener('spacelink:reveal-line', listen)
     try {
       fireEvent.click(titleRows(container)[0]!)
     } finally {
-      window.removeEventListener('spacefore:reveal-line', listen)
+      window.removeEventListener('spacelink:reveal-line', listen)
     }
     expect(listen).not.toHaveBeenCalled()
   })
@@ -388,11 +388,11 @@ describe('SearchPanel keyboard', () => {
     const listen = (event: Event): void => {
       seen.push((event as CustomEvent<{ path: string; line: number }>).detail)
     }
-    window.addEventListener('spacefore:reveal-line', listen)
+    window.addEventListener('spacelink:reveal-line', listen)
     try {
       fireEvent.keyDown(input(), { key: 'Enter' })
     } finally {
-      window.removeEventListener('spacefore:reveal-line', listen)
+      window.removeEventListener('spacelink:reveal-line', listen)
     }
 
     expect(openPath).toHaveBeenCalledWith('Zettelkasten.md', { newTab: false })
@@ -447,7 +447,7 @@ describe('SearchPanel keyboard', () => {
 
 describe('SearchPanel empty states', () => {
   it('shows the hint and the recent searches while the query is empty', () => {
-    localStorage.setItem('spacefore.recentSearches', JSON.stringify(['zettel', 'tag:method']))
+    localStorage.setItem('spacelink.recentSearches', JSON.stringify(['zettel', 'tag:method']))
     seed(VAULT)
     const { container } = render(<SearchPanel />)
 
@@ -460,7 +460,7 @@ describe('SearchPanel empty states', () => {
   })
 
   it('clears the recent search list on demand', () => {
-    localStorage.setItem('spacefore.recentSearches', JSON.stringify(['zettel']))
+    localStorage.setItem('spacelink.recentSearches', JSON.stringify(['zettel']))
     seed(VAULT)
     const { container } = render(<SearchPanel />)
 

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the imperative half of the graph view.
+ * SpaceLink — the imperative half of the graph view.
  *
  * `GraphView` stays declarative (store reads, controls, counts) and hands
  * everything that has to happen at 60fps to this hook: sizing the canvas for

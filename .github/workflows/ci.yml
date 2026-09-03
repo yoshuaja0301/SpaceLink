@@ -1,0 +1,82 @@
+# What has to be true before a change lands.
+#
+# Two jobs rather than one, because they fail for different reasons and the
+# check name alone should say which: `unit` means the code is wrong, `e2e` means
+# the app is wrong. They are independent, so one failing does not hide the
+# other.
+#
+# This repository is private, where GitHub bills macOS minutes at ten times the
+# Linux rate. So the macOS job below runs only when somebody asks for it, and
+# every automatic check runs on Linux.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push supersedes the first: nobody needs the result for a commit that
+# has already been replaced, and the queue is not free.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Typecheck and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # `npm run build` typechecks first and refuses to emit on an error, so
+      # this covers the typecheck too — and proves the bundle still builds,
+      # which the unit tests alone do not.
+      - run: npm run build
+      - run: npm test
+
+  e2e:
+    name: End-to-end in a real browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Chromium only. The suites that want Firefox or WebKit say so and skip
+      # when the engine is absent, so this stays a check of the app rather than
+      # a check of how many browsers the runner downloaded.
+      - run: npx playwright install --with-deps chromium
+      # e2e/run.mjs refuses to run against a dist/ older than the source, so the
+      # build has to come first — and a failure here is the build's, not a
+      # flaky browser's.
+      - run: npm run build
+      - run: npm run e2e
+
+  macos:
+    name: The macOS app compiles
+    # Manual only, and deliberately: see the note at the top of this file. Run
+    # it from the Actions tab before touching anything under macos/.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The Swift half, typechecked against stubs — no Xcode project, no
+      # signing. Everything else about the wrapper (the project file, the
+      # resources it copies, the macOS versions its APIs need) is checked by the
+      # unit suite on Linux. This is the part that cannot be.
+      - run: bash macos/Tests/run.sh

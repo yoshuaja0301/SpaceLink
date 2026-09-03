@@ -1,5 +1,5 @@
 /**
- * SpaceFore — settings.
+ * SpaceLink — settings.
  *
  * Six grouped sections in the shared `Modal`. There is no Save button on
  * purpose: every control writes straight through `updateSettings`, which
@@ -20,7 +20,7 @@ import { formatShortcut } from './useHotkeys'
 /** Kept in step with `package.json` by hand — importing JSON would bloat the bundle. */
 const APP_VERSION = '0.1.0'
 
-const SOURCE_URL = 'https://github.com/spacefore/spacefore'
+const SOURCE_URL = 'https://github.com/spacelink/spacelink'
 
 const THEMES: { value: ThemeName; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -207,14 +207,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const switchVault = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
-    window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker'))
+    window.dispatchEvent(new CustomEvent('spacelink:open-vault-picker'))
     onClose()
   }, [onClose])
 
   const exportVault = useCallback(async () => {
     const state = useAppStore.getState()
     const { payload, skipped } = await buildExport(state)
-    const fileName = `${sanitizeFileName(state.vaultName || 'spacefore-vault')}.json`
+    const fileName = `${sanitizeFileName(state.vaultName || 'spacelink-vault')}.json`
     if (!downloadFile(fileName, JSON.stringify(payload, null, 2), 'application/json')) {
       pushToast('Downloads are not available in this browser', 'error')
       return
@@ -377,7 +377,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
         <Row
           label="Autosave delay"
-          description="How long SpaceFore waits after your last keystroke before writing."
+          description="How long SpaceLink waits after your last keystroke before writing."
           htmlFor={id('autosave')}
         >
           <input
@@ -578,7 +578,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
       {/* ----------------------------------------------------- About */}
       <Section title="About">
-        <Row label="SpaceFore" description="A local-first, plain-text knowledge base. No account, no server.">
+        <Row
+          label="SpaceLink"
+          description="A local-first, plain-text knowledge base. Your notes are Markdown files in a folder you control."
+        >
           <span className="settings-row-value">v{APP_VERSION}</span>
         </Row>
 

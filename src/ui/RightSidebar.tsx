@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the right sidebar shell.
+ * SpaceLink — the right sidebar shell.
  *
  * Four views of the note the workspace is currently showing — its backlinks,
  * its outline, its local graph, its properties — behind one tab strip, plus the
@@ -30,7 +30,7 @@ const DEFAULT_WIDTH = 300
 /** Width change per arrow-key press. */
 const KEY_STEP = 16
 
-const TAB_KEY = 'spacefore.rightSidebarTab'
+const TAB_KEY = 'spacelink.rightSidebarTab'
 
 export type RightSidebarTab = 'backlinks' | 'outline' | 'info' | 'graph'
 

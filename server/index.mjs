@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * SpaceFore sync server.
+ * SpaceLink sync server.
  *
  * Holds one vault — a folder of Markdown files — and serves both the app and a
  * small HTTP API over it, so every device you install the app on reads and
@@ -263,7 +263,7 @@ function createVault(root) {
       // A folder that went away mid-scan. There is nothing to do about it and
       // nothing is lost: the watch on the rest of the vault carries on.
       if (error?.code === 'ENOENT') return
-      process.stderr.write(`SpaceFore: stopped watching the vault (${error?.message ?? error}).\n`)
+      process.stderr.write(`SpaceLink: stopped watching the vault (${error?.message ?? error}).\n`)
       watcher.close()
     })
 
@@ -272,14 +272,14 @@ function createVault(root) {
     let queue = Promise.resolve()
     watcher.on('change', (_eventType, filename) => {
       queue = queue.then(() => announceChange(filename)).catch((error) => {
-        process.stderr.write(`SpaceFore: could not announce a change (${error?.message ?? error}).\n`)
+        process.stderr.write(`SpaceLink: could not announce a change (${error?.message ?? error}).\n`)
       })
     })
 
     try {
       stop = mode === 'recursive' ? watchRecursively(store.root, watcher) : watchEachFolder(store.root, watcher, store)
     } catch (error) {
-      process.stderr.write(`SpaceFore: could not watch the vault (${error?.message ?? error}).\n`)
+      process.stderr.write(`SpaceLink: could not watch the vault (${error?.message ?? error}).\n`)
       return null
     }
 
@@ -373,7 +373,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     try {
       await route(request, response)
     } catch (error) {
-      process.stderr.write(`SpaceFore: ${request.method} ${request.url} failed (${error?.message ?? error}).\n`)
+      process.stderr.write(`SpaceLink: ${request.method} ${request.url} failed (${error?.message ?? error}).\n`)
       if (response.headersSent) response.destroy()
       else sendJson(response, 500, { error: 'Something went wrong.' })
     }
@@ -400,10 +400,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       response.setHeader('vary', 'Origin')
       response.setHeader(
         'access-control-allow-headers',
-        'authorization, content-type, if-match, x-spacefore-client, x-spacefore-device',
+        'authorization, content-type, if-match, x-spacelink-client, x-spacelink-device',
       )
       response.setHeader('access-control-allow-methods', 'GET, PUT, POST, DELETE, OPTIONS')
-      response.setHeader('access-control-expose-headers', 'etag, x-spacefore-mtime, retry-after')
+      response.setHeader('access-control-expose-headers', 'etag, x-spacelink-mtime, retry-after')
       response.setHeader('access-control-max-age', '600')
     }
     if (request.method === 'OPTIONS') {
@@ -417,10 +417,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       return
     }
 
-    // Unauthenticated: just enough for a device to tell a SpaceFore server from
+    // Unauthenticated: just enough for a device to tell a SpaceLink server from
     // anything else at that address. It reveals nothing about the vault.
     if (url.pathname === '/api/health') {
-      sendJson(response, 200, { ok: true, service: 'spacefore' })
+      sendJson(response, 200, { ok: true, service: 'spacelink' })
       return
     }
 
@@ -432,7 +432,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     try {
       if (await handleAuth(request, response, url)) return
     } catch (error) {
-      process.stderr.write(`SpaceFore: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
+      process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
       sendJson(response, 500, { error: 'Something went wrong.' })
       return
     }
@@ -464,7 +464,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // for the caller. Anything else is Node's own, and those name the file
       // on disk — the vault's whole path — which is nobody's business.
       const known = typeof error?.status === 'number' && error instanceof Error
-      if (!known) process.stderr.write(`SpaceFore: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
+      if (!known) process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
       const body = { error: known ? error.message : 'Something went wrong.' }
       if (error instanceof VaultConflictError) body.currentHash = error.currentHash
       sendJson(response, known ? error.status : 500, body)
@@ -478,7 +478,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    */
   async function handleApi(request, response, url, context) {
     const path = url.searchParams.get('path') ?? ''
-    const client = String(request.headers['x-spacefore-client'] ?? '')
+    const client = String(request.headers['x-spacelink-client'] ?? '')
 
     if (url.pathname === '/api/vault' && request.method === 'GET') {
       sendJson(response, 200, { name: context.store.root.split(/[\\/]/).pop() || 'vault', writable: true })
@@ -542,7 +542,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
           'content-type': CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream',
           'content-length': file.body.length,
           etag: `"${file.hash}"`,
-          'x-spacefore-mtime': String(file.mtime),
+          'x-spacelink-mtime': String(file.mtime),
           'cache-control': 'no-store',
         })
         response.end(file.body)
@@ -659,7 +659,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
         return true
       }
       attempts.succeed(key)
-      const device = String(request.headers['x-spacefore-device'] ?? body.device ?? 'a device')
+      const device = String(request.headers['x-spacelink-device'] ?? body.device ?? 'a device')
       const { token: session } = await createSession({ file: accountsFile, account, device })
       forgetAccounts()
       sendJson(response, 200, {
@@ -754,7 +754,7 @@ function watchEachFolder(root, facade, store) {
     } catch (error) {
       if (error?.code === 'ENOSPC') {
         process.stderr.write(
-          `SpaceFore: too many folders to watch; changes under ${folder} will not be noticed (raise fs.inotify.max_user_watches).\n`,
+          `SpaceLink: too many folders to watch; changes under ${folder} will not be noticed (raise fs.inotify.max_user_watches).\n`,
         )
         return false
       }
@@ -1035,7 +1035,7 @@ async function main() {
     if (options.printReady) {
       process.stdout.write(
         `${JSON.stringify({
-          spacefore: 'ready',
+          spacelink: 'ready',
           url: `${scheme}://127.0.0.1:${port}/`,
           port,
           token: stored.token,
@@ -1046,7 +1046,7 @@ async function main() {
 
     const lines = [
       '',
-      '  SpaceFore sync server',
+      '  SpaceLink sync server',
       `  vault    ${server.store.root}`,
       `  token    ${stored.file}`,
       '',

@@ -1,8 +1,8 @@
-# SpaceFore
+# SpaceLink
 
 A local-first, plain-text knowledge base in the browser — in the spirit of
 [Obsidian](https://obsidian.md). Your notes are ordinary Markdown files in a
-folder you control; SpaceFore adds the connective tissue: `[[wiki-links]]`,
+folder you control; SpaceLink adds the connective tissue: `[[wiki-links]]`,
 backlinks, a live graph of your vault, instant search and a command palette.
 
 No cloud service, no telemetry. Everything runs in the tab, against a folder you
@@ -62,17 +62,17 @@ Two ways, depending on whether you want a Mac application or a browser one.
 ### As a Mac app
 
 ```bash
-open macos/SpaceFore.xcodeproj      # then ⌘R
+open macos/SpaceLink.xcodeproj      # then ⌘R
 ```
 
 ...or without opening Xcode at all:
 
 ```bash
 ./macos/build.sh --install
-open /Applications/SpaceFore.app
+open /Applications/SpaceLink.app
 ```
 
-A real `SpaceFore.app`: double-click it, choose your notes folder, done. It
+A real `SpaceLink.app`: double-click it, choose your notes folder, done. It
 starts its own server and shuts it down when you quit; there is no terminal to
 keep open. Needs Xcode's command line tools (`xcode-select --install`) and Node.
 
@@ -84,15 +84,15 @@ build it.
 
 ### As a web app
 
-There is no installer to download. SpaceFore is built from source in about
+There is no installer to download. SpaceLink is built from source in about
 fifteen seconds, and then installs itself from the browser — it is a progressive
 web app, so the "install" is your browser's, not a package manager's.
 
 You need [Node.js](https://nodejs.org) 20 or newer. Nothing else.
 
 ```bash
-git clone <this repository> spacefore
-cd spacefore
+git clone <this repository> spacelink
+cd spacelink
 npm install
 npm start -- --vault ~/Notes
 ```
@@ -143,9 +143,29 @@ npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1650 unit and component tests
+npm test         # vitest — 1674 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs the same two commands on every pull request:
+`npm run build` (which typechecks first) with `npm test`, and the end-to-end
+suites in Chromium. Both on Linux.
+
+A third job typechecks the Swift half of the macOS wrapper, and runs **only when
+asked for** from the Actions tab. That is deliberate rather than an oversight:
+this repository is private, where GitHub bills a macOS runner at ten times the
+Linux rate, and the rest of the wrapper — the Xcode project, the resources it
+copies, the macOS versions its APIs need — is already checked by the unit suite
+on Linux.
+
+`build/ci.test.mjs` checks the workflow against the project it is meant to
+check: that every `npm run` in it names a script that still exists, that the
+build comes before the suites that refuse a stale `dist/`, that it installs from
+the lockfile, that it asks for no write permission, and that the expensive job
+is still gated. A workflow is the one file nothing runs locally, so it is also
+the one that rots without anybody noticing.
 
 ### End-to-end tests
 
@@ -278,6 +298,17 @@ src/
   ui/                   editor, preview, graph, explorer, panels, palette, shell
   styles/               design tokens and theme, one dark-first system
 ```
+
+The app was called **SpaceFore** until it was renamed. Everything visible moved;
+two storage addresses deliberately did not. The browser vault's IndexedDB
+database is still named `spacefore`, because a database name is an address
+rather than a brand and renaming it would point the app at an empty one while
+every note stayed in the old. Settings kept in `localStorage` *did* move, and
+`src/core/renamedStorage.ts` copies the old keys across on first boot, so a
+reader keeps their theme, their starred notes, their pane sizes and the server
+they were signed in to. On the server side, `~/.spacefore` is still read when
+`~/.spacelink` does not exist, so an existing access token and accounts file
+survive.
 
 ```
 server/                 the sync server: one folder per account, an HTTP API,

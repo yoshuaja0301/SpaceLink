@@ -1,5 +1,5 @@
 /**
- * SpaceFore — right-click menu state.
+ * SpaceLink — right-click menu state.
  *
  * The hook owns nothing but "is a menu open, where, and with which items".
  * Rendering, viewport flipping and keyboard handling live in `ContextMenu`, so

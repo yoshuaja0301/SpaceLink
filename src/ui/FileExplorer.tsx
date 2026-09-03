@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the vault file tree.
+ * SpaceLink — the vault file tree.
  *
  * The store keeps a flat map of paths; this component is the only place that
  * turns those paths into a folder hierarchy. The tree is rebuilt behind a memo
@@ -72,8 +72,8 @@ export interface ExplorerFolderNode {
 
 export type ExplorerNode = ExplorerFileNode | ExplorerFolderNode
 
-const OPEN_STORAGE_KEY = 'spacefore.explorer.open'
-const SORT_STORAGE_KEY = 'spacefore.explorer.sort'
+const OPEN_STORAGE_KEY = 'spacelink.explorer.open'
+const SORT_STORAGE_KEY = 'spacelink.explorer.sort'
 
 /**
  * Above this many visible rows the tree renders as a window over the flat row

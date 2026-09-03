@@ -1,5 +1,5 @@
 /**
- * SpaceFore — first-run / switch-vault screen.
+ * SpaceLink — first-run / switch-vault screen.
  *
  * Three ways in, in the order most people want them:
  *
@@ -263,7 +263,7 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
       <div>
         <h1 id={titleId}>Open a vault</h1>
         <p>
-          A vault is just a folder of Markdown files. Pick where SpaceFore should keep yours — you can switch at any
+          A vault is just a folder of Markdown files. Pick where SpaceLink should keep yours — you can switch at any
           time from the status bar.
         </p>
       </div>

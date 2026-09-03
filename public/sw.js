@@ -1,5 +1,5 @@
 /**
- * Service worker for SpaceFore.
+ * Service worker for SpaceLink.
  *
  * Deliberately small, because a service worker that guesses wrong is worse than
  * none: it can serve a stale app forever, or hand back yesterday's note as if
@@ -20,14 +20,14 @@
  */
 
 /** Written by `build/precache.mjs` at build time; see the note above. */
-const PRECACHE = self.__SPACEFORE_PRECACHE__ ?? ['./']
+const PRECACHE = self.__SPACELINK_PRECACHE__ ?? ['./']
 
 /*
  * Named after the bytes it holds, so `activate` retires the previous build
  * exactly and there is no version anybody has to remember to bump. A build
  * without the plugin gets 'dev' and behaves as it always did.
  */
-const CACHE = `spacefore-${self.__SPACEFORE_BUILD__ ?? 'dev'}`
+const CACHE = `spacelink-${self.__SPACELINK_BUILD__ ?? 'dev'}`
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -41,7 +41,7 @@ self.addEventListener('install', (event) => {
         PRECACHE.map((url) => cache.add(new Request(url, { cache: 'reload' }))),
       )
       const failed = results.filter((result) => result.status === 'rejected').length
-      if (failed) console.warn(`SpaceFore: ${failed} of ${PRECACHE.length} files did not precache`)
+      if (failed) console.warn(`SpaceLink: ${failed} of ${PRECACHE.length} files did not precache`)
 
       // Take over as soon as this worker is ready rather than waiting for every
       // tab to close, so a fix is never one reload away from arriving.

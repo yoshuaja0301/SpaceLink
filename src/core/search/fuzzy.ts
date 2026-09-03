@@ -1,5 +1,5 @@
 /**
- * SpaceFore — fuzzy subsequence matching.
+ * SpaceLink — fuzzy subsequence matching.
  *
  * `fuzzyMatch` answers one question: can the characters of `query` be found in
  * `target`, in order, and how good does that particular arrangement look to a

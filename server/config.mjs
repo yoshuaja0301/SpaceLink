@@ -8,11 +8,29 @@
  * the synced folder would travel to every device it was meant to protect.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
-const CONFIG_DIRECTORY = join(homedir(), '.spacefore')
+/**
+ * Where the token and the accounts live.
+ *
+ * `~/.spacelink` now, `~/.spacefore` before the app was renamed. The old folder
+ * is used when it is the only one there, because the alternative is silent: a
+ * server that started against a fresh directory would mint a new token and find
+ * no accounts, and every paired device would be turned away with nothing
+ * explaining why. Once `~/.spacelink` exists it wins, so nothing is ever read
+ * from two places at once.
+ */
+function configDirectory() {
+  const current = join(homedir(), '.spacelink')
+  const previous = join(homedir(), '.spacefore')
+  if (existsSync(current)) return current
+  return existsSync(previous) ? previous : current
+}
+
+const CONFIG_DIRECTORY = configDirectory()
 const CONFIG_FILE = join(CONFIG_DIRECTORY, 'server.json')
 /** Accounts and their sessions. Beside the token, and just as private. */
 const ACCOUNTS_FILE = join(CONFIG_DIRECTORY, 'accounts.json')
@@ -172,7 +190,7 @@ export function parseArgs(argv) {
 }
 
 export const HELP = `
-SpaceFore sync server — one vault, one owner, any number of devices.
+SpaceLink sync server — one vault, one owner, any number of devices.
 
   node server/index.mjs --vault ~/Notes [options]
 
@@ -182,11 +200,11 @@ Options
                     free one, which it then reports on the ready line below.
   --host <address>  Address to bind (default 127.0.0.1 — loopback only).
                     Use 0.0.0.0 to reach it from other devices on your network.
-  --token <value>   Access token. Defaults to one stored in ~/.spacefore/server.json.
+  --token <value>   Access token. Defaults to one stored in ~/.spacelink/server.json.
   --tls-cert <file> Certificate for HTTPS. Usually unnecessary: a tunnel
   --tls-key <file>  (Tailscale, Cloudflare) terminates TLS for you.
   --print-ready     Print one line of JSON on stdout once the server is
-                    listening: {"spacefore":"ready","url":…,"port":…,"token":…,
+                    listening: {"spacelink":"ready","url":…,"port":…,"token":…,
                     "vault":…}. For a program launching this server — the macOS
                     app does — so it does not have to read the banner meant for
                     people.
@@ -202,7 +220,7 @@ Accounts — sign in from any device instead of pasting a token
                           devices are signed in.
   --password <value>      Supply the password instead of being asked, for a
                           script. It will be visible in your shell history.
-  --accounts <file>       Where accounts live (default ~/.spacefore/accounts.json).
+  --accounts <file>       Where accounts live (default ~/.spacelink/accounts.json).
 
 See docs/SERVER.md for reaching it from other devices, and for keeping it
 running in the background on a Mac.

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the far-left icon rail.
+ * SpaceLink — the far-left icon rail.
  *
  * Three groups, separated by rules: the sidebar panel switches at the top,
  * then the "make something" actions, then theme and settings pinned to the

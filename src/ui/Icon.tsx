@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the shared icon set.
+ * SpaceLink — the shared icon set.
  *
  * One hand-drawn 24x24 stroke geometry per name, scaled by the `size` prop.
  * Every icon inherits `currentColor`, so colour is decided by the surrounding

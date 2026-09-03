@@ -1,5 +1,5 @@
 /**
- * SpaceFore — full-text search and the quick switcher.
+ * SpaceLink — full-text search and the quick switcher.
  *
  * ## Query language
  *

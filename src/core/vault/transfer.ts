@@ -89,7 +89,7 @@ export interface BuiltExport {
  */
 export async function buildExport(source: ExportSource): Promise<BuiltExport> {
   const payload: VaultExport = {
-    vault: source.vaultName || 'SpaceFore',
+    vault: source.vaultName || 'SpaceLink',
     exportedAt: new Date().toISOString(),
     notes: Object.fromEntries([...source.notes].map(([path, note]) => [path, note.content])),
   }

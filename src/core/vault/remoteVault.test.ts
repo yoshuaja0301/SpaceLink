@@ -42,7 +42,7 @@ let origin: string
 let stopWatching: AbortController
 
 beforeAll(async () => {
-  vault = await mkdtemp(join(tmpdir(), 'spacefore-remote-'))
+  vault = await mkdtemp(join(tmpdir(), 'spacelink-remote-'))
   const sync = createSyncServer({ vault, token: TOKEN, distDir: join(vault, '__no_dist__') })
   listener = createServer((request, response) => void sync.handle(request, response))
   await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()))
@@ -122,7 +122,7 @@ describe('signing in', () => {
   let accountOrigin: string
 
   beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), 'spacefore-signin-'))
+    home = await mkdtemp(join(tmpdir(), 'spacelink-signin-'))
     accountVault = join(home, 'Notebook')
     await mkdir(accountVault, { recursive: true })
     await writeFile(join(accountVault, 'Only Mine.md'), '# Only mine\n')
@@ -175,7 +175,7 @@ describe('signing in', () => {
   })
 
   it('does not read a router’s 404 out loud to someone typing a password', async () => {
-    // A SpaceFore server from before accounts existed has no such route at
+    // A SpaceLink server from before accounts existed has no such route at
     // all, and answers the way it answers any unknown address. Repeating that
     // back — "No such endpoint: POST /api/auth/login" — tells the person
     // nothing they can act on, and reads like the app is broken.
@@ -510,7 +510,7 @@ describe('a rename announced by the change stream', () => {
       // Another device renames Home.md through the API, and the stream says so.
       await fetch(`${origin}/api/rename`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'x-spacefore-client': 'other' },
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'x-spacelink-client': 'other' },
         body: JSON.stringify({ from: 'Home.md', to: 'Start.md' }),
       })
       const announce = streams[0]?.onmessage

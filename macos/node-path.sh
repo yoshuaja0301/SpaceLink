@@ -7,7 +7,7 @@
 #
 # bash 3.2 — the one macOS ships — so: no arrays beyond globs, no mapfile, no
 # ${var,,}. Prepending in ascending order leaves the highest version first.
-spacefore_add_node_paths() {
+spacelink_add_node_paths() {
   local dir
   for dir in /opt/local/bin /usr/local/bin /opt/homebrew/bin; do
     if [ -d "$dir" ]; then PATH="$dir:$PATH"; fi

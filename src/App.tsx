@@ -1,5 +1,5 @@
 /**
- * SpaceFore — application shell.
+ * SpaceLink — application shell.
  *
  * Owns first-run vault selection, global keyboard handling and the overall
  * layout: ribbon | sidebar | workspace | right sidebar, with the status bar
@@ -160,11 +160,11 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const open = (): void => setPickerOpen(true)
     const settings = (): void => setSettingsOpen(true)
-    window.addEventListener('spacefore:open-vault-picker', open)
-    window.addEventListener('spacefore:open-settings', settings)
+    window.addEventListener('spacelink:open-vault-picker', open)
+    window.addEventListener('spacelink:open-settings', settings)
     return () => {
-      window.removeEventListener('spacefore:open-vault-picker', open)
-      window.removeEventListener('spacefore:open-settings', settings)
+      window.removeEventListener('spacelink:open-vault-picker', open)
+      window.removeEventListener('spacelink:open-settings', settings)
     }
   }, [])
 

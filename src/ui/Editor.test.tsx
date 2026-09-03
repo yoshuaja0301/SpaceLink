@@ -131,14 +131,14 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('Editor — spacefore:reveal-line', () => {
+describe('Editor — spacelink:reveal-line', () => {
   it('puts the caret on the requested line and flashes it', () => {
     const path = freshPath()
     seed({ [path]: lines })
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
 
-    dispatchWindow('spacefore:reveal-line', { path, line: 3 })
+    dispatchWindow('spacelink:reveal-line', { path, line: 3 })
 
     // 0-based line 3 is `four`.
     expect(cm.state.selection.main.head).toBe(cm.state.doc.line(4).from)
@@ -152,7 +152,7 @@ describe('Editor — spacefore:reveal-line', () => {
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
 
-    dispatchWindow('spacefore:reveal-line', { path: other, line: 3 })
+    dispatchWindow('spacelink:reveal-line', { path: other, line: 3 })
 
     expect(cm.state.selection.main.head).toBe(0)
     expect(cm.dom.querySelectorAll('.cm-flash-line')).toHaveLength(0)
@@ -165,10 +165,10 @@ describe('Editor — spacefore:reveal-line', () => {
     const { container, rerender } = render(<Editor path={first} paneId={PANE_ID} />)
     rerender(<Editor path={second} paneId={PANE_ID} />)
 
-    dispatchWindow('spacefore:reveal-line', { path: first, line: 2 })
+    dispatchWindow('spacelink:reveal-line', { path: first, line: 2 })
     expect(view(container).state.selection.main.head).toBe(0)
 
-    dispatchWindow('spacefore:reveal-line', { path: second, line: 2 })
+    dispatchWindow('spacelink:reveal-line', { path: second, line: 2 })
     expect(view(container).state.selection.main.head).toBe(view(container).state.doc.line(3).from)
   })
 
@@ -179,7 +179,7 @@ describe('Editor — spacefore:reveal-line', () => {
     const cm = view(container)
 
     vi.useFakeTimers()
-    dispatchWindow('spacefore:reveal-line', { path, line: 1 })
+    dispatchWindow('spacelink:reveal-line', { path, line: 1 })
     expect(cm.dom.querySelectorAll('.cm-flash-line')).toHaveLength(1)
 
     act(() => {
@@ -194,7 +194,7 @@ describe('Editor — spacefore:reveal-line', () => {
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
 
-    expect(() => dispatchWindow('spacefore:reveal-line', { path, line: 900 })).not.toThrow()
+    expect(() => dispatchWindow('spacelink:reveal-line', { path, line: 900 })).not.toThrow()
     expect(cm.state.selection.main.head).toBe(cm.state.doc.line(cm.state.doc.lines).from)
   })
 
@@ -204,16 +204,16 @@ describe('Editor — spacefore:reveal-line', () => {
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
 
-    dispatchWindow('spacefore:reveal-line', null)
-    dispatchWindow('spacefore:reveal-line', { path })
-    dispatchWindow('spacefore:reveal-line', { path, line: 'three' })
+    dispatchWindow('spacelink:reveal-line', null)
+    dispatchWindow('spacelink:reveal-line', { path })
+    dispatchWindow('spacelink:reveal-line', { path, line: 'three' })
 
     expect(cm.state.selection.main.head).toBe(0)
     expect(cm.dom.querySelectorAll('.cm-flash-line')).toHaveLength(0)
   })
 })
 
-describe('Editor — spacefore:reveal-heading', () => {
+describe('Editor — spacelink:reveal-heading', () => {
   it('scrolls to the heading line and ignores other notes', () => {
     const path = freshPath()
     const other = freshPath()
@@ -221,20 +221,20 @@ describe('Editor — spacefore:reveal-heading', () => {
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
 
-    dispatchWindow('spacefore:reveal-heading', { path: other, slug: 'five', line: 4 })
+    dispatchWindow('spacelink:reveal-heading', { path: other, slug: 'five', line: 4 })
     expect(cm.state.selection.main.head).toBe(0)
 
-    dispatchWindow('spacefore:reveal-heading', { path, slug: 'five', line: 4 })
+    dispatchWindow('spacelink:reveal-heading', { path, slug: 'five', line: 4 })
     expect(cm.state.selection.main.head).toBe(cm.state.doc.line(5).from)
     expect([...cm.dom.querySelectorAll('.cm-flash-line')].map((el) => el.textContent)).toEqual(['five'])
   })
 })
 
-describe('Editor — spacefore:editor-scroll', () => {
+describe('Editor — spacelink:editor-scroll', () => {
   it('emits one clamped ratio per frame for its own pane', async () => {
     const path = freshPath()
     seed({ [path]: lines })
-    const emitted = listen('spacefore:editor-scroll')
+    const emitted = listen('spacelink:editor-scroll')
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
     stubScroller(cm.scrollDOM, { scrollHeight: 1000, clientHeight: 200 })
@@ -255,7 +255,7 @@ describe('Editor — spacefore:editor-scroll', () => {
   it('reports 0 rather than a division by zero when nothing can scroll', async () => {
     const path = freshPath()
     seed({ [path]: lines })
-    const emitted = listen('spacefore:editor-scroll')
+    const emitted = listen('spacelink:editor-scroll')
     const { container } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
     stubScroller(cm.scrollDOM, { scrollHeight: 200, clientHeight: 200 })
@@ -275,13 +275,13 @@ describe('Editor — teardown', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const added = vi.spyOn(window, 'addEventListener')
     const removed = vi.spyOn(window, 'removeEventListener')
-    const emitted = listen('spacefore:editor-scroll')
+    const emitted = listen('spacelink:editor-scroll')
     const { container, unmount } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
     stubScroller(cm.scrollDOM, { scrollHeight: 1000, clientHeight: 200 })
     const notesBefore = useAppStore.getState().notes
-    const reveals = added.mock.calls.filter(([type]) => type.startsWith('spacefore:reveal'))
-    expect(reveals.map(([type]) => type)).toEqual(['spacefore:reveal-line', 'spacefore:reveal-heading'])
+    const reveals = added.mock.calls.filter(([type]) => type.startsWith('spacelink:reveal'))
+    expect(reveals.map(([type]) => type)).toEqual(['spacelink:reveal-line', 'spacelink:reveal-heading'])
 
     unmount()
 
@@ -289,8 +289,8 @@ describe('Editor — teardown', () => {
     for (const [type, handler] of reveals) expect(removed).toHaveBeenCalledWith(type, handler)
 
     expect(() => {
-      dispatchWindow('spacefore:reveal-line', { path, line: 2 })
-      dispatchWindow('spacefore:reveal-heading', { path, slug: 'three', line: 2 })
+      dispatchWindow('spacelink:reveal-line', { path, line: 2 })
+      dispatchWindow('spacelink:reveal-heading', { path, slug: 'three', line: 2 })
       scrollTo(cm, 400)
     }).not.toThrow()
     await frame()
@@ -304,7 +304,7 @@ describe('Editor — teardown', () => {
   it('cancels a scroll emit that was still queued when it unmounted', async () => {
     const path = freshPath()
     seed({ [path]: lines })
-    const emitted = listen('spacefore:editor-scroll')
+    const emitted = listen('spacelink:editor-scroll')
     const { container, unmount } = render(<Editor path={path} paneId={PANE_ID} />)
     const cm = view(container)
     stubScroller(cm.scrollDOM, { scrollHeight: 1000, clientHeight: 200 })
@@ -319,7 +319,7 @@ describe('Editor — teardown', () => {
   it('survives StrictMode double mounting with exactly one live editor', async () => {
     const path = freshPath()
     seed({ [path]: lines })
-    const emitted = listen('spacefore:editor-scroll')
+    const emitted = listen('spacelink:editor-scroll')
     const { container } = render(
       <StrictMode>
         <Editor path={path} paneId={PANE_ID} />
@@ -332,7 +332,7 @@ describe('Editor — teardown', () => {
     await frame()
     stubScroller(cm.scrollDOM, { scrollHeight: 1000, clientHeight: 200 })
 
-    dispatchWindow('spacefore:reveal-line', { path, line: 2 })
+    dispatchWindow('spacelink:reveal-line', { path, line: 2 })
     expect(cm.state.selection.main.head).toBe(cm.state.doc.line(3).from)
 
     scrollTo(cm, 200)

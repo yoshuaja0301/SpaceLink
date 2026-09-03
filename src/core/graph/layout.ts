@@ -1,5 +1,5 @@
 /**
- * SpaceFore — force-directed layout for the graph view.
+ * SpaceLink — force-directed layout for the graph view.
  *
  * A small, dependency-free simulation. One tick applies, in order:
  *

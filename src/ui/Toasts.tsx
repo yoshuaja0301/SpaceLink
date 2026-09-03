@@ -1,5 +1,5 @@
 /**
- * SpaceFore — transient notifications.
+ * SpaceLink — transient notifications.
  *
  * The store owns the list and drops each toast four seconds after it was
  * pushed. This component only decides what a toast *looks* like and gives a

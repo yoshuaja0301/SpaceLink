@@ -36,7 +36,7 @@ interface RemoteFile {
   isMarkdown: boolean
 }
 
-const DEVICE_KEY = 'spacefore.device'
+const DEVICE_KEY = 'spacelink.device'
 /** How long to wait before reconnecting a dropped change stream. */
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 30_000
@@ -116,10 +116,10 @@ export async function probeServer(
   } catch {
     return { ok: false, error: `Could not reach ${origin}. Is the server running, and is this device allowed to see it?` }
   }
-  if (!health.ok) return { ok: false, error: `${origin} answered ${health.status}. That does not look like a SpaceFore server.` }
+  if (!health.ok) return { ok: false, error: `${origin} answered ${health.status}. That does not look like a SpaceLink server.` }
   const service = (await health.json().catch(() => null)) as { service?: string } | null
-  if (service?.service !== 'spacefore') {
-    return { ok: false, error: `Something is running at ${origin}, but it is not a SpaceFore server.` }
+  if (service?.service !== 'spacelink') {
+    return { ok: false, error: `Something is running at ${origin}, but it is not a SpaceLink server.` }
   }
 
   const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` } })
@@ -174,7 +174,7 @@ export async function signIn(
   try {
     response = await fetch(`${origin}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-spacefore-device': describeDevice() },
+      headers: { 'content-type': 'application/json', 'x-spacelink-device': describeDevice() },
       body: JSON.stringify({ email: email.trim(), password }),
     })
   } catch {
@@ -265,7 +265,7 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
 
   const headers = (extra: Record<string, string> = {}): Record<string, string> => ({
     authorization: `Bearer ${token}`,
-    'x-spacefore-client': device,
+    'x-spacelink-client': device,
     ...extra,
   })
 

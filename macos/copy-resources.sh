@@ -6,10 +6,10 @@
 #   ./macos/copy-resources.sh <Resources directory>
 #
 # Both ways of building the app call this — `build.sh`, and the script phase in
-# SpaceFore.xcodeproj — so there is one description of what goes into the bundle
+# SpaceLink.xcodeproj — so there is one description of what goes into the bundle
 # rather than two that drift apart.
 #
-# `SpaceForeApp.swift` looks for `server/index.mjs` and expects `dist/` beside
+# `SpaceLinkApp.swift` looks for `server/index.mjs` and expects `dist/` beside
 # it, because the server resolves `dist/` relative to its own file. Those two
 # names and their arrangement are the contract; macos/pbxproj.test.mjs checks it
 # from the other side.
@@ -30,7 +30,7 @@ REPO="$(cd "$HERE/.." && pwd)"
 # to find them. node-path.sh knows where all of them keep Node.
 # shellcheck source=node-path.sh
 . "$HERE/node-path.sh"
-spacefore_add_node_paths
+spacelink_add_node_paths
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "error: npm was not found. This build ran with almost no PATH (Xcode's script phases" >&2
@@ -59,14 +59,14 @@ rm -f "$RESOURCES/server/"*.test.mjs
 # format, and a file iconutil does not recognise is a reason for it to refuse
 # the whole set — which shipped the app with a blank icon.
 if command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
-  ICONSET="$(mktemp -d)/SpaceFore.iconset"
+  ICONSET="$(mktemp -d)/SpaceLink.iconset"
   mkdir -p "$ICONSET"
   for size in 16 32 128 256 512; do
     sips -z "$size" "$size" "$REPO/public/icon-512.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
     double=$((size * 2))
     sips -z "$double" "$double" "$REPO/public/icon-512.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
   done
-  iconutil -c icns "$ICONSET" -o "$RESOURCES/SpaceFore.icns"
+  iconutil -c icns "$ICONSET" -o "$RESOURCES/SpaceLink.icns"
   rm -rf "$(dirname "$ICONSET")"
 fi
 

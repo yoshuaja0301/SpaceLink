@@ -11,7 +11,7 @@ import path from 'node:path'
 import { chromium, firefox, webkit } from 'playwright'
 
 /** Where the app under test is served. `npm run e2e` sets this. */
-export const BASE_URL = process.env.SPACEFORE_E2E_URL ?? 'http://localhost:4173/'
+export const BASE_URL = process.env.SPACELINK_E2E_URL ?? 'http://localhost:4173/'
 
 /**
  * Chromium comes from Playwright's own download unless the machine has put one

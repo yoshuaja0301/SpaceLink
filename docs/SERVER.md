@@ -1,4 +1,4 @@
-# Running SpaceFore as a sync server
+# Running SpaceLink as a sync server
 
 One machine holds your notes. Every device you own opens that machine's address,
 installs the app, and reads and writes the same folder.
@@ -30,9 +30,9 @@ npm run server -- --vault ~/Notes
 It prints something like:
 
 ```
-  SpaceFore sync server
+  SpaceLink sync server
   vault    /Users/you/Notes
-  token    /Users/you/.spacefore/server.json
+  token    /Users/you/.spacelink/server.json
 
   this Mac       http://localhost:4899/
   (bound to loopback — pass --host 0.0.0.0 to reach it from other devices)
@@ -181,7 +181,7 @@ surface.
 | `--set-password <email>` | change a password — every device signed in on that account is signed out |
 | `--list-accounts` | who exists, where their notes are, and which devices are signed in |
 | `--password <value>` | give the password instead of being asked, for a script. It lands in your shell history |
-| `--accounts <file>` | where accounts live (default `~/.spacefore/accounts.json`) |
+| `--accounts <file>` | where accounts live (default `~/.spacelink/accounts.json`) |
 
 `--add-account` insists on `--vault` rather than defaulting it: a default would
 write whichever folder you happened to be standing in into the account record,
@@ -190,7 +190,7 @@ permanently.
 ```
 $ npm run server -- --list-accounts
 
-  Accounts in /Users/you/.spacefore/accounts.json
+  Accounts in /Users/you/.spacelink/accounts.json
 
     you@example.com
       notes  /Users/you/Notes
@@ -220,7 +220,7 @@ write by one is not announced to the other.
 
 ### What is stored, and what is not
 
-`~/.spacefore/accounts.json` is written owner-only (`0600`) and holds:
+`~/.spacelink/accounts.json` is written owner-only (`0600`) and holds:
 
 - the email, and the folder that account's notes live in;
 - the password as a salted **scrypt** hash — 32 MiB of memory per attempt, which
@@ -274,7 +274,7 @@ device.
 
 ### On the Mac that holds the notes, there is an app
 
-`./macos/build.sh --install` builds `SpaceFore.app`, which starts a server like
+`./macos/build.sh --install` builds `SpaceLink.app`, which starts a server like
 this one against a folder you pick and shows it in its own window. It serves
 loopback only, so it is for that machine alone — the server described here is
 still what your other devices connect to. See [../macos/README.md](../macos/README.md).
@@ -283,7 +283,7 @@ still what your other devices connect to. See [../macos/README.md](../macos/READ
 
 Browsers only treat a page as an app — and only run a service worker for it — on
 what they call a secure context: `https://`, or `http://localhost`. That is not
-a SpaceFore rule, and there is no way around it.
+a SpaceLink rule, and there is no way around it.
 
 What that means in practice, measured rather than assumed:
 
@@ -348,8 +348,8 @@ matter, and treat the quick tunnel as a temporary measure.
 ## Keeping it running
 
 To have it start with the Mac and come back after a crash, save this as
-`~/Library/LaunchAgents/com.spacefore.server.plist` — adjusting both paths — and
-run `launchctl load ~/Library/LaunchAgents/com.spacefore.server.plist`.
+`~/Library/LaunchAgents/com.spacelink.server.plist` — adjusting both paths — and
+run `launchctl load ~/Library/LaunchAgents/com.spacelink.server.plist`.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -357,18 +357,18 @@ run `launchctl load ~/Library/LaunchAgents/com.spacefore.server.plist`.
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.spacefore.server</string>
+  <key>Label</key><string>com.spacelink.server</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Users/you/SpaceFore/server/index.mjs</string>
+    <string>/Users/you/SpaceLink/server/index.mjs</string>
     <string>--vault</string><string>/Users/you/Notes</string>
     <string>--host</string><string>0.0.0.0</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/spacefore.log</string>
-  <key>StandardErrorPath</key><string>/tmp/spacefore.log</string>
+  <key>StandardOutPath</key><string>/tmp/spacelink.log</string>
+  <key>StandardErrorPath</key><string>/tmp/spacelink.log</string>
 </dict>
 </plist>
 ```
@@ -409,7 +409,7 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
 
 - **Two credentials open the API, and nothing else does.** The access token is
   256 bits of random data, generated on first run and kept in
-  `~/.spacefore/server.json` with owner-only permissions. An account's password
+  `~/.spacelink/server.json` with owner-only permissions. An account's password
   is checked against a salted scrypt hash and exchanged for a per-device session
   that expires after 30 days. Treat both like passwords.
 - **Whichever it is, it is stored on the device**, in the browser's local
@@ -420,7 +420,7 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
 - **An account reaches its own folder and no other.** Not in the listing, not by
   path, and not through the change feed.
 - **Only `/api/health` and `/api/auth/login` are open**, and health answers
-  nothing but "yes, this is a SpaceFore server" — no vault name, no file list.
+  nothing but "yes, this is a SpaceLink server" — no vault name, no file list.
   A refused login says the same thing whether or not the address has an account,
   and takes the same time to say it: an address nobody has still pays for a full
   hash, so the delay cannot be read as an answer either.
@@ -429,7 +429,7 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
 - **Plain HTTP on a local network is readable by anything else on that network.**
   For a home Wi-Fi that is usually acceptable; on a café or office network it is
   not. Both tunnel options above give you HTTPS.
-- **Rotate the token** by deleting `~/.spacefore/server.json` and restarting;
+- **Rotate the token** by deleting `~/.spacelink/server.json` and restarting;
   **change a password** with `--set-password`. Either signs every device out,
   which is exactly what you want if one has been lost.
 - **Hidden files and folders, `node_modules`, and anything behind a symlink are
@@ -447,8 +447,11 @@ The vault is a folder of Markdown files. Time Machine already covers it. So does
 folder fresh, so a file restored or changed by something else shows up on every
 device within moments.
 
-The server itself holds no state worth backing up beyond `~/.spacefore` — the
-token, and the accounts file if you made accounts. Losing that file loses the
+The server itself holds no state worth backing up beyond `~/.spacelink` — the
+token, and the accounts file if you made accounts. If you ran this server when
+it was called SpaceFore, `~/.spacefore` is still read when it is the only one
+there, so the token and the accounts survive the rename; back up whichever of
+the two you have. Losing that file loses the
 passwords, not the notes: the folders are still there, and `--add-account`
 against the same folder puts the account back.
 
@@ -456,13 +459,18 @@ against the same folder puts the account back.
 
 ## If something is wrong
 
+**Every device is suddenly turned away after the rename to SpaceLink.** It
+should not happen — `~/.spacefore` is read when `~/.spacelink` does not exist —
+but if both are there, the new one wins and holds a different token. Move the
+old files across (`mv ~/.spacefore/*.json ~/.spacelink/`) and restart.
+
 **A device says it cannot reach the server.** Check the server is running, that
 it was started with `--host 0.0.0.0` if the device is not the same machine, and
 that macOS is not blocking incoming connections (*System Settings → Network →
 Firewall*).
 
 **"That token was not accepted."** Copy it again from the server's output. If you
-have deleted `~/.spacefore/server.json` at some point, the token changed and
+have deleted `~/.spacelink/server.json` at some point, the token changed and
 every device needs pairing again.
 
 **"That sign-in is no longer valid."** The session expired, or somebody ran

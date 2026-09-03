@@ -139,7 +139,7 @@ final class SyncServer {
     ///
     /// Generated here and handed to the server, so it lives in memory and in
     /// the page the app opened, and nowhere on disk. Without one the server
-    /// would create and reuse `~/.spacefore/server.json` — the token of the
+    /// would create and reuse `~/.spacelink/server.json` — the token of the
     /// sync server a person runs by hand, which this app is not.
     static func freshToken() -> String {
         var generator = SystemRandomNumberGenerator()

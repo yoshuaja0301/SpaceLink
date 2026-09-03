@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the pane area.
+ * SpaceLink — the pane area.
  *
  * Renders every open pane side by side with a draggable splitter between them,
  * routes each pane's active tab to the view that can render it, and keeps the
@@ -7,7 +7,7 @@
  *
  * Pane widths live in component state (not the store): they are a property of
  * this browser window, are persisted to `localStorage` under
- * `spacefore.paneSizes`, and change on every mouse move during a drag — which
+ * `spacelink.paneSizes`, and change on every mouse move during a drag — which
  * is exactly the kind of churn the app store should be kept away from.
  */
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
@@ -21,7 +21,7 @@ import { SearchPanel } from './SearchPanel'
 import { TabBar } from './TabBar'
 import { push as pushHistory, rename as renameHistory, reset as resetHistory } from './paneHistory'
 
-export const PANE_SIZES_KEY = 'spacefore.paneSizes'
+export const PANE_SIZES_KEY = 'spacelink.paneSizes'
 /** No pane may be squeezed below this, in px. */
 export const MIN_PANE_WIDTH = 240
 /** How far one arrow-key press moves a splitter, in px. */

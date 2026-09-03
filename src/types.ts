@@ -1,5 +1,5 @@
 /**
- * SpaceFore — core domain contracts.
+ * SpaceLink — core domain contracts.
  *
  * Every module in `src/core`, `src/state` and `src/ui` is written against the
  * types in this file. Treat it as the single source of truth: if a shape needs

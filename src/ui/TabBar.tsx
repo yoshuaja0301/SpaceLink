@@ -1,5 +1,5 @@
 /**
- * SpaceFore — the tab strip at the top of a pane.
+ * SpaceLink — the tab strip at the top of a pane.
  *
  * One instance per pane. It owns the tab affordances people expect from an
  * editor: horizontal overflow, middle-click close, drag to reorder (or to move

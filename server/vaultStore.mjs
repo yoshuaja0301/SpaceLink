@@ -14,10 +14,21 @@ import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 /** Prefix for the scratch file an atomic write moves into place. */
-export const TEMP_PREFIX = '.spacefore-tmp-'
+export const TEMP_PREFIX = '.spacelink-tmp-'
 
 /** Directories never walked, watched, written to, or served. */
-const SKIP_DIRECTORIES = new Set(['.git', '.obsidian', '.spacefore', 'node_modules', '.trash', '.DS_Store'])
+// `.spacefore` is the old name of this app's own folder, kept beside the new
+// one: a vault that has been synced before may still hold it, and a folder that
+// stopped being skipped would start being served as notes.
+const SKIP_DIRECTORIES = new Set([
+  '.git',
+  '.obsidian',
+  '.spacelink',
+  '.spacefore',
+  'node_modules',
+  '.trash',
+  '.DS_Store',
+])
 
 /** @typedef {{ path: string, size: number, mtime: number, hash: string, isMarkdown: boolean }} VaultEntry */
 

@@ -1,4 +1,4 @@
-# SpaceFore.app
+# SpaceLink.app
 
 A real Mac application: double-click it, choose the folder your notes live in,
 and there they are. No terminal, no browser tab, no `npm` anything after the
@@ -7,12 +7,12 @@ first build.
 Two ways to build it, which produce the same app:
 
 ```bash
-open macos/SpaceFore.xcodeproj      # then ⌘R
+open macos/SpaceLink.xcodeproj      # then ⌘R
 ```
 
 ```bash
 ./macos/build.sh --install          # no Xcode needed, just swiftc
-open /Applications/SpaceFore.app
+open /Applications/SpaceLink.app
 ```
 
 Either takes about a minute the first time and produces an 8 MB app. Both call
@@ -62,7 +62,7 @@ ignored — and watching each one fail.
 This is the half where a mistake is expensive: it is what makes the app open
 to your notes rather than to an error.
 
-### `SpaceForeApp.swift` — typechecked against the documented API
+### `SpaceLinkApp.swift` — typechecked against the documented API
 
 The AppKit and WebKit half. Nothing off a Mac can resolve `NSOpenPanel` or
 `WKWebView`, so it is typechecked against stubs instead — and the stubs were
@@ -188,7 +188,7 @@ reproduced, or confirmed from the documentation it cites.
 | the server never started from a path with a space (`My Apps/`): its "am I the program?" guard compared a percent-encoded URL against the raw path | compares paths; `server.test.mjs` launches it from such a path |
 | **Import notes from JSON** did nothing: on macOS file uploads are off unless the UI delegate implements `runOpenPanelWith` | implemented; an `NSOpenPanel` |
 | every launch got a new port, so a new web origin, so the page's settings and vault choice were gone each time | the port is remembered and asked for again; only a taken port falls back |
-| the token was the one in `~/.spacefore/server.json`, not per-launch as promised | generated in Swift per launch, passed as `--token`, never written |
+| the token was the one in `~/.spacelink/server.json`, not per-launch as promised | generated in Swift per launch, passed as `--token`, never written |
 | ⌘R while loading, or any superseded load, showed the fatal "could not reach its own server" alert | `URLError.cancelled` is not a failure |
 | the window was released twice under ARC (masked today, a crash the day anything closes it) | `isReleasedWhenClosed = false` |
 | the window's position was never restored: `center()` ran after the autosave name | `setFrameUsingName` first, centre only the first time |
@@ -280,7 +280,7 @@ implementation that could drift.
 ## Options
 
 ```bash
-./macos/build.sh                 # build into macos/build/SpaceFore.app
+./macos/build.sh                 # build into macos/build/SpaceLink.app
 ./macos/build.sh --embed-node    # ...with Node inside, so it stands alone
 ./macos/build.sh --install       # ...and move it to /Applications
 ```
@@ -292,7 +292,7 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 
 | | |
 | --- | --- |
-| `Sources/SpaceForeApp.swift` | the window, the folder picker, the menus — AppKit |
+| `Sources/SpaceLinkApp.swift` | the window, the folder picker, the menus — AppKit |
 | `Sources/SyncServer.swift` | starting and stopping Node — Foundation only, and tested |
 | `Tests/` | compiles and runs SyncServer.swift; typechecks the AppKit half |
 | `Tests/Stubs/` | AppKit and WebKit as Apple documents them, for that typecheck |
@@ -302,7 +302,7 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 | `embed-node-check.sh` | refuses a Node that would not run on another Mac |
 | `*.test.mjs` | the checks for the three scripts above, with `sips`, `iconutil` and `otool` as shims |
 | `build.sh` | builds without Xcode |
-| `SpaceFore.xcodeproj` | builds with it |
+| `SpaceLink.xcodeproj` | builds with it |
 | `pbxproj.test.mjs` | checks the project file, since Xcode cannot be run here |
 | `availability.test.mjs` | checks no API is newer than the deployment target, since Swift will not off a Mac |
 | `copy-resources.test.mjs` | checks the iconset the script builds, since `iconutil` cannot be run here |
@@ -321,7 +321,7 @@ without those, macOS will refuse it on their machine.
 
 **The token is per-launch.** It is generated in the app when it starts, handed
 to the server as `--token`, lives only in memory and in the page it opened, and
-is gone when you quit. It never touches `~/.spacefore/server.json`, which is
+is gone when you quit. It never touches `~/.spacelink/server.json`, which is
 for the sync server you run yourself — and a test starts the server with an
 empty home directory and checks that no such file appears.
 

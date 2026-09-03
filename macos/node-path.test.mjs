@@ -19,7 +19,7 @@ const BARE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 
 /** A fake home with `npm` shims that each announce where they live. */
 function home(shims) {
-  const root = mkdtempSync(join(tmpdir(), 'spacefore-home-'))
+  const root = mkdtempSync(join(tmpdir(), 'spacelink-home-'))
   for (const relative of shims) {
     const file = join(root, relative)
     mkdirSync(dirname(file), { recursive: true })
@@ -31,7 +31,7 @@ function home(shims) {
 
 /** Which `npm` a bare-PATH shell finds once the helper has run. */
 function npmSeenFrom(root) {
-  return execFileSync('bash', ['-c', `. "${HELPER}"; spacefore_add_node_paths; command -v npm >/dev/null && npm || echo none`], {
+  return execFileSync('bash', ['-c', `. "${HELPER}"; spacelink_add_node_paths; command -v npm >/dev/null && npm || echo none`], {
     env: { HOME: root, PATH: BARE_PATH },
     encoding: 'utf8',
   }).trim()
@@ -64,7 +64,7 @@ describe('node-path.sh', () => {
     const root = home([])
     const result = execFileSync(
       'bash',
-      ['-c', `set -euo pipefail; . "${HELPER}"; spacefore_add_node_paths; echo survived`],
+      ['-c', `set -euo pipefail; . "${HELPER}"; spacelink_add_node_paths; echo survived`],
       { env: { HOME: root, PATH: BARE_PATH }, encoding: 'utf8' },
     ).trim()
     expect(result).toBe('survived')

@@ -1,5 +1,5 @@
 /**
- * SpaceFore — markdown parsing.
+ * SpaceLink — markdown parsing.
  *
  * This module turns raw note text into the structured `ParsedNote` every other
  * feature reads. It is deliberately hand-written rather than built on a

@@ -200,7 +200,7 @@ describe('createBrowserVault — fallback when IndexedDB is unavailable', () => 
   it('still reports itself as a browser vault', async () => {
     const vault = await createBrowserVault()
     expect(vault.kind).toBe('browser')
-    expect(vault.name).toBe('SpaceFore')
+    expect(vault.name).toBe('SpaceLink')
     expect(vault.writable).toBe(true)
     expect(await vault.list()).toEqual([])
   })
@@ -351,7 +351,7 @@ describe('createBrowserVault — IndexedDB path', () => {
   it('stores one record per path under the files store', async () => {
     const vault = await withIdb()
     await vault.write('notes/A.md', '# A')
-    const files = fake.databases.get('SpaceFore')?.get('files')
+    const files = fake.databases.get('SpaceLink')?.get('files')
     expect([...(files?.keys() ?? [])]).toEqual(['notes/A.md'])
     expect(files?.get('notes/A.md')).toMatchObject({ path: 'notes/A.md', content: '# A' })
     expect(typeof (files?.get('notes/A.md') as { mtime: number }).mtime).toBe('number')
@@ -362,7 +362,7 @@ describe('createBrowserVault — IndexedDB path', () => {
     await vault.write('notes/A.md', '# A')
     await vault.list()
     // Pull the record out from under the adapter: the cache must still answer.
-    fake.databases.get('SpaceFore')?.get('files')?.delete('notes/A.md')
+    fake.databases.get('SpaceLink')?.get('files')?.delete('notes/A.md')
     expect(await vault.read('notes/A.md')).toBe('# A')
   })
 
@@ -371,14 +371,14 @@ describe('createBrowserVault — IndexedDB path', () => {
     await vault.write('a.md', 'A')
     await vault.remove('a.md')
     expect(await vault.exists('a.md')).toBe(false)
-    expect([...(fake.databases.get('SpaceFore')?.get('files')?.keys() ?? [])]).toEqual([])
+    expect([...(fake.databases.get('SpaceLink')?.get('files')?.keys() ?? [])]).toEqual([])
   })
 
   it('renames by moving the record to the new key', async () => {
     const vault = await withIdb()
     await vault.write('a.md', 'A')
     await vault.rename('a.md', 'sub/b.md')
-    expect([...(fake.databases.get('SpaceFore')?.get('files')?.keys() ?? [])]).toEqual(['sub/b.md'])
+    expect([...(fake.databases.get('SpaceLink')?.get('files')?.keys() ?? [])]).toEqual(['sub/b.md'])
     expect(await vault.read('sub/b.md')).toBe('A')
     const reopened = await createBrowserVault()
     expect(await reopened.read('sub/b.md')).toBe('A')
