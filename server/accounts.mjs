@@ -21,7 +21,7 @@
  *    in.
  */
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -116,6 +116,112 @@ export async function saveAccounts(file, store) {
   const body = `${JSON.stringify({ accounts: store.accounts, sessions: store.sessions }, null, 2)}\n`
   await writeFile(temporary, body, { mode: 0o600 })
   await rename(temporary, file)
+}
+
+/* ------------------------------------------------------------------ *
+ * Changing the file safely
+ * ------------------------------------------------------------------ */
+
+/** How long a lock may be held before it is assumed to belong to a dead process. */
+const LOCK_STALE_MS = 10_000
+/** How long to keep trying for a lock before giving up on it. */
+const LOCK_WAIT_MS = 5_000
+
+/** One promise chain per file, so calls in this process queue instead of racing. */
+const inProcess = new Map()
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Hold an exclusive claim on `file` across processes, for as long as `work`
+ * takes.
+ *
+ * `open(…, 'wx')` fails when the file is already there, which is the whole
+ * mechanism: whoever creates it holds the lock. A lock left behind by a process
+ * that died would block every later write forever, so one older than
+ * `LOCK_STALE_MS` is taken away — the region it guards is a read and a write of
+ * one small file, so ten seconds is far longer than holding it can honestly
+ * take.
+ *
+ * @template T
+ * @param {string} file
+ * @param {() => Promise<T>} work
+ * @returns {Promise<T>}
+ */
+async function withFileLock(file, work) {
+  const lock = `${file}.lock`
+  await mkdir(dirname(file), { recursive: true })
+  const deadline = Date.now() + LOCK_WAIT_MS
+
+  for (;;) {
+    /** @type {import('node:fs/promises').FileHandle | null} */
+    let handle = null
+    try {
+      handle = await open(lock, 'wx')
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      const held = await stat(lock).catch(() => null)
+      if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
+        // Whoever held this is gone. Taking it away is safe precisely because
+        // the guarded region is short: nobody legitimate is still in it.
+        await rm(lock, { force: true })
+        continue
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Could not get exclusive access to ${file}: ${lock} has been held for too long.`)
+      }
+      await wait(15 + Math.floor(Math.random() * 20))
+      continue
+    }
+
+    try {
+      return await work()
+    } finally {
+      await handle.close().catch(() => {})
+      await rm(lock, { force: true }).catch(() => {})
+    }
+  }
+}
+
+/**
+ * Read the file, change it, and write it back — with nothing else allowed in
+ * between.
+ *
+ * Every change to this file used to be a bare read-modify-write, and two of
+ * them at once lost one of the two. That is not a rare shape here: it is what
+ * happens when several devices sign in at the same moment, and what happens
+ * when `--add-account` is run from the terminal while the server is up — which
+ * is the documented way to make an account. Measured, six simultaneous sign-ins
+ * kept three sessions, and one terminal command took every session with it.
+ *
+ * @template T
+ * @param {string} file
+ * @param {(store: AccountsFile) => T | Promise<T>} change
+ * @returns {Promise<T>}
+ */
+export async function updateAccounts(file, change) {
+  const key = resolve(file)
+  const previous = inProcess.get(key) ?? Promise.resolve()
+  const run = previous
+    .catch(() => {})
+    .then(() =>
+      withFileLock(file, async () => {
+        // Read *inside* the lock: anything read before it could already be out
+        // of date by the time the write happens.
+        const store = await loadAccounts(file)
+        const result = await change(store)
+        await saveAccounts(file, store)
+        return result
+      }),
+    )
+  // Kept so the next caller queues behind this one; dropped once it is the
+  // last, so the map does not grow with every file ever touched.
+  inProcess.set(key, run)
+  try {
+    return await run
+  } finally {
+    if (inProcess.get(key) === run) inProcess.delete(key)
+  }
 }
 
 /** Emails differ only by case as often as by accident; compare them folded. */
@@ -226,23 +332,25 @@ export async function addAccount({ file, email, password, vault }) {
   if (String(password ?? '').length < MIN_PASSWORD_LENGTH) {
     throw new Error(`The password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
   }
-  const store = await loadAccounts(file)
-  if (findAccount(store.accounts, address)) throw new Error(`There is already an account for ${address}.`)
-
+  // Hashed before the lock is taken: it is 90ms of work that needs nothing from
+  // the file, and holding a lock across it would stall every other write.
   const { salt, hash, kdf } = await hashPassword(password)
-  /** @type {Account} */
-  const account = {
-    id: randomBytes(9).toString('base64url'),
-    email: address,
-    vault: resolve(vault),
-    salt,
-    hash,
-    kdf,
-    createdAt: Date.now(),
-  }
-  store.accounts.push(account)
-  await saveAccounts(file, store)
-  return account
+  return updateAccounts(file, (store) => {
+    // Checked inside the lock, so two of these at once cannot both pass.
+    if (findAccount(store.accounts, address)) throw new Error(`There is already an account for ${address}.`)
+    /** @type {Account} */
+    const account = {
+      id: randomBytes(9).toString('base64url'),
+      email: address,
+      vault: resolve(vault),
+      salt,
+      hash,
+      kdf,
+      createdAt: Date.now(),
+    }
+    store.accounts.push(account)
+    return account
+  })
 }
 
 /**
@@ -257,16 +365,16 @@ export async function setPassword({ file, email, password }) {
   if (String(password ?? '').length < MIN_PASSWORD_LENGTH) {
     throw new Error(`The password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
   }
-  const store = await loadAccounts(file)
-  const account = findAccount(store.accounts, email)
-  if (!account) throw new Error(`There is no account for ${email}.`)
   const { salt, hash, kdf } = await hashPassword(password)
-  account.salt = salt
-  account.hash = hash
-  account.kdf = kdf
-  store.sessions = store.sessions.filter((session) => session.accountId !== account.id)
-  await saveAccounts(file, store)
-  return account
+  return updateAccounts(file, (store) => {
+    const account = findAccount(store.accounts, email)
+    if (!account) throw new Error(`There is no account for ${email}.`)
+    account.salt = salt
+    account.hash = hash
+    account.kdf = kdf
+    store.sessions = store.sessions.filter((session) => session.accountId !== account.id)
+    return account
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -299,11 +407,11 @@ export async function createSession({ file, account, device = 'a device', now = 
     createdAt: now,
     expiresAt: now + SESSION_DAYS * 24 * 60 * 60 * 1000,
   }
-  const store = await loadAccounts(file)
-  // Expired sessions are swept here rather than on a timer: this is the only
-  // moment the file is being rewritten anyway.
-  store.sessions = [...liveSessions(store, now), session]
-  await saveAccounts(file, store)
+  await updateAccounts(file, (store) => {
+    // Expired sessions are swept here rather than on a timer: this is the only
+    // moment the file is being rewritten anyway.
+    store.sessions = [...liveSessions(store, now), session]
+  })
   return { token, session }
 }
 
@@ -333,25 +441,27 @@ export function accountForSession(store, token, now = Date.now()) {
  */
 export async function revokeSession({ file, token }) {
   const id = sessionId(token)
-  const store = await loadAccounts(file)
-  const before = store.sessions.length
-  store.sessions = store.sessions.filter((session) => session.id !== id)
-  if (store.sessions.length === before) return false
-  await saveAccounts(file, store)
-  return true
+  return updateAccounts(file, (store) => {
+    const before = store.sessions.length
+    store.sessions = store.sessions.filter((session) => session.id !== id)
+    // Rewritten either way. Returning early on "nothing to remove" would skip
+    // the write, but the read already happened inside the lock and the cost of
+    // writing a small file back unchanged is not worth a second code path.
+    return store.sessions.length !== before
+  })
 }
 
 /* ------------------------------------------------------------------ *
  * Slowing down a password guesser
  * ------------------------------------------------------------------ */
 
-/** Failures allowed before the wait starts growing. */
 /**
  * How many keys the limiter will remember at once. Ten thousand is far more
  * than a household of people mistyping passwords and far less than a way to
  * spend the server's memory.
  */
 const MAX_KEYS = 10_000
+/** Failures allowed before the wait starts growing. */
 const FREE_ATTEMPTS = 5
 /** The wait doubles per failure past that, up to this. */
 const MAX_DELAY_MS = 15 * 60 * 1000

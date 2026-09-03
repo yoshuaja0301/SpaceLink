@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, readFile, rename, rm, symlink, unlink, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { addAccount, sessionId } from './accounts.mjs'
+import { accountForSession, addAccount, sessionId } from './accounts.mjs'
 import { createSyncServer } from './index.mjs'
 import { VaultConflictError, VaultStore, hashOf } from './vaultStore.mjs'
 import { generateToken, parseArgs, tokensMatch } from './config.mjs'
@@ -1696,6 +1696,57 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(listed.out).not.toContain(PASSWORD)
     expect(listed.out).not.toMatch(/[A-Fa-f0-9]{64}/)
   })
+
+  it('does not sign every device out when an account is made beside them', async () => {
+    // The documented way to make an account is this command, run while the
+    // server is up. It is a different *process*, so the queue that orders
+    // writes inside one process cannot see it: without a lock on the file, the
+    // command reads the accounts before the sessions are written and writes its
+    // version back over them. Measured against a real server before the fix —
+    // four devices signed in, four sessions gone, every one silently signed out.
+    //
+    // Reproduced here deliberately rather than hopefully: this process holds
+    // the file open for a beat while the command runs, so the overlap happens
+    // every time instead of only when the timing lands.
+    const { addAccount: add, loadAccounts, updateAccounts, sessionId: idOf } = await import('./accounts.mjs')
+    const beside = await mkdtemp(join(tmpdir(), 'spacelink-beside-'))
+    try {
+      const notes = join(beside, 'Notes')
+      await mkdir(notes, { recursive: true })
+      const file = join(beside, 'accounts.json')
+      const account = await add({ file, email: 'here@example.com', password: PASSWORD, vault: notes })
+
+      const tokens = Array.from({ length: 4 }, (_, index) => `token-for-device-${index}`)
+      const holding = updateAccounts(file, async (store) => {
+        store.sessions = tokens.map((token, index) => ({
+          id: idOf(token),
+          accountId: account.id,
+          device: `device ${index}`,
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 86_400_000,
+        }))
+        // Held open, so the command below is genuinely running at the same time.
+        await new Promise((done) => setTimeout(done, 600))
+      })
+
+      await new Promise((done) => setTimeout(done, 50))
+      const added = run('--vault', notes, '--accounts', file, '--add-account', 'newcomer@example.com', '--password', PASSWORD)
+      const [, made] = await Promise.all([holding, added])
+      expect(made.code, made.err).toBe(0)
+
+      const store = await loadAccounts(file)
+      expect(store.accounts.map((one) => one.email).sort(), 'the new account was written over').toEqual([
+        'here@example.com',
+        'newcomer@example.com',
+      ])
+      expect(store.sessions, 'a session was lost to the command running beside it').toHaveLength(4)
+      for (const token of tokens) {
+        expect(accountForSession(store, token), token).toMatchObject({ email: 'here@example.com' })
+      }
+    } finally {
+      await rm(beside, { recursive: true, force: true })
+    }
+  }, 30_000)
 
   it('says what to do when there are no accounts yet', async () => {
     const empty = await run('--accounts', join(home, 'nothing.json'), '--list-accounts')

@@ -234,6 +234,14 @@ So that file in a backup, or over your shoulder in a screenshot, is not a way
 in: neither the password nor any device's session appears in it, and a test
 reads the file back after signing in to check.
 
+Every change to it is made under a lock, and that is not belt-and-braces. A
+change is a read, an edit and a write, and two of those overlapping keeps only
+one — which is exactly what happens when several devices sign in at the same
+moment, and when `--add-account` is run while the server is up. Measured before
+it was fixed: six simultaneous sign-ins left three sessions, and one terminal
+command signed every device out. The lock covers other processes too, since the
+command is one.
+
 Repeated wrong passwords are slowed down — five free attempts, then a doubling
 wait up to fifteen minutes — because a password, unlike 256 bits of random data,
 is guessable. A correct password clears the run at once, so mistyping yours is a

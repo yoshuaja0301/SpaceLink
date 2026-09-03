@@ -8,7 +8,8 @@
  * session that outlived its password, a script guessing.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -27,6 +28,7 @@ import {
   saveAccounts,
   sessionId,
   setPassword,
+  updateAccounts,
   verifyLogin,
   verifyPassword,
 } from './accounts.mjs'
@@ -301,6 +303,96 @@ describe('sessions', () => {
     expect(found?.id).toBe(mine.id)
     expect(found?.vault).not.toBe(theirs.vault)
   })
+})
+
+describe('changing the file while something else is changing it', () => {
+  it('keeps every session when several devices sign in at the same moment', async () => {
+    // The shape that broke: read, change, write, with nothing stopping two of
+    // them overlapping. Measured before the fix — six simultaneous sign-ins,
+    // three sessions left, three devices told 401 on their next request.
+    const account = await make()
+    const file = join(home, 'accounts.json')
+    const made = await Promise.all(
+      Array.from({ length: 8 }, (_, index) => createSession({ file, account, device: `device ${index}` })),
+    )
+    const store = await loadAccounts(file)
+    expect(store.sessions).toHaveLength(8)
+    // And every token handed out actually works.
+    for (const { token } of made) {
+      expect(accountForSession(store, token), token.slice(0, 8)).toMatchObject({ email: account.email })
+    }
+  }, 30_000)
+
+  it('does not lose a session to an account being made beside it', async () => {
+    // The documented way to make an account is a terminal command run while the
+    // server is up. Before the fix that command took every session with it.
+    const account = await make()
+    const file = join(home, 'accounts.json')
+    const [session] = await Promise.all([
+      createSession({ file, account, device: 'a phone' }),
+      addAccount({ file, email: 'newcomer@example.com', password: PASSWORD, vault: join(home, 'Notes') }),
+      createSession({ file, account, device: 'a laptop' }),
+    ])
+    const store = await loadAccounts(file)
+    expect(store.accounts.map((one) => one.email)).toContain('newcomer@example.com')
+    expect(store.sessions).toHaveLength(2)
+    expect(accountForSession(store, session.token)).toMatchObject({ email: account.email })
+  }, 30_000)
+
+  it('refuses the second of two identical accounts made at once', async () => {
+    // The duplicate check has to happen inside the lock, or both callers read a
+    // file without the address in it and both write themselves into it.
+    const file = join(home, 'accounts.json')
+    const vault = join(home, 'Notes')
+    const results = await Promise.allSettled([
+      addAccount({ file, email: 'twin@example.com', password: PASSWORD, vault }),
+      addAccount({ file, email: 'twin@example.com', password: PASSWORD, vault }),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const store = await loadAccounts(file)
+    expect(store.accounts.filter((one) => sameEmail(one.email, 'twin@example.com'))).toHaveLength(1)
+  }, 30_000)
+
+  it('leaves no lock behind when the change itself fails', async () => {
+    // A lock kept after an error would block every later write until it went
+    // stale — which is a working server that stops being able to sign anyone in.
+    const file = join(home, 'accounts.json')
+    await expect(
+      updateAccounts(file, () => {
+        throw new Error('no')
+      }),
+    ).rejects.toThrow('no')
+    expect(existsSync(`${file}.lock`)).toBe(false)
+    // And the next write still goes through.
+    await expect(updateAccounts(file, (store) => store.accounts.length)).resolves.toBeGreaterThanOrEqual(0)
+  })
+
+  it('takes a lock left behind by a process that died', async () => {
+    // Otherwise one crash at the wrong moment locks the accounts file for good.
+    const file = join(home, 'accounts.json')
+    await writeFile(`${file}.lock`, '')
+    const longAgo = new Date(Date.now() - 60_000)
+    await utimes(`${file}.lock`, longAgo, longAgo)
+
+    await expect(updateAccounts(file, () => 'went through')).resolves.toBe('went through')
+    expect(existsSync(`${file}.lock`)).toBe(false)
+  }, 20_000)
+
+  it('waits for a lock that is being held right now, rather than barging in', async () => {
+    const file = join(home, 'accounts.json')
+    await writeFile(`${file}.lock`, '')
+    try {
+      const order = []
+      const blocked = updateAccounts(file, () => void order.push('write')).catch(() => order.push('gave up'))
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(order, 'it wrote while somebody else held the lock').toEqual([])
+      await rm(`${file}.lock`, { force: true })
+      await blocked
+      expect(order).toEqual(['write'])
+    } finally {
+      await rm(`${file}.lock`, { force: true })
+    }
+  }, 20_000)
 })
 
 describe('slowing down a password guesser', () => {
