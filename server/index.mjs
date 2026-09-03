@@ -1200,6 +1200,12 @@ async function runAccountCommand(options, accountsFile) {
       // Printed through `plainText` even though what is written now is clean:
       // this file can be older than that rule, or edited by hand.
       process.stdout.write(`    ${plainText(account.email)}\n      notes  ${plainText(account.vault)}\n`)
+      // Looked at, not just printed. This is the one place an owner would
+      // catch a folder mistyped in --add-account, or a drive that is not
+      // mounted — and a path that is not there used to be listed exactly like
+      // one that is, while every device on that account got 503.
+      const there = await stat(account.vault).then((info) => info.isDirectory()).catch(() => false)
+      if (!there) process.stdout.write('             not there — moved, renamed, unmounted, or mistyped in --add-account\n')
       if (devices.length === 0) process.stdout.write('      no device signed in\n')
       // Each device by what it said it was and when, so it is obvious whether
       // the list holds one you no longer recognise.

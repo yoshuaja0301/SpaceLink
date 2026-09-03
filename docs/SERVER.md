@@ -179,7 +179,7 @@ surface.
 | --- | --- |
 | `--add-account <email>` | make one; it gets `--vault` as its folder of notes |
 | `--set-password <email>` | change a password — every device signed in on that account is signed out |
-| `--list-accounts` | who exists, where their notes are, and which devices are signed in |
+| `--list-accounts` | who exists, where their notes are — and whether that folder is actually there — and which devices are signed in |
 | `--password <value>` | give the password instead of being asked, for a script. It lands in your shell history — piping it in keeps it out: `printf 'pw\npw\n' \| … --add-account you@example.com`, one line per prompt |
 | `--accounts <file>` | where accounts live (default `~/.spacelink/accounts.json`) |
 

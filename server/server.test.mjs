@@ -2171,6 +2171,22 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
   })
 
+  it('says in the listing when an account’s folder is not there', async () => {
+    // The listing is where an owner looks to see where the notes live, and the
+    // one place a folder mistyped in --add-account would be caught. It used to
+    // print a path that is not there exactly like one that is, while every
+    // device on that account was getting 503.
+    const listing = join(home, 'listing.json')
+    await addAccount({ file: listing, email: 'here@example.com', password: PASSWORD, vault: join(home, 'Notes') })
+    await addAccount({ file: listing, email: 'typo@example.com', password: PASSWORD, vault: join(home, 'Notez') })
+
+    const shown = await run('--accounts', listing, '--list-accounts')
+    expect(shown.code, shown.err).toBe(0)
+    const [, forHere = '', forTypo = ''] = shown.out.split(/\n {4}(?=\S)/)
+    expect(forTypo, 'a missing folder was listed as if it were there').toMatch(/not there/i)
+    expect(forHere, 'a folder that is there was called missing').not.toMatch(/not there/i)
+  })
+
   it('takes a password piped in, one line per prompt', async () => {
     // What a script does instead of --password, which lands in shell history.
     // Measured before this: the first prompt read the pipe to its end, the
