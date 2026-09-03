@@ -44,6 +44,29 @@ describe('remembering a pairing', () => {
     forgetRemoteConnection()
     expect(loadRemoteConnection()).toBeNull()
   })
+
+  it('remembers the account a device signed in as, and never a password', () => {
+    saveRemoteConnection({ url: 'https://notes.example.ts.net', token: 'session', email: 'me@example.com' })
+    expect(loadRemoteConnection()).toEqual({
+      url: 'https://notes.example.ts.net',
+      token: 'session',
+      email: 'me@example.com',
+    })
+    // Nothing else of the sign-in is kept — the password was used once, by the
+    // request that exchanged it for this session.
+    expect(localStorage.getItem(REMOTE_KEY)).not.toMatch(/password/i)
+  })
+
+  it('leaves the account off a pairing that was made with a token', () => {
+    // The two fail differently and are told apart by this field alone: a
+    // rotated token is copied again, an expired sign-in needs the password.
+    saveRemoteConnection({ url: 'http://localhost:4899', token: 'abc' })
+    expect(loadRemoteConnection()).toEqual({ url: 'http://localhost:4899', token: 'abc' })
+    for (const bad of ['{"url":"http://x","token":"t","email":""}', '{"url":"http://x","token":"t","email":7}']) {
+      localStorage.setItem(REMOTE_KEY, bad)
+      expect(loadRemoteConnection(), bad).toEqual({ url: 'http://x', token: 't' })
+    }
+  })
 })
 
 describe('isLoopbackOrigin', () => {

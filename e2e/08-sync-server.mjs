@@ -7,6 +7,10 @@
  * context, so it has its own storage and pairs on its own, the way a phone
  * beside a laptop does.
  *
+ * Both ways in are exercised: the access token, and an account made the only
+ * way an account can be made — with a command on the machine holding the notes,
+ * run here as a real child process before the server starts.
+ *
  * Every claim about what is on disk is read back with `fs`, never from the app.
  */
 import { spawn } from 'node:child_process'
@@ -42,6 +46,35 @@ await writeFile(join(vault, 'Ideas/Seed.md'), '# Seed\n\nBack to [[Home]].\n')
  * server's stdin leash: hold the pipe open and it dies with this process, even
  * if this process is killed outright.
  */
+const ACCOUNT = { email: 'e2e@example.com', password: 'a long enough password' }
+const accountsFile = join(vault, '..', `spacefore-e2e-accounts-${process.pid}.json`)
+
+/**
+ * Make the account, as a person would: one command, on the machine that holds
+ * the notes. There is no other way — the HTTP API cannot create one at all —
+ * so this is also the check that the command works from a cold start.
+ */
+await new Promise((resolveAccount, rejectAccount) => {
+  const made = spawn(
+    process.execPath,
+    [
+      join(HERE, '..', 'server', 'index.mjs'),
+      '--vault', vault,
+      '--accounts', accountsFile,
+      '--add-account', ACCOUNT.email,
+      '--password', ACCOUNT.password,
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'] },
+  )
+  let complaint = ''
+  made.stderr.setEncoding('utf8')
+  made.stderr.on('data', (chunk) => (complaint += chunk))
+  made.once('error', rejectAccount)
+  made.once('exit', (code) =>
+    code === 0 ? resolveAccount() : rejectAccount(new Error(`--add-account exited with ${code}: ${complaint.trim()}`)),
+  )
+})
+
 const server = spawn(
   process.execPath,
   [
@@ -49,6 +82,7 @@ const server = spawn(
     '--vault', vault,
     '--port', String(process.env.SPACEFORE_SYNC_PORT ?? 0),
     '--token', TOKEN,
+    '--accounts', accountsFile,
     '--print-ready',
   ],
   { stdio: ['pipe', 'pipe', 'pipe'] },
@@ -112,15 +146,36 @@ const listDisk = async () => {
   return out.sort()
 }
 
-/** Pair a device with the server through the picker, the way a person would. */
-async function pair(page) {
+/** Open the connect form on the picker. */
+async function openConnectForm(page) {
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
   await page.waitForTimeout(700)
-  await page.locator('.vault-picker button').filter({ hasText: /server/i }).first().click()
+  // By its own identifier, not by its wording: the card describes itself
+  // differently once this device has signed in, and a test that reads the
+  // description would break on a copy edit rather than on a defect.
+  await page.locator('.vault-picker-option[data-choice="remote"]').click()
   await page.waitForTimeout(400)
   await page.getByLabel('Server address').fill(ORIGIN)
+}
+
+/** Pair a device with the server's access token, the way a person would. */
+async function pair(page) {
+  await openConnectForm(page)
+  await page.getByRole('radio', { name: 'Access token' }).click()
+  await page.waitForTimeout(200)
   await page.getByLabel('Access token').fill(TOKEN)
   // Scoped to the form: the card that opens it is also called "Connect to a server".
+  await page.locator('.vault-connect').getByRole('button', { name: 'Connect' }).click()
+  await page.waitForTimeout(2500)
+}
+
+/** Sign a device in with the account instead — email and password, no token. */
+async function signInDevice(page, password = ACCOUNT.password) {
+  await openConnectForm(page)
+  await page.getByRole('radio', { name: 'Sign in' }).click()
+  await page.waitForTimeout(200)
+  await page.getByLabel('Email').fill(ACCOUNT.email)
+  await page.getByLabel('Password').fill(password)
   await page.locator('.vault-connect').getByRole('button', { name: 'Connect' }).click()
   await page.waitForTimeout(2500)
 }
@@ -341,6 +396,82 @@ try {
     }
   })
 
+  await step('a third device signs in with the account and sees the same vault', async () => {
+    // No token anywhere: an email and a password, typed on a device that has
+    // never met this server. This is the whole reason accounts exist.
+    const desktop = await openDevice(browser, `${ORIGIN}/`)
+    try {
+      await signInDevice(desktop.page)
+      must(!(await desktop.page.locator('.vault-picker').count()), 'the sign-in did not open the vault')
+      const status = await desktop.page.locator('.statusbar').innerText()
+      must(/note/i.test(status), 'signed in but no notes: ' + status)
+
+      // The same folder the token-paired devices are on: a note written here
+      // lands in the very file on disk the laptop has been editing.
+      await openNote(desktop.page, 'Seed')
+      must(
+        await waitForText(desktop.page, 'Rewritten on the server by another program.'),
+        'the signed-in device is looking at different notes',
+      )
+
+      // And it stays signed in, without being asked for the password again.
+      await desktop.page.reload({ waitUntil: 'networkidle' })
+      await desktop.page.waitForTimeout(3000)
+      must(!(await desktop.page.locator('.vault-picker').count()), 'the session was not kept across a reload')
+      return status.split('\n').slice(0, 2).join(' / ')
+    } finally {
+      await desktop.context.close().catch(() => {})
+    }
+  })
+
+  await step('signing out ends the session on the server, not just in the browser', async () => {
+    // What someone handing a laptop back is actually asking for. Forgetting
+    // the token locally would leave it good for another thirty days.
+    const borrowed = await openDevice(browser, `${ORIGIN}/`)
+    try {
+      await signInDevice(borrowed.page)
+      const session = await borrowed.page.evaluate(
+        () => JSON.parse(localStorage.getItem('spacefore.remote') ?? '{}').token ?? null,
+      )
+      must(typeof session === 'string' && session.length > 20, 'no session was kept: ' + session)
+
+      const before = await fetch(`${ORIGIN}/api/files`, { headers: { authorization: `Bearer ${session}` } })
+      must(before.status === 200, `the session did not work before signing out: ${before.status}`)
+
+      await borrowed.page.evaluate(() => window.dispatchEvent(new CustomEvent('spacefore:open-vault-picker')))
+      await borrowed.page.waitForTimeout(700)
+      await borrowed.page.locator('.vault-picker-option[data-choice="remote"]').click()
+      await borrowed.page.waitForTimeout(400)
+      await borrowed.page.locator('.vault-connect').getByRole('button', { name: 'Sign out' }).click()
+      await borrowed.page.waitForTimeout(1500)
+
+      const after = await fetch(`${ORIGIN}/api/files`, { headers: { authorization: `Bearer ${session}` } })
+      must(after.status === 401, `the session still worked after signing out: ${after.status}`)
+
+      const stored = await borrowed.page.evaluate(() => localStorage.getItem('spacefore.remote'))
+      must(stored === null, 'the pairing was kept on the device: ' + stored)
+      return `200 before, ${after.status} after`
+    } finally {
+      await borrowed.context.close().catch(() => {})
+    }
+  })
+
+  await step('a wrong password is refused, and says so in the app', async () => {
+    const wrong = await openDevice(browser, `${ORIGIN}/`)
+    try {
+      await signInDevice(wrong.page, 'not the password')
+      must(await wrong.page.locator('.vault-picker').count() > 0, 'a wrong password opened a vault')
+      const alert = await wrong.page.locator('[role="alert"]').first().innerText()
+      must(/do not match an account/i.test(alert), 'the app said: ' + alert)
+      // Nothing was remembered, so a reload does not retry the bad sign-in.
+      const stored = await wrong.page.evaluate(() => localStorage.getItem('spacefore.remote'))
+      must(stored === null, 'a refused sign-in was remembered: ' + stored)
+      return alert.split('\n')[0]
+    } finally {
+      await wrong.context.close().catch(() => {})
+    }
+  })
+
   await step('the vault is unreachable without the token', async () => {
     const status = await fetch(`${ORIGIN}/api/files`).then((response) => response.status)
     must(status === 401, `an unauthenticated request got ${status}`)
@@ -352,12 +483,13 @@ try {
   await phone?.context().close().catch(() => {})
   await browser.close()
   await rm(vault, { recursive: true, force: true })
+  await rm(accountsFile, { force: true })
 }
 
-// The conflict step deliberately provokes a 409, and a browser logs every
-// non-2xx response. That one is the mechanism working, not a defect; anything
-// else still counts.
-const expectedConflictNoise = /409|Conflict/
+// Two steps provoke a non-2xx on purpose — the conflict a 409, the wrong
+// password a 401 — and a browser logs every one of them. Those are the
+// mechanisms working, not defects; anything else still counts.
+const expectedConflictNoise = /409|Conflict|401|Unauthorized/
 const noise = [...problems, ...phoneProblems].filter((entry) => !expectedConflictNoise.test(entry))
 
 process.exitCode = report(noise, 'sync server') > 0 ? 1 : 0

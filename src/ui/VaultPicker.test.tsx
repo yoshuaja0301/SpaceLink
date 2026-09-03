@@ -20,9 +20,17 @@ vi.mock('../core/vault/directoryVault', () => ({
   isDirectoryVaultSupported: vi.fn(),
   pickDirectoryVault: vi.fn(),
 }))
+// The sync client is stubbed for the same reason: it wants a server. What is
+// under test here is what the form does with the answer, not the HTTP.
+vi.mock('../core/vault/remoteVault', () => ({
+  createRemoteVault: vi.fn(),
+  signIn: vi.fn(),
+  signOut: vi.fn(),
+}))
 
 import { createBrowserVault, hasStoredVault, seedVault } from '../core/vault/browserVault'
 import { isDirectoryVaultSupported, pickDirectoryVault } from '../core/vault/directoryVault'
+import { createRemoteVault, signIn, signOut } from '../core/vault/remoteVault'
 
 const PRISTINE = useAppStore.getState()
 
@@ -84,6 +92,12 @@ beforeEach(() => {
   vi.mocked(seedVault).mockResolvedValue(undefined)
   vi.mocked(isDirectoryVaultSupported).mockReturnValue(false)
   vi.mocked(pickDirectoryVault).mockResolvedValue(null)
+  vi.mocked(signIn).mockResolvedValue({ ok: true, token: 'session-token', email: 'me@example.com', name: 'Notebook' })
+  vi.mocked(signOut).mockResolvedValue(undefined)
+  vi.mocked(createRemoteVault).mockImplementation(async () => ({
+    ...createMemoryVault({ 'Synced.md': '# Synced\n' }, { name: 'Notebook' }),
+    kind: 'remote',
+  }))
 })
 
 afterEach(() => {
@@ -112,6 +126,9 @@ describe('VaultPicker', () => {
 
     await act(async () => {
       fireEvent.click(card('remote'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Access token' }))
     })
 
     const address = screen.getByLabelText('Server address') as HTMLInputElement
@@ -284,5 +301,208 @@ describe('VaultPicker', () => {
       release()
     })
     expect(card('demo').disabled).toBe(false)
+  })
+
+  /**
+   * Signing in is the path that makes several devices feel like one app, so
+   * what matters is what the form keeps afterwards: the session, never the
+   * password.
+   */
+  describe('signing in to a server', () => {
+    /** Open the card and fill the sign-in form. */
+    async function fillSignIn(email = 'me@example.com', password = 'a long enough password'): Promise<void> {
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'http://mac.local:4899' } })
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } })
+      })
+    }
+
+    it('offers an account before a token, because that is the way that works on more than one device', async () => {
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      expect((screen.getByRole('radio', { name: 'Sign in' }) as HTMLElement).getAttribute('aria-checked')).toBe('true')
+      expect(screen.getByLabelText('Email')).toBeTruthy()
+      expect(screen.queryByLabelText('Access token')).toBeNull()
+      // And says where an account comes from, since there is no sign-up form.
+      expect(document.querySelector('.vault-connect')?.textContent).toContain('--add-account')
+    })
+
+    it('is one tab stop, and the arrows move within it', async () => {
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      const signIn = screen.getByRole('radio', { name: 'Sign in' })
+      const token = screen.getByRole('radio', { name: 'Access token' })
+      // The selected option is the group's tab stop; the other is skipped.
+      expect(signIn.getAttribute('tabindex')).toBe('0')
+      expect(token.getAttribute('tabindex')).toBe('-1')
+
+      await act(async () => {
+        fireEvent.keyDown(signIn, { key: 'ArrowRight' })
+      })
+      expect(screen.getByRole('radio', { name: 'Access token' }).getAttribute('aria-checked')).toBe('true')
+      expect(screen.getByLabelText('Access token')).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Access token' }))
+
+      // Either direction, since there are only two of them.
+      await act(async () => {
+        fireEvent.keyDown(screen.getByRole('radio', { name: 'Access token' }), { key: 'ArrowLeft' })
+      })
+      expect(screen.getByRole('radio', { name: 'Sign in' }).getAttribute('aria-checked')).toBe('true')
+    })
+
+    it('will not submit half a sign-in', async () => {
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      const connect = (): HTMLButtonElement => screen.getByRole('button', { name: 'Connect' }) as HTMLButtonElement
+      expect(connect().disabled).toBe(true)
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'http://mac.local:4899' } })
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.com' } })
+      })
+      expect(connect().disabled).toBe(true)
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'a long enough password' } })
+      })
+      expect(connect().disabled).toBe(false)
+    })
+
+    it('opens the account’s vault and remembers the session, never the password', async () => {
+      const onReady = vi.fn()
+      await show(onReady)
+      await fillSignIn()
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      })
+
+      expect(vi.mocked(signIn)).toHaveBeenCalledWith('http://mac.local:4899', 'me@example.com', 'a long enough password')
+      expect(vi.mocked(createRemoteVault)).toHaveBeenCalledWith({
+        url: 'http://mac.local:4899',
+        token: 'session-token',
+        email: 'me@example.com',
+      })
+      expect(useAppStore.getState().vaultName).toBe('Notebook')
+      expect(onReady).toHaveBeenCalledTimes(1)
+
+      const remembered = JSON.parse(localStorage.getItem('spacefore.remote') ?? '{}') as Record<string, unknown>
+      expect(remembered).toEqual({
+        url: 'http://mac.local:4899',
+        token: 'session-token',
+        name: 'Notebook',
+        email: 'me@example.com',
+      })
+      // The password is not in storage, and not left in the field either.
+      expect(localStorage.getItem('spacefore.remote')).not.toContain('a long enough password')
+      expect((screen.queryByLabelText('Password') as HTMLInputElement | null)?.value ?? '').toBe('')
+    })
+
+    it('shows what the server said when the password is refused, and remembers nothing', async () => {
+      vi.mocked(signIn).mockResolvedValue({ ok: false, error: 'That email and password do not match an account.' })
+      const onReady = vi.fn()
+      await show(onReady)
+      await fillSignIn()
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      })
+
+      expect(screen.getByRole('alert').textContent).toContain('do not match an account')
+      expect(vi.mocked(createRemoteVault)).not.toHaveBeenCalled()
+      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+      expect(onReady).not.toHaveBeenCalled()
+    })
+
+    it('starts on the token form for a device that was paired with a token', async () => {
+      localStorage.setItem(
+        'spacefore.remote',
+        JSON.stringify({ url: 'http://mac.local:4899', token: 'the-token', name: 'Notes' }),
+      )
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      expect(screen.getByLabelText('Access token')).toBeTruthy()
+      expect(screen.queryByLabelText('Password')).toBeNull()
+    })
+
+    it('signs out on the server, not only in this browser', async () => {
+      // Forgetting the token here would leave the session alive on the server
+      // for its full thirty days, which is the opposite of what someone
+      // handing a laptop back is asking for.
+      localStorage.setItem(
+        'spacefore.remote',
+        JSON.stringify({ url: 'http://mac.local:4899', token: 'session', name: 'Notebook', email: 'me@example.com' }),
+      )
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+      })
+
+      expect(vi.mocked(signOut)).toHaveBeenCalledWith('http://mac.local:4899', 'session')
+      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+      // And the card stops offering a pairing this device no longer has.
+      expect(card('remote').textContent).toContain('Connect to a server')
+      expect(useAppStore.getState().toasts.map((toast) => toast.message)).toContain('Signed out of me@example.com.')
+    })
+
+    it('forgets a token pairing without pretending to sign anything out', async () => {
+      // There is no session to end: a token belongs to the server, not to a
+      // device, and asking it to revoke one would be a call that means nothing.
+      localStorage.setItem(
+        'spacefore.remote',
+        JSON.stringify({ url: 'http://mac.local:4899', token: 'the-token', name: 'Notes' }),
+      )
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Forget this server' }))
+      })
+
+      expect(vi.mocked(signOut)).not.toHaveBeenCalled()
+      expect(localStorage.getItem('spacefore.remote')).toBeNull()
+    })
+
+    it('offers nothing to disconnect on a device that never paired', async () => {
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Forget this server' })).toBeNull()
+    })
+
+    it('says who a returning device was signed in as', async () => {
+      localStorage.setItem(
+        'spacefore.remote',
+        JSON.stringify({ url: 'http://mac.local:4899', token: 'session', name: 'Notebook', email: 'me@example.com' }),
+      )
+      await show()
+      expect(card('remote').textContent).toContain('me@example.com')
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('me@example.com')
+      // The password is asked for again: it was never kept.
+      expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+    })
   })
 })

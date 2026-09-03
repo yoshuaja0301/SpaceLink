@@ -13,6 +13,15 @@ export interface RemoteConnection {
   token: string
   /** Vault name the server reported when it was paired, for the picker. */
   name?: string
+  /**
+   * The account this device signed in as, when it did.
+   *
+   * Absent for a device paired with the server's access token — the two
+   * credentials fail differently and are worth telling apart: a token was
+   * rotated and must be copied again, while a sign-in expired and needs the
+   * password. The password itself is never kept, here or anywhere.
+   */
+  email?: string
 }
 
 export const REMOTE_KEY = 'spacefore.remote'
@@ -23,10 +32,15 @@ export function loadRemoteConnection(): RemoteConnection | null {
     if (!raw) return null
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const { url, token, name } = parsed as Record<string, unknown>
+    const { url, token, name, email } = parsed as Record<string, unknown>
     if (typeof url !== 'string' || url === '') return null
     if (typeof token !== 'string' || token === '') return null
-    return { url, token, ...(typeof name === 'string' ? { name } : {}) }
+    return {
+      url,
+      token,
+      ...(typeof name === 'string' ? { name } : {}),
+      ...(typeof email === 'string' && email !== '' ? { email } : {}),
+    }
   } catch {
     return null
   }

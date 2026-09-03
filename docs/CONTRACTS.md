@@ -269,6 +269,73 @@ export const DEMO_NOTES: Record<NotePath, string>
 export function createDemoVault(): VaultAdapter
 ```
 
+## `src/core/vault/remoteVault.ts`
+
+```ts
+export interface RemoteVaultOptions {
+  url: string
+  token: string
+  name?: string
+  /** Set when `token` came from signing in, so a refusal can say the right thing. */
+  email?: string
+}
+/** Which of the two credentials a call is carrying. */
+export type Credential = 'token' | 'account'
+
+export function deviceId(): string
+export function normalizeServerUrl(input: string): string
+export function describeDevice(agent?: string): string
+export function probeServer(
+  url: string,
+  token: string,
+  credential?: Credential,
+): Promise<{ ok: true; name: string } | { ok: false; error: string }>
+export function signIn(
+  url: string,
+  email: string,
+  password: string,
+): Promise<{ ok: true; token: string; email: string; name: string } | { ok: false; error: string }>
+export function signOut(url: string, token: string): Promise<void>
+export class RemoteConflict extends Error { readonly conflictPath: NotePath }
+export function createRemoteVault(options: RemoteVaultOptions): Promise<VaultAdapter>
+```
+`kind: 'remote'`. Every write is conditional on the hash the device believed it
+was editing; a refusal becomes a conflict copy rather than an overwrite.
+
+Two credentials reach the same API and are not interchangeable in what they
+*mean*: an access token is the server's, a session belongs to one account and
+opens only that account's folder. `signIn` exchanges a password for a session
+and is the only place a password is ever sent — it is never stored, and only the
+session it returns is. `signOut` ends that one session on the server, which is
+what a borrowed device needs: forgetting the token locally would leave it valid
+for its full 30 days. `probeServer` and the adapter's own 401 handling take the
+`Credential` so the message names the right fix: a rotated token is copied
+again, an expired sign-in needs the password.
+
+## `src/core/vault/remoteConnection.ts`
+
+```ts
+export interface RemoteConnection {
+  url: string
+  token: string
+  name?: string
+  /** The account this device signed in as; absent when it was paired with a token. */
+  email?: string
+}
+export const REMOTE_KEY = 'spacefore.remote'
+
+export function loadRemoteConnection(): RemoteConnection | null
+export function saveRemoteConnection(connection: RemoteConnection): void
+export function forgetRemoteConnection(): void
+export function isLoopbackOrigin(origin: string): boolean
+/** A `#token=…` handed to this page by whatever launched it, consumed on read. */
+export function takeHandoffConnection(location: Location, history: History): RemoteConnection | null
+```
+Kept in `localStorage` so a device reconnects by itself. Only a session token or
+an access token is ever written there — never a password. A handoff is accepted
+only from a loopback origin, and the fragment is cleared whether or not it is
+used.
+
 ## UI components
 
 Every component reads state via `useAppStore` and calls store actions. Props are

@@ -21,7 +21,18 @@ import { join } from 'node:path'
 // @ts-expect-error — plain JavaScript, typed by JSDoc rather than declarations
 import { createSyncServer } from '../../../server/index.mjs'
 import { comparePaths } from './paths'
-import { createRemoteVault, deviceId, normalizeServerUrl, probeServer, RemoteConflict } from './remoteVault'
+// @ts-expect-error — plain JavaScript, typed by JSDoc rather than declarations
+import { addAccount } from '../../../server/accounts.mjs'
+import {
+  createRemoteVault,
+  describeDevice,
+  deviceId,
+  normalizeServerUrl,
+  probeServer,
+  RemoteConflict,
+  signIn,
+  signOut,
+} from './remoteVault'
 
 const TOKEN = 'b'.repeat(43)
 
@@ -99,6 +110,130 @@ describe('probeServer', () => {
     const result = await probeServer('http://127.0.0.1:1', TOKEN)
     expect(result).toMatchObject({ ok: false })
     if (!result.ok) expect(result.error).toMatch(/could not reach/i)
+  })
+})
+
+describe('signing in', () => {
+  const PASSWORD = 'a long enough password'
+
+  let home: string
+  let accountVault: string
+  let accountsListener: Server
+  let accountOrigin: string
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacefore-signin-'))
+    accountVault = join(home, 'Notebook')
+    await mkdir(accountVault, { recursive: true })
+    await writeFile(join(accountVault, 'Only Mine.md'), '# Only mine\n')
+    const accountsFile = join(home, 'accounts.json')
+    await addAccount({ file: accountsFile, email: 'me@example.com', password: PASSWORD, vault: accountVault })
+
+    const sync = createSyncServer({
+      vault: join(home, 'Unused'),
+      token: 'c'.repeat(43),
+      distDir: join(home, '__no_dist__'),
+      accountsFile,
+    })
+    accountsListener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise<void>((resolve) => accountsListener.listen(0, '127.0.0.1', () => resolve()))
+    const address = accountsListener.address()
+    accountOrigin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  }, 30_000)
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => accountsListener.close(() => resolve()))
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('comes back with a session and the name of the vault it opened', async () => {
+    const result = await signIn(accountOrigin, 'me@example.com', PASSWORD)
+    expect(result).toMatchObject({ ok: true, email: 'me@example.com', name: 'Notebook' })
+    if (!result.ok) return
+    // The session, not the password: what the device keeps must be revocable
+    // from somewhere else without changing the password.
+    expect(result.token).not.toBe(PASSWORD)
+    expect(result.token.length).toBeGreaterThan(20)
+
+    const vault = await createRemoteVault({ url: accountOrigin, token: result.token, email: result.email })
+    expect((await vault.list()).map((file) => file.path)).toEqual(['Only Mine.md'])
+  }, 20_000)
+
+  it('passes the server’s own words back when the password is wrong', async () => {
+    const result = await signIn(accountOrigin, 'me@example.com', 'not the password')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/do not match an account/i)
+  }, 20_000)
+
+  it('says a server without accounts is not broken, just not that kind of server', async () => {
+    // `origin` is the suite's other server, started with a token and no
+    // accounts file. Its 404 means "no accounts here", and a person staring at
+    // a sign-in form deserves to be told which credential this server wants.
+    const result = await signIn(origin, 'me@example.com', PASSWORD)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/access token/i)
+  })
+
+  it('does not read a router’s 404 out loud to someone typing a password', async () => {
+    // A SpaceFore server from before accounts existed has no such route at
+    // all, and answers the way it answers any unknown address. Repeating that
+    // back — "No such endpoint: POST /api/auth/login" — tells the person
+    // nothing they can act on, and reads like the app is broken.
+    const older = createServer((_request, response) => {
+      response.writeHead(404, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: 'No such endpoint: POST /api/auth/login' }))
+    })
+    await new Promise<void>((resolve) => older.listen(0, '127.0.0.1', () => resolve()))
+    try {
+      const address = older.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      const result = await signIn(`http://127.0.0.1:${port}`, 'me@example.com', PASSWORD)
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.error).toMatch(/access token/i)
+      expect(result.error).not.toMatch(/endpoint/i)
+    } finally {
+      await new Promise<void>((resolve) => older.close(() => resolve()))
+    }
+  })
+
+  it('says it could not reach an address that is not listening', async () => {
+    const result = await signIn('http://127.0.0.1:1', 'me@example.com', PASSWORD)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/could not reach/i)
+  })
+
+  it('signs this device out without touching the others', async () => {
+    const phone = await signIn(accountOrigin, 'me@example.com', PASSWORD)
+    const laptop = await signIn(accountOrigin, 'me@example.com', PASSWORD)
+    expect(phone.ok && laptop.ok).toBe(true)
+    if (!phone.ok || !laptop.ok) return
+
+    await signOut(accountOrigin, phone.token)
+    expect((await probeServer(accountOrigin, phone.token, 'account')).ok).toBe(false)
+    expect((await probeServer(accountOrigin, laptop.token, 'account')).ok).toBe(true)
+  }, 30_000)
+
+  it('does not throw when there is no server to sign out of', async () => {
+    await expect(signOut('http://127.0.0.1:1', 'anything')).resolves.toBeUndefined()
+  })
+
+  it('tells an expired sign-in from a rotated token, because the fix differs', async () => {
+    const asAccount = await probeServer(accountOrigin, 'not a session', 'account')
+    const asToken = await probeServer(accountOrigin, 'not a token', 'token')
+    expect(asAccount.ok).toBe(false)
+    expect(asToken.ok).toBe(false)
+    if (asAccount.ok || asToken.ok) return
+    expect(asAccount.error).toMatch(/sign in again/i)
+    expect(asToken.error).toMatch(/copy it again/i)
+  })
+
+  it('names the kind of device it is, and nothing sharper than that', () => {
+    expect(describeDevice('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)')).toBe('an iPhone or iPad')
+    expect(describeDevice('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe('a Mac')
+    expect(describeDevice('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe('a Windows PC')
+    expect(describeDevice('Mozilla/5.0 (Linux; Android 14)')).toBe('an Android device')
+    expect(describeDevice('something nobody has seen')).toBe('a browser')
   })
 })
 

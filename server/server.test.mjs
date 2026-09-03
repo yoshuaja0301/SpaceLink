@@ -12,6 +12,7 @@ import { mkdtemp, mkdir, readFile, rename, rm, symlink, unlink, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { addAccount, sessionId } from './accounts.mjs'
 import { createSyncServer } from './index.mjs'
 import { VaultConflictError, VaultStore, hashOf } from './vaultStore.mjs'
 import { generateToken, parseArgs, tokensMatch } from './config.mjs'
@@ -697,6 +698,29 @@ describe('parseArgs', () => {
   it('defaults to loopback, so the vault is not exposed by accident', () => {
     expect(parseArgs([]).host).toBe('127.0.0.1')
   })
+
+  it('says whether the folder was chosen or merely defaulted to', () => {
+    // Serving `./vault` when nobody said otherwise is a convenience. Writing
+    // it into an account record is not: it would depend on where the person
+    // was standing when they typed the command, and would be kept for good.
+    expect(parseArgs([]).vaultChosen).toBe(false)
+    expect(parseArgs([]).vault).toMatch(/[\\/]vault$/)
+    expect(parseArgs(['--vault', '/tmp/notes']).vaultChosen).toBe(true)
+    expect(parseArgs(['/tmp/notes']).vaultChosen).toBe(true)
+  })
+
+  it('reads the account commands', () => {
+    const options = parseArgs(['--accounts', '/tmp/a.json', '--add-account', 'me@example.com', '--password', 'secret'])
+    expect(options).toMatchObject({
+      accounts: '/tmp/a.json',
+      addAccount: 'me@example.com',
+      password: 'secret',
+      listAccounts: false,
+      setPassword: null,
+    })
+    expect(parseArgs(['--list-accounts']).listAccounts).toBe(true)
+    expect(parseArgs(['--set-password', 'me@example.com']).setPassword).toBe('me@example.com')
+  })
 })
 
 describe('VaultStore', () => {
@@ -1124,5 +1148,599 @@ describe('a path that names a folder, or runs through a file', () => {
     }
     expect(await onDisk('Ideas/Seed.md')).toBe('# Seed\n')
     expect(await onDisk('Home.md')).toContain('# Home')
+  })
+})
+
+/**
+ * Accounts: the same login, on every device, reaching one person's notes.
+ *
+ * The server has always served one folder behind one long random token. That
+ * works for a machine you own and fails for the thing people actually want —
+ * to sign in on the Mac and the phone and see the same notes. So a second
+ * credential was added at the same door, and the whole risk of that change is
+ * *leakage*: one account reaching another's notes, or hearing another's edits.
+ *
+ * These run against a second server with three accounts and three folders,
+ * because that is the only arrangement in which leakage can be observed at
+ * all. Nothing here is mocked — real HTTP, real password hashes, real files.
+ */
+describe('signing in with an account', { timeout: 40_000 }, () => {
+  const MY_PASSWORD = 'a long enough password'
+  const THEIR_PASSWORD = 'another long password'
+
+  /** @type {string} */ let home
+  /** @type {string} */ let accountsFile
+  /** @type {string} */ let primaryVault
+  /** @type {string} */ let myVault
+  /** @type {string} */ let theirVault
+  /** @type {import('node:http').Server} */ let accountsListener
+  /** @type {string} */ let at
+  /** @type {ReturnType<typeof createSyncServer>} */ let accountsSync
+  /** @type {AbortController} */ let accountsWatching
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacefore-accounts-'))
+    accountsFile = join(home, 'accounts.json')
+    primaryVault = join(home, 'Primary')
+    myVault = join(home, 'MyNotes')
+    theirVault = join(home, 'TheirNotes')
+    for (const folder of [primaryVault, myVault, theirVault]) await mkdir(folder, { recursive: true })
+    await writeFile(join(primaryVault, 'Shared.md'), '# Shared\n')
+    await writeFile(join(myVault, 'Mine.md'), '# Mine\n')
+    await writeFile(join(theirVault, 'Theirs.md'), '# Theirs\n')
+
+    await addAccount({ file: accountsFile, email: 'me@example.com', password: MY_PASSWORD, vault: myVault })
+    // Stored as typed, matched case-insensitively — a person signing in from a
+    // phone keyboard should not be told their address does not exist.
+    await addAccount({ file: accountsFile, email: 'You@Example.com', password: THEIR_PASSWORD, vault: theirVault })
+    await addAccount({ file: accountsFile, email: 'shared@example.com', password: MY_PASSWORD, vault: primaryVault })
+    // Its own account, so the wrong guesses the timing check makes are not
+    // added to another test's run and tripping the rate limiter.
+    await addAccount({ file: accountsFile, email: 'timing@example.com', password: MY_PASSWORD, vault: myVault })
+
+    accountsSync = createSyncServer({
+      vault: primaryVault,
+      token: TOKEN,
+      distDir: join(home, '__no_dist__'),
+      accountsFile,
+    })
+    accountsListener = createServer((request, response) => void accountsSync.handle(request, response))
+    await new Promise((done) => accountsListener.listen(0, '127.0.0.1', done))
+    const address = accountsListener.address()
+    at = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    accountsWatching = new AbortController()
+    accountsSync.startWatching(accountsWatching.signal)
+  })
+
+  afterAll(async () => {
+    accountsWatching.abort()
+    await new Promise((done) => accountsListener.close(done))
+    await rm(home, { recursive: true, force: true })
+  })
+
+  /** @param {string} email @param {string} password */
+  const login = (email, password, headers = {}) =>
+    fetch(`${at}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ email, password }),
+    })
+
+  /** @param {string} email @param {string} password */
+  async function signIn(email, password) {
+    const response = await login(email, password)
+    const body = await response.json()
+    expect(response.status, JSON.stringify(body)).toBe(200)
+    return body
+  }
+
+  /** @param {string} token @param {string} path */
+  const as = (token, path, init = {}) =>
+    fetch(`${at}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, ...(init.headers ?? {}) } })
+
+  /** The note names a credential can see, which is the whole question here. */
+  async function notesFor(token) {
+    const response = await as(token, '/api/files')
+    expect(response.status).toBe(200)
+    const { files } = await response.json()
+    return files.map((file) => file.path).sort()
+  }
+
+  /**
+   * A live change stream, collecting into an array the test can read.
+   *
+   * Deliberately not the outer `waitFor`: the interesting assertion here is
+   * that something *never* arrives, which needs the events kept rather than a
+   * promise that resolves on the first match.
+   */
+  async function openStream(token) {
+    const controller = new AbortController()
+    const response = await fetch(`${at}/api/events?token=${encodeURIComponent(token)}`, { signal: controller.signal })
+    expect(response.status).toBe(200)
+    /** @type {any[]} */
+    const events = []
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const pump = (async () => {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          const line = chunk.trim()
+          if (line.startsWith('data: ')) events.push(JSON.parse(line.slice(6)))
+        }
+      }
+    })().catch(() => {})
+    return { events, close: () => (controller.abort(), pump) }
+  }
+
+  const settle = (ms = 400) => new Promise((done) => setTimeout(done, ms))
+
+  it('refuses the wrong password, and says nothing about which addresses exist', async () => {
+    const wrong = await login('me@example.com', 'not the password')
+    const missing = await login('nobody@example.com', 'not the password')
+    expect(wrong.status).toBe(401)
+    expect(missing.status).toBe(401)
+    // Byte for byte the same answer: a difference here is an address oracle.
+    expect(await wrong.text()).toBe(await missing.text())
+  })
+
+  it('takes as long to refuse an address with no account as one with', async () => {
+    // Wording the two refusals identically is not enough. Checking a real
+    // password costs a deliberate ~90 ms of scrypt; skipping that for an
+    // address nobody has would answer in about one, and the difference is
+    // readable from across a network. So the miss pays for a hash too.
+    const time = async (email) => {
+      const started = performance.now()
+      const response = await login(email, 'not the password')
+      expect(response.status).toBe(401)
+      return performance.now() - started
+    }
+    // Three each, alternating, and the fastest of each kept: a busy machine can
+    // make any single request slow, but nothing can make one faster than the
+    // work it did.
+    const hits = []
+    const misses = []
+    for (let round = 0; round < 3; round += 1) {
+      hits.push(await time('timing@example.com'))
+      misses.push(await time(`nobody-${round}@example.com`))
+    }
+    const fastestHit = Math.min(...hits)
+    const fastestMiss = Math.min(...misses)
+    // A hash is ~90 ms and skipping it is ~1 ms, so half is a wide margin that
+    // still fails outright if the work is ever skipped.
+    expect(fastestMiss, `hit ${fastestHit.toFixed(1)}ms vs miss ${fastestMiss.toFixed(1)}ms`).toBeGreaterThan(
+      fastestHit / 2,
+    )
+  }, 30_000)
+
+  it('does not accept a password that is merely close', async () => {
+    for (const attempt of [MY_PASSWORD.toUpperCase(), MY_PASSWORD.slice(0, -1), `${MY_PASSWORD} `, '']) {
+      expect((await login('me@example.com', attempt)).status).toBe(401)
+    }
+  })
+
+  it('hands back a session token, the account name, and nothing about the disk', async () => {
+    const body = await signIn('me@example.com', MY_PASSWORD)
+    expect(body.token).toMatch(/^[\w-]{40,}$/)
+    expect(body.email).toBe('me@example.com')
+    // The folder's name is useful to show; its path is the server's business.
+    expect(body.vault).toBe('MyNotes')
+    expect(JSON.stringify(body)).not.toContain(home)
+    expect(JSON.stringify(body)).not.toContain(MY_PASSWORD)
+  })
+
+  it('matches the address however it was typed', async () => {
+    const body = await signIn('YOU@example.COM', THEIR_PASSWORD)
+    expect(body.email).toBe('You@Example.com')
+    expect(body.vault).toBe('TheirNotes')
+  })
+
+  it('gives each account its own notes, and no way to reach the other', async () => {
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const theirs = await signIn('you@example.com', THEIR_PASSWORD)
+
+    expect(await notesFor(mine.token)).toEqual(['Mine.md'])
+    expect(await notesFor(theirs.token)).toEqual(['Theirs.md'])
+
+    // Not merely absent from the listing — unreachable by name.
+    expect((await as(mine.token, '/api/file?path=Theirs.md')).status).toBe(404)
+    expect((await as(theirs.token, '/api/file?path=Mine.md')).status).toBe(404)
+
+    // And a write lands in the writer's folder, not in the other's.
+    const written = await as(mine.token, '/api/file?path=Only%20Mine.md', { method: 'PUT', body: '# Only mine\n' })
+    expect(written.status).toBe(200)
+    expect(await readFile(join(myVault, 'Only Mine.md'), 'utf8')).toBe('# Only mine\n')
+    expect(await notesFor(theirs.token)).toEqual(['Theirs.md'])
+    await rm(join(myVault, 'Only Mine.md'), { force: true })
+  })
+
+  it('never sends one account the other account’s edits', async () => {
+    // The reason the server keeps a change stream per vault rather than one
+    // for the whole process: a listener attached to the wrong set would hear
+    // the *paths and hashes* of notes it can never open.
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const theirs = await signIn('you@example.com', THEIR_PASSWORD)
+    const stream = await openStream(mine.token)
+    try {
+      await settle(100)
+      expect((await as(theirs.token, '/api/file?path=Loud.md', { method: 'PUT', body: 'x' })).status).toBe(200)
+      await settle()
+      expect(stream.events).toEqual([])
+
+      // The same stream is not simply broken: its own account's edit arrives.
+      expect((await as(mine.token, '/api/file?path=Quiet.md', { method: 'PUT', body: 'y' })).status).toBe(200)
+      await settle()
+      expect(stream.events.map((event) => event.path)).toEqual(['Quiet.md'])
+    } finally {
+      await stream.close()
+      await rm(join(theirVault, 'Loud.md'), { force: true })
+      await rm(join(myVault, 'Quiet.md'), { force: true })
+    }
+  })
+
+  it('tells a signed-in device an edit made outside the app, in its own vault', async () => {
+    // A vault opened when someone signed in, after the server was already
+    // watching, must be watched too — otherwise editing a note in Finder would
+    // reach every device except the ones that use an account.
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const stream = await openStream(mine.token)
+    try {
+      await settle(200)
+      await writeFile(join(myVault, 'From Finder.md'), '# Written outside\n')
+      const deadline = Date.now() + 15_000
+      while (Date.now() < deadline && !stream.events.some((event) => event.path === 'From Finder.md')) await settle(100)
+      expect(stream.events.map((event) => event.path)).toContain('From Finder.md')
+    } finally {
+      await stream.close()
+      await rm(join(myVault, 'From Finder.md'), { force: true })
+    }
+  })
+
+  it('says who is signed in, without being asked for a password again', async () => {
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const me = await (await as(mine.token, '/api/auth/me')).json()
+    expect(me).toEqual({ signedIn: true, email: 'me@example.com', vault: 'MyNotes' })
+  })
+
+  it('still takes the access token the Mac app was launched with', async () => {
+    // Accounts were added beside the token, not in front of it: an app already
+    // paired with `--token` must keep working across the upgrade.
+    expect(await notesFor(TOKEN)).toEqual(['Shared.md'])
+    const me = await (await as(TOKEN, '/api/auth/me')).json()
+    expect(me).toEqual({ signedIn: false, email: null, vault: 'Primary' })
+  })
+
+  it('serves one vault to one set of listeners, however it was reached', async () => {
+    // `shared@example.com` owns the folder the server was started on, so an
+    // account and the access token are two ways to the same notes. Opening a
+    // second view of those files would be two watchers and two echo windows
+    // over one folder, and the tell is what the other device hears: the write
+    // itself, named with who made it, rather than the *filesystem* noticing a
+    // moment later that something changed and saying so anonymously. A device
+    // that cannot tell an edit apart from its own save fights itself.
+    const shared = await signIn('shared@example.com', MY_PASSWORD)
+    expect(await notesFor(shared.token)).toEqual(['Shared.md'])
+    const stream = await openStream(shared.token)
+    try {
+      await settle(100)
+      const written = await as(TOKEN, '/api/file?path=Both.md', {
+        method: 'PUT',
+        body: 'z',
+        headers: { 'x-spacefore-client': 'the-mac-app' },
+      })
+      expect(written.status).toBe(200)
+      await settle()
+      // Exactly one — the write, once, not the write and then its echo.
+      expect(stream.events).toEqual([
+        { type: 'upsert', path: 'Both.md', hash: hashOf(Buffer.from('z')), origin: 'the-mac-app' },
+      ])
+    } finally {
+      await stream.close()
+      await rm(join(primaryVault, 'Both.md'), { force: true })
+    }
+  })
+
+  it('signs one device out without signing the others out', async () => {
+    const phone = await signIn('me@example.com', MY_PASSWORD)
+    const laptop = await signIn('me@example.com', MY_PASSWORD)
+    expect(phone.token).not.toBe(laptop.token)
+
+    const out = await as(phone.token, '/api/auth/logout', { method: 'POST' })
+    expect(out.status).toBe(200)
+
+    expect((await as(phone.token, '/api/files')).status).toBe(401)
+    expect((await as(laptop.token, '/api/files')).status).toBe(200)
+  })
+
+  it('keeps the token out of the file it writes, so a stolen backup is not a way in', async () => {
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const stored = await readFile(accountsFile, 'utf8')
+    expect(stored).not.toContain(mine.token)
+    expect(stored).not.toContain(MY_PASSWORD)
+    expect(stored).not.toContain(THEIR_PASSWORD)
+    // What is stored is the hash of the token, and it is enough to sign in with.
+    expect(stored).toContain(sessionId(mine.token))
+  })
+
+  it('notices an account added from the terminal while it is running', async () => {
+    // Accounts are made with a command on the machine that holds the notes.
+    // Having to restart the server to use one would make that unusable.
+    const later = join(home, 'LaterNotes')
+    await mkdir(later, { recursive: true })
+    await writeFile(join(later, 'Later.md'), '# Later\n')
+    expect((await login('later@example.com', MY_PASSWORD)).status).toBe(401)
+
+    await addAccount({ file: accountsFile, email: 'later@example.com', password: MY_PASSWORD, vault: later })
+    const body = await signIn('later@example.com', MY_PASSWORD)
+    expect(await notesFor(body.token)).toEqual(['Later.md'])
+  })
+
+  it('slows a run of wrong passwords, and lets the right one through afterwards', async () => {
+    const guess = () => login('slow@example.com', 'wrong every time')
+    let refused = null
+    for (let attempt = 0; attempt < 12 && !refused; attempt += 1) {
+      const response = await guess()
+      if (response.status === 429) refused = response
+      else expect(response.status).toBe(401)
+    }
+    expect(refused, 'guessing was never slowed down').not.toBeNull()
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect(await refused.json()).toMatchObject({ error: expect.stringContaining('Try again in') })
+
+    // A person who mistyped their password must not be locked out for good.
+    await addAccount({ file: accountsFile, email: 'slow@example.com', password: MY_PASSWORD, vault: myVault })
+    const wait = Number(refused.headers.get('retry-after')) * 1000
+    await settle(wait + 300)
+    expect((await login('slow@example.com', MY_PASSWORD)).status).toBe(200)
+  })
+
+  it('offers no way to make an account over the network', async () => {
+    // The choice this server is built around: accounts exist because someone
+    // typed a command on the machine holding the notes. There is no sign-up
+    // form, so there is no sign-up form to attack.
+    const before = JSON.parse(await readFile(accountsFile, 'utf8')).accounts.length
+    const payload = JSON.stringify({ email: 'intruder@example.com', password: 'a long enough password' })
+    const tries = ['/api/auth/register', '/api/auth/signup', '/api/accounts', '/api/auth/account']
+    for (const path of tries) {
+      for (const token of [null, TOKEN]) {
+        const response = await fetch(`${at}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: payload,
+        })
+        expect([401, 404], `${path} as ${token ? 'the token' : 'a stranger'}`).toContain(response.status)
+      }
+    }
+    expect(JSON.parse(await readFile(accountsFile, 'utf8')).accounts.length).toBe(before)
+    expect((await login('intruder@example.com', 'a long enough password')).status).toBe(401)
+  })
+
+  it('will not buffer a large body for a caller who has not signed in', async () => {
+    // The one endpoint an unauthenticated caller can reach. A note may be 32 MB
+    // and this may not: without a cap of its own, anyone who can see the port
+    // could make the server hold whatever they cared to send.
+    //
+    // The password here is the *right* one, so the only reason this can fail is
+    // the size. A body that is merely wrong would be refused either way and
+    // would prove nothing.
+    const response = await fetch(`${at}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'me@example.com', password: MY_PASSWORD, padding: 'x'.repeat(200_000) }),
+      // The socket is destroyed mid-send, which `fetch` reports as a failure
+      // rather than as a status. That counts as refused.
+    }).catch(() => ({ status: 0, json: async () => ({}) }))
+    expect(response.status, 'an oversized sign-in was accepted').not.toBe(200)
+    expect(await response.json().catch(() => ({}))).not.toHaveProperty('token')
+
+    // And the server is still there, and still signs the same person in.
+    expect((await fetch(`${at}/api/health`)).status).toBe(200)
+    expect((await login('me@example.com', MY_PASSWORD)).status).toBe(200)
+  })
+
+  it('refuses a body that is not JSON without taking the server down', async () => {
+    const response = await fetch(`${at}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json at all',
+    })
+    expect(response.status).toBe(400)
+    expect((await fetch(`${at}/api/health`)).status).toBe(200)
+  })
+})
+
+/**
+ * Making an account, from the machine that holds the notes.
+ *
+ * This is the only way one exists — there is no sign-up page, deliberately —
+ * so the commands are the whole of the account system's front door and are
+ * exercised as a person would run them, as a child process with real argv.
+ */
+describe('a page served from somewhere else', () => {
+  it('is allowed to send the headers a sign-in needs', async () => {
+    // The app is normally served by this same server, so this only matters
+    // when it is not — a dev server on another port, say. A preflight that
+    // omits a header the client sends makes the request fail before it is
+    // made, and the browser reports it as a network error rather than as the
+    // refused header it is.
+    const preflight = await fetch(`${base}/api/auth/login`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'POST' },
+    })
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
+    const allowed = (preflight.headers.get('access-control-allow-headers') ?? '').toLowerCase()
+    for (const header of ['authorization', 'content-type', 'if-match', 'x-spacefore-client', 'x-spacefore-device']) {
+      expect(allowed, header).toContain(header)
+    }
+    // And the header that says how long to wait after too many guesses, so a
+    // cross-origin client can honour it rather than retrying straight away.
+    expect((preflight.headers.get('access-control-expose-headers') ?? '').toLowerCase()).toContain('retry-after')
+  })
+
+  it('still needs a credential — being allowed to ask is not being let in', async () => {
+    const response = await fetch(`${base}/api/files`, { headers: { origin: 'http://evil.example' } })
+    expect(response.status).toBe(401)
+  })
+})
+
+describe('the account commands', { timeout: 60_000 }, () => {
+  /** @type {string} */
+  let home
+  /** @type {string} */
+  let entry
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacefore-cli-'))
+    const { fileURLToPath } = await import('node:url')
+    entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+    await mkdir(join(home, 'Notes'), { recursive: true })
+  })
+
+  afterAll(async () => {
+    await rm(home, { recursive: true, force: true })
+  })
+
+  /** Run the server's CLI and collect what a person would see. */
+  async function run(...args) {
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, [entry, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += String(chunk)))
+    child.stderr.on('data', (chunk) => (err += String(chunk)))
+    const code = await new Promise((done) => child.on('close', done))
+    return { code, out, err }
+  }
+
+  const accountsFile = () => join(home, 'accounts.json')
+  const PASSWORD = 'a long enough password'
+
+  it('makes an account, and does not start a server afterwards', async () => {
+    const made = await run(
+      '--vault', join(home, 'Notes'),
+      '--accounts', accountsFile(),
+      '--add-account', 'me@example.com',
+      '--password', PASSWORD,
+    )
+    // The process must exit: `--add-account` is a command, not a flag that
+    // also serves. A shell left hanging on it would look like a hang.
+    expect(made.code, made.err).toBe(0)
+    expect(made.out).toContain('me@example.com')
+    expect(made.out).toContain(join(home, 'Notes'))
+
+    const stored = JSON.parse(await readFile(accountsFile(), 'utf8'))
+    expect(stored.accounts).toHaveLength(1)
+    expect(JSON.stringify(stored)).not.toContain(PASSWORD)
+  })
+
+  it('refuses a second account for the same address, and says why', async () => {
+    const again = await run(
+      '--vault', join(home, 'Notes'),
+      '--accounts', accountsFile(),
+      '--add-account', 'ME@example.com',
+      '--password', PASSWORD,
+    )
+    expect(again.code).toBe(1)
+    expect(again.err).toMatch(/already an account/i)
+    expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
+  })
+
+  it('refuses a password too short to be worth hashing', async () => {
+    const short = await run(
+      '--vault', join(home, 'Notes'),
+      '--accounts', accountsFile(),
+      '--add-account', 'short@example.com',
+      '--password', 'abc',
+    )
+    expect(short.code).toBe(1)
+    expect(short.err).toMatch(/at least \d+ characters/i)
+    expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
+  })
+
+  it('lists the accounts and the devices signed in on each', async () => {
+    const { createSession, loadAccounts } = await import('./accounts.mjs')
+    const store = await loadAccounts(accountsFile())
+    await createSession({ file: accountsFile(), account: store.accounts[0], device: 'an iPhone or iPad' })
+
+    const listed = await run('--accounts', accountsFile(), '--list-accounts')
+    expect(listed.code, listed.err).toBe(0)
+    expect(listed.out).toContain('me@example.com')
+    expect(listed.out).toContain(join(home, 'Notes'))
+    // The device, so it is obvious whether the list holds one you no longer
+    // recognise — which is the question you are asking when you run this.
+    expect(listed.out).toContain('an iPhone or iPad')
+    // Never the credentials themselves.
+    expect(listed.out).not.toContain(PASSWORD)
+    expect(listed.out).not.toMatch(/[A-Fa-f0-9]{64}/)
+  })
+
+  it('says what to do when there are no accounts yet', async () => {
+    const empty = await run('--accounts', join(home, 'nothing.json'), '--list-accounts')
+    expect(empty.code).toBe(0)
+    expect(empty.out).toContain('--add-account')
+  })
+
+  it('changes a password, and signs out every device that was signed in', async () => {
+    const { loadAccounts } = await import('./accounts.mjs')
+    expect((await loadAccounts(accountsFile())).sessions.length).toBeGreaterThan(0)
+
+    const changed = await run('--accounts', accountsFile(), '--set-password', 'me@example.com', '--password', 'a different long password')
+    expect(changed.code, changed.err).toBe(0)
+    expect(changed.out).toMatch(/signed out/i)
+
+    // A password is changed because it may be known. A session that outlived
+    // it would make the change decorative.
+    expect((await loadAccounts(accountsFile())).sessions).toEqual([])
+  })
+
+  it('will not change the password of an account that does not exist', async () => {
+    const missing = await run('--accounts', accountsFile(), '--set-password', 'nobody@example.com', '--password', PASSWORD)
+    expect(missing.code).toBe(1)
+    expect(missing.err).toMatch(/no account/i)
+  })
+
+  it('will not make an account without a folder for its notes', async () => {
+    const homeless = await run('--accounts', accountsFile(), '--add-account', 'homeless@example.com', '--password', PASSWORD)
+    expect(homeless.code).toBe(1)
+    expect(homeless.err).toMatch(/--vault/)
+  })
+
+  it('offers the account commands in its help, where someone would look for them', async () => {
+    const help = await run('--help')
+    expect(help.code).toBe(0)
+    for (const flag of ['--add-account', '--set-password', '--list-accounts', '--accounts']) {
+      expect(help.out, flag).toContain(flag)
+    }
+    expect(help.out).toMatch(/no sign-up page/i)
+  })
+})
+
+describe('a server started without accounts', () => {
+  it('says so plainly rather than pretending a password was wrong', async () => {
+    const response = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'me@example.com', password: 'a long enough password' }),
+    })
+    expect(response.status).toBe(404)
+    expect((await response.json()).error).toContain('access token')
+  })
+
+  it('still answers who is signed in, for a token that is not an account', async () => {
+    const me = await (await call('/api/auth/me')).json()
+    expect(me.signedIn).toBe(false)
+    expect(me.email).toBeNull()
+  })
+
+  it('takes a sign-out from a device that never signed in', async () => {
+    const response = await call('/api/auth/logout', { method: 'POST' })
+    expect(response.status).toBe(200)
+    expect((await call('/api/files')).status).toBe(200)
   })
 })

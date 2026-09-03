@@ -5,7 +5,9 @@ A local-first, plain-text knowledge base in the browser — in the spirit of
 folder you control; SpaceFore adds the connective tissue: `[[wiki-links]]`,
 backlinks, a live graph of your vault, instant search and a command palette.
 
-No account, no server, no telemetry. Everything runs in the tab.
+No cloud service, no telemetry. Everything runs in the tab, against a folder you
+control — and when you want the same notes on several devices, you run the server
+yourself and sign in to it.
 
 ## Features
 
@@ -43,7 +45,8 @@ No account, no server, no telemetry. Everything runs in the tab.
   File System Access API (Chrome, Edge, Opera)
 - **Browser vault** — persisted in IndexedDB, survives reloads, works anywhere
 - **Sync server** — run one machine as the host and every device you own reads
-  and writes the same folder, live. See [docs/SERVER.md](docs/SERVER.md)
+  and writes the same folder, live. Sign in with an email and password, or paste
+  the server's access token. See [docs/SERVER.md](docs/SERVER.md)
 - **Demo vault** — a ready-made 20-note knowledge base that doubles as the
   product tour
 - **Paste or drop a file into a note** — a screenshot goes in as
@@ -140,14 +143,14 @@ npm run build    # typecheck + production bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1564 unit and component tests
+npm test         # vitest — 1650 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 
 ### End-to-end tests
 
-`npm run e2e` starts the preview server, opens a real browser and walks 146 real
-user flows — 114 of them in Chromium alone, the rest in the other two engines.
+`npm run e2e` starts the preview server, opens a real browser and walks 149 real
+user flows — 117 of them in Chromium alone, the rest in the other two engines.
 They expand folders, type, format, complete wiki-links, click links and tags,
 tick a task inside a transclusion, use the search operators and the command
 palette, open the graph, rename a note and watch the links follow it, delete,
@@ -182,7 +185,12 @@ Another starts a real sync server over a real folder and pairs **two
 independent browser contexts** with it — a stand-in for a laptop and a phone —
 then checks that an edit on one appears on the other without a reload, that
 creating and deleting propagate, that a file changed on the host reaches both,
-and that two devices editing the same note end up with both versions.
+and that two devices editing the same note end up with both versions. It also
+makes an **account** the only way one can be made — running `--add-account` as a
+child process before the server starts — then signs a third device in with that
+email and password, checks it lands on the same notes and stays signed in across
+a reload, that signing out kills the session on the *server* and not merely in
+the browser, and that a wrong password is refused and remembered nowhere.
 
 They exist because a whole class of defect passes every unit test and still
 breaks the app: a keymap CodeMirror swallows before the app sees it, a panel
@@ -266,13 +274,14 @@ src/
     graph/layout.ts     deterministic force-directed simulation
     search/engine.ts    query parsing, ranking, quick switcher
     search/fuzzy.ts     fuzzy matcher + highlighter
-    vault/              memory / IndexedDB / File System Access adapters
+    vault/              memory / IndexedDB / File System Access / sync-server adapters
   ui/                   editor, preview, graph, explorer, panels, palette, shell
   styles/               design tokens and theme, one dark-first system
 ```
 
 ```
-server/                 the sync server: one folder, an HTTP API, a change feed
+server/                 the sync server: one folder per account, an HTTP API,
+                        a change feed, and passwords hashed with scrypt
 e2e/                    browser-driven suites; see "End-to-end tests" above
 ```
 
@@ -295,11 +304,25 @@ npm run build
 npm run server -- --vault ~/Notes --host 0.0.0.0
 ```
 
-The server prints an address and an access token; paste both into **Connect to a
-server** on the other device. It binds to loopback unless you ask otherwise, and
-`docs/SERVER.md` covers reaching it from outside your network (Tailscale or a
-Cloudflare tunnel — not a forwarded router port), keeping it running on a Mac,
-and what the token does and does not protect.
+There are two ways in. Make yourself an account on the host —
+
+```bash
+npm run server -- --vault ~/Notes --add-account you@example.com
+```
+
+— and then sign in with that email and password on the Mac, the PC and the
+phone: the same account reaches the same notes everywhere, and each device gets
+its own session that can be ended without changing the password. Accounts are
+made with that command and nowhere else; the server has no sign-up page, so
+there is no sign-up page to attack.
+
+Or paste the access token the server prints, which is what a single machine
+needs and what the macOS app pairs itself with.
+
+It binds to loopback unless you ask otherwise, and `docs/SERVER.md` covers
+reaching it from outside your network (Tailscale or a Cloudflare tunnel — not a
+forwarded router port), keeping it running on a Mac, and what each credential
+does and does not protect.
 
 Opening a vault is one request rather than one per note, so a folder of five
 thousand notes appears in a few seconds rather than queueing behind the

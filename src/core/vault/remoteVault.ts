@@ -23,6 +23,8 @@ export interface RemoteVaultOptions {
   token: string
   /** Overrides the name the server reports. */
   name?: string
+  /** Set when `token` came from signing in, so a refusal can say the right thing. */
+  email?: string
 }
 
 /** What the server returns for one file. */
@@ -77,10 +79,29 @@ export function normalizeServerUrl(input: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
+/** Which of the two credentials a call is carrying. */
+export type Credential = 'token' | 'account'
+
+/**
+ * What to say when the server refuses a credential.
+ *
+ * The two are not interchangeable, and neither is the advice: a token was
+ * rotated — the server prints a new one every launch — and has to be copied
+ * again, while a sign-in expired or was signed out from another device and
+ * needs the password. Telling someone to copy a token they never had is how a
+ * working app feels broken.
+ */
+function refused(credential: Credential): string {
+  return credential === 'account'
+    ? 'That sign-in is no longer valid. Sign in again.'
+    : 'That token was not accepted. Copy it again from the server window.'
+}
+
 /** Check an address and token before committing to them. */
 export async function probeServer(
   url: string,
   token: string,
+  credential: Credential = 'token',
 ): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
   let origin: string
   try {
@@ -102,10 +123,97 @@ export async function probeServer(
   }
 
   const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` } })
-  if (vault.status === 401) return { ok: false, error: 'That token was not accepted. Copy it again from the server window.' }
+  if (vault.status === 401) return { ok: false, error: refused(credential) }
   if (!vault.ok) return { ok: false, error: `The server answered ${vault.status}.` }
   const info = (await vault.json().catch(() => null)) as { name?: string } | null
   return { ok: true, name: info?.name ?? 'Sync server' }
+}
+
+/* ------------------------------------------------------------------ *
+ * Signing in
+ * ------------------------------------------------------------------ */
+
+/**
+ * Roughly what this device is, for the account's own list of devices.
+ *
+ * Deliberately coarse. The point is that "an iPhone" and "a Mac" are
+ * distinguishable in `--list-accounts` when someone is deciding which device to
+ * sign out; nothing here identifies the device more precisely than the request
+ * carrying it already does.
+ */
+export function describeDevice(agent = typeof navigator === 'object' ? navigator.userAgent : ''): string {
+  if (/iPhone|iPad|iPod/.test(agent)) return 'an iPhone or iPad'
+  if (/Android/.test(agent)) return 'an Android device'
+  if (/Macintosh|Mac OS X/.test(agent)) return 'a Mac'
+  if (/Windows/.test(agent)) return 'a Windows PC'
+  if (/Linux|X11/.test(agent)) return 'a Linux machine'
+  return 'a browser'
+}
+
+/**
+ * Sign in to a server that has accounts, and come back with this device's own
+ * session token.
+ *
+ * The password is sent once, over this one request, and is never stored: what
+ * the device keeps afterwards is the session, which the account's owner can
+ * end from any other device without changing the password.
+ */
+export async function signIn(
+  url: string,
+  email: string,
+  password: string,
+): Promise<{ ok: true; token: string; email: string; name: string } | { ok: false; error: string }> {
+  let origin: string
+  try {
+    origin = normalizeServerUrl(url)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${origin}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-spacefore-device': describeDevice() },
+      body: JSON.stringify({ email: email.trim(), password }),
+    })
+  } catch {
+    return { ok: false, error: `Could not reach ${origin}. Is the server running, and is this device allowed to see it?` }
+  }
+
+  if (response.status === 404) {
+    // Not a missing page: this server was started without an accounts file, so
+    // there is no account to sign in to and the token is the way in.
+    return { ok: false, error: 'This server does not use accounts. Paste its access token instead.' }
+  }
+  const body = (await response.json().catch(() => null)) as
+    | { token?: string; email?: string; vault?: string; error?: string }
+    | null
+  if (!response.ok) {
+    return { ok: false, error: body?.error ?? `The server answered ${response.status}.` }
+  }
+  if (typeof body?.token !== 'string' || body.token === '') {
+    return { ok: false, error: 'The server accepted the password but sent nothing to sign in with.' }
+  }
+  return { ok: true, token: body.token, email: body.email ?? email.trim(), name: body.vault ?? 'Sync server' }
+}
+
+/**
+ * End this device's session, best effort.
+ *
+ * Best effort on purpose: the device is being disconnected either way, and a
+ * server that cannot be reached must not be able to keep someone signed in to
+ * a vault they are trying to leave.
+ */
+export async function signOut(url: string, token: string): Promise<void> {
+  try {
+    await fetch(`${normalizeServerUrl(url)}/api/auth/logout`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    })
+  } catch {
+    /* the token is being forgotten locally regardless */
+  }
 }
 
 /** Thrown when a save was refused because the note changed on another device. */
@@ -168,11 +276,11 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
     } catch {
       throw new Error(`Could not reach ${origin}. Your notes are safe; the change will be saved when it is back.`)
     }
-    if (response.status === 401) throw new Error('The server rejected this device’s token. Connect to it again.')
+    if (response.status === 401) throw new Error(refused(options.email ? 'account' : 'token'))
     return response
   }
 
-  const probe = await probeServer(origin, token)
+  const probe = await probeServer(origin, token, options.email ? 'account' : 'token')
   if (!probe.ok) throw new Error(probe.error)
 
   /* ---- change stream ------------------------------------------------ */

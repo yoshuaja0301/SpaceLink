@@ -14,6 +14,8 @@ import { dirname, join, resolve } from 'node:path'
 
 const CONFIG_DIRECTORY = join(homedir(), '.spacefore')
 const CONFIG_FILE = join(CONFIG_DIRECTORY, 'server.json')
+/** Accounts and their sessions. Beside the token, and just as private. */
+const ACCOUNTS_FILE = join(CONFIG_DIRECTORY, 'accounts.json')
 
 export function generateToken() {
   return randomBytes(32).toString('base64url')
@@ -61,15 +63,37 @@ export async function loadOrCreateToken() {
  * Parse the command line.
  *
  * @param {string[]} argv
- * @returns {{ vault: string, port: number, host: string, token: string | null, tlsCert: string | null, tlsKey: string | null, printReady: boolean, help: boolean }}
+ * @returns {{ vault: string, vaultChosen: boolean, port: number, host: string, token: string | null, tlsCert: string | null, tlsKey: string | null, printReady: boolean, help: boolean }}
  */
 export function parseArgs(argv) {
   const options = {
     vault: '',
+    /**
+     * Whether a folder was actually named, as opposed to the default below.
+     *
+     * Serving `./vault` when nobody said otherwise is a convenience. Writing
+     * `./vault` into an account record is not: it is a folder the person never
+     * chose, remembered permanently, and different depending on where they
+     * happened to be standing when they typed the command.
+     */
+    vaultChosen: false,
     port: 4899,
     host: '127.0.0.1',
     /** @type {string | null} */
     token: null,
+    /** @type {string | null} */
+    accounts: null,
+    /**
+     * Account management, from the terminal and only from the terminal: there
+     * is deliberately no sign-up endpoint for these to duplicate.
+     * @type {string | null}
+     */
+    addAccount: null,
+    /** @type {string | null} */
+    setPassword: null,
+    listAccounts: false,
+    /** @type {string | null} */
+    password: null,
     /** @type {string | null} */
     tlsCert: null,
     /** @type {string | null} */
@@ -99,6 +123,21 @@ export function parseArgs(argv) {
       case '--token':
         options.token = value()
         break
+      case '--accounts':
+        options.accounts = value()
+        break
+      case '--add-account':
+        options.addAccount = value()
+        break
+      case '--set-password':
+        options.setPassword = value()
+        break
+      case '--list-accounts':
+        options.listAccounts = true
+        break
+      case '--password':
+        options.password = value()
+        break
       case '--tls-cert':
         options.tlsCert = value()
         break
@@ -127,6 +166,7 @@ export function parseArgs(argv) {
   if ((options.tlsCert === null) !== (options.tlsKey === null)) {
     throw new Error('--tls-cert and --tls-key must be given together.')
   }
+  options.vaultChosen = options.vault !== ''
   options.vault = options.vault ? resolve(options.vault) : resolve(process.cwd(), 'vault')
   return options
 }
@@ -152,8 +192,20 @@ Options
                     people.
   -h, --help        Show this.
 
+Accounts — sign in from any device instead of pasting a token
+  --add-account <email>   Make an account and ask for a password. The account
+                          gets --vault as its folder of notes. Made here and
+                          only here: the server has no sign-up page.
+  --set-password <email>  Change a password. Every device signed in on that
+                          account is signed out.
+  --list-accounts         Show the accounts, where their notes live, and which
+                          devices are signed in.
+  --password <value>      Supply the password instead of being asked, for a
+                          script. It will be visible in your shell history.
+  --accounts <file>       Where accounts live (default ~/.spacefore/accounts.json).
+
 See docs/SERVER.md for reaching it from other devices, and for keeping it
 running in the background on a Mac.
 `.trimStart()
 
-export { CONFIG_FILE, dirname }
+export { ACCOUNTS_FILE, CONFIG_FILE, dirname }
