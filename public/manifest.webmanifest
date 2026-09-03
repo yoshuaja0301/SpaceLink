@@ -1,0 +1,16 @@
+{
+  "name": "SpaceLink",
+  "short_name": "SpaceLink",
+  "description": "A local-first, plain-text knowledge base: wiki-links, backlinks and a graph of your notes.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1e1e22",
+  "theme_color": "#1e1e22",
+  "orientation": "any",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

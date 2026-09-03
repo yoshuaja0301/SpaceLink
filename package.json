@@ -1,0 +1,46 @@
+{
+  "name": "spacelink",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "SpaceLink — a local-first, plain-text knowledge base in the browser. Obsidian-style vault, wiki-links, backlinks and graph view.",
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "dev": "vite",
+    "e2e": "node e2e/run.mjs",
+    "preview": "vite preview",
+    "server": "node server/index.mjs",
+    "start": "npm run build && node server/index.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
+    "@lezer/highlight": "^1.2.3",
+    "dompurify": "^3.4.14",
+    "katex": "^0.18.4",
+    "markdown-it": "^15.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.0.1",
+    "playwright": "^1.56.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

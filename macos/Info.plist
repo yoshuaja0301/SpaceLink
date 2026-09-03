@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>SpaceLink</string>
+  <key>CFBundleDisplayName</key>
+  <string>SpaceLink</string>
+  <key>CFBundleIdentifier</key>
+  <string>md.spacelink.app</string>
+  <key>CFBundleExecutable</key>
+  <string>SpaceLink</string>
+  <key>CFBundleIconFile</key>
+  <string>SpaceLink</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!--
+    The window is drawn by the web app, which follows the system appearance
+    itself, so macOS must not tint it.
+  -->
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <!--
+    The server this app starts listens on 127.0.0.1 over plain HTTP. That never
+    leaves the machine, so there is nothing for TLS to protect against here, but
+    App Transport Security still has to be told.
+  -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>
