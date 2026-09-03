@@ -102,7 +102,7 @@ export async function probeServer(
   url: string,
   token: string,
   credential: Credential = 'token',
-): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; name: string } | { ok: false; error: string; refused?: true }> {
   let origin: string
   try {
     origin = normalizeServerUrl(url)
@@ -123,7 +123,7 @@ export async function probeServer(
   }
 
   const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` } })
-  if (vault.status === 401) return { ok: false, error: refused(credential) }
+  if (vault.status === 401) return { ok: false, error: refused(credential), refused: true }
   const info = (await vault.json().catch(() => null)) as { name?: string; error?: string } | null
   // The server's own words when it has any: "the folder this vault lives in is
   // not there" tells the reader what to do about it, and a bare status code
@@ -254,6 +254,24 @@ export async function openWithAccount(
   }
 }
 
+/**
+ * Thrown when the server refused the credential — not a server that is away.
+ *
+ * The two are told apart because the advice is opposite. A server that is
+ * asleep or off the network comes back, and the pairing works again the moment
+ * it does; a session that was revoked — signed out from elsewhere, or its
+ * account's password changed — never will, however many times the reader
+ * reloads. Both used to arrive as a plain `Error`, so a device signed out by
+ * `--set-password` was told its server could not be reached and to reload once
+ * it was back, while the server was up the whole time.
+ */
+export class RemoteRefused extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RemoteRefused'
+  }
+}
+
 /** Thrown when a save was refused because the note changed on another device. */
 export class RemoteConflict extends Error {
   readonly conflictPath: NotePath
@@ -314,12 +332,12 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
     } catch {
       throw new Error(`Could not reach ${origin}. Your notes are safe; the change will be saved when it is back.`)
     }
-    if (response.status === 401) throw new Error(refused(options.email ? 'account' : 'token'))
+    if (response.status === 401) throw new RemoteRefused(refused(options.email ? 'account' : 'token'))
     return response
   }
 
   const probe = await probeServer(origin, token, options.email ? 'account' : 'token')
-  if (!probe.ok) throw new Error(probe.error)
+  if (!probe.ok) throw probe.refused ? new RemoteRefused(probe.error) : new Error(probe.error)
 
   /* ---- change stream ------------------------------------------------ */
 

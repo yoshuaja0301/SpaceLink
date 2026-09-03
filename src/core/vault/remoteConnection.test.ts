@@ -14,9 +14,11 @@ import {
   forgetRemoteConnection,
   isLoopbackOrigin,
   loadRemoteConnection,
+  reconnectFailure,
   saveRemoteConnection,
   takeHandoffConnection,
 } from './remoteConnection'
+import { RemoteRefused } from './remoteVault'
 
 beforeEach(() => {
   localStorage.clear()
@@ -180,5 +182,37 @@ describe('takeHandoffConnection', () => {
       },
     } as unknown as History
     expect(takeHandoffConnection(page.location, history)).toBeNull()
+  })
+})
+
+describe('what to say when a remembered server will not reopen', () => {
+  it('sends a reader whose sign-in was refused to sign in again, not to wait', () => {
+    // The failure `--set-password` causes on every other device. Telling them
+    // to reload once the server is back is advice that cannot work: it is back,
+    // and it is their credential that is gone.
+    const message = reconnectFailure(new RemoteRefused('That sign-in is no longer valid. Sign in again.'))
+    expect(message).toMatch(/sign in again/i)
+    expect(message, 'a refused credential was described as an unreachable server').not.toMatch(/reload/i)
+    expect(message, 'nowhere to go and do it').toMatch(/status bar/i)
+  })
+
+  it('still tells a reader whose server is away to wait for it', () => {
+    // The pairing is good; the network is not. Reloading really is the answer.
+    for (const failure of [new Error('Could not reach http://mac.local:4899.'), new TypeError('fetch failed'), 'a string']) {
+      const message = reconnectFailure(failure)
+      expect(message).toMatch(/reload once it is back/i)
+      expect(message, 'a server that is away was blamed on the reader').not.toMatch(/sign in again/i)
+    }
+  })
+
+  it('keeps the pairing either way, which is what makes signing in again one field', () => {
+    // Both sentences promise the address and email are still there. Nothing in
+    // here may quietly forget them.
+    const before = localStorage.getItem(REMOTE_KEY)
+    saveRemoteConnection({ url: 'http://mac.local:4899', token: 'session', email: 'me@example.com' })
+    reconnectFailure(new RemoteRefused('That sign-in is no longer valid. Sign in again.'))
+    reconnectFailure(new Error('Could not reach it.'))
+    expect(loadRemoteConnection()).toMatchObject({ url: 'http://mac.local:4899', email: 'me@example.com' })
+    if (before === null) localStorage.removeItem(REMOTE_KEY)
   })
 })

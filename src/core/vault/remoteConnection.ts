@@ -1,3 +1,5 @@
+import { RemoteRefused } from './remoteVault'
+
 /**
  * The sync server this device is paired with.
  *
@@ -25,6 +27,29 @@ export interface RemoteConnection {
 }
 
 export const REMOTE_KEY = 'spacelink.remote'
+
+/**
+ * What to tell the reader when a remembered server could not be reopened.
+ *
+ * There are two failures behind that one moment and the advice is opposite.
+ * A server that is asleep, off the network, or being restarted comes back, and
+ * the pairing works again by itself — so "reload once it is back" is exactly
+ * right. A credential the server refused never comes back: a session ended
+ * from another device, or an account whose password was changed, which is the
+ * command documented as signing every device out. Measured: the server
+ * answered 200 on `/api/health` and 401 on the credential, and the reader was
+ * told their server could not be reached and to reload until it was — advice
+ * that could not work however long they followed it.
+ *
+ * The pairing is kept either way: it is what pre-fills the address and the
+ * email, so signing in again is one field rather than a fresh setup.
+ */
+export function reconnectFailure(error: unknown): string {
+  if (error instanceof RemoteRefused) {
+    return `${error.message} Open “Connect to a server” from the status bar.`
+  }
+  return 'Could not reach your sync server. Your pairing is kept — reload once it is back.'
+}
 
 export function loadRemoteConnection(): RemoteConnection | null {
   try {

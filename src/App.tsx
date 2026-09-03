@@ -13,7 +13,7 @@ import { LAST_VAULT_KEY, useAppStore } from './state/store'
 import { createBrowserVault } from './core/vault/browserVault'
 import { createDemoVault } from './core/vault/demoVault'
 import { createDirectoryVault, restoreVaultHandle } from './core/vault/directoryVault'
-import { loadRemoteConnection, saveRemoteConnection, takeHandoffConnection } from './core/vault/remoteConnection'
+import { loadRemoteConnection, reconnectFailure, saveRemoteConnection, takeHandoffConnection } from './core/vault/remoteConnection'
 import { createRemoteVault } from './core/vault/remoteVault'
 import { CommandPalette } from './ui/CommandPalette'
 import { DialogHost } from './ui/DialogHost'
@@ -104,7 +104,8 @@ export function App(): React.JSX.Element {
         }
       }
 
-      let lostServer = false
+      /** The sentence to show if the remembered server could not be reopened. */
+      let lostServer = ''
       if (lastKind === 'remote') {
         const connection = loadRemoteConnection()
         if (connection) {
@@ -113,11 +114,11 @@ export function App(): React.JSX.Element {
             if (cancelled) return
             await openVault(vault)
             return
-          } catch {
-            // The server is asleep, the network is elsewhere, or the token was
-            // rotated. Fall through to a usable vault and say what happened —
-            // the pairing is kept, so it reconnects by itself once it is back.
-            lostServer = true
+          } catch (error) {
+            // Fall through to a usable vault and say what happened. Which
+            // sentence that is depends on the failure: a server that is away
+            // comes back, and a credential that was refused does not.
+            lostServer = reconnectFailure(error)
           }
         }
       }
@@ -142,11 +143,7 @@ export function App(): React.JSX.Element {
           .getState()
           .pushToast('Could not reopen your folder — the browser no longer has permission. Open it again from the status bar.', 'error')
       }
-      if (lostServer) {
-        useAppStore
-          .getState()
-          .pushToast('Could not reach your sync server. Your pairing is kept — reload once it is back.', 'error')
-      }
+      if (lostServer) useAppStore.getState().pushToast(lostServer, 'error')
     })().finally(() => {
       if (!cancelled) setBooting(false)
     })

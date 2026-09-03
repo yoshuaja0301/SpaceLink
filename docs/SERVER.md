@@ -472,7 +472,10 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
   is connected right now: an open change stream is asked again every few seconds
   whether its credential still holds, and is closed within seconds of the answer
   becoming no, rather than staying open until the reader happens to close the
-  app.
+  app. A device signed out this way is told which of the two things happened —
+  "that sign-in is no longer valid, sign in again" rather than "could not reach
+  your sync server" — and keeps its address and email, so signing in again is
+  one field.
 - **Hidden files and folders, `node_modules`, and anything behind a symlink are
   never listed, served, announced or written to.** A `.obsidian` folder in the
   same vault is left alone, and a link inside the vault is not followed — not

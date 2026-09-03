@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { createSyncServer } from '../../../server/index.mjs'
 import { comparePaths } from './paths'
 // @ts-expect-error — plain JavaScript, typed by JSDoc rather than declarations
-import { addAccount } from '../../../server/accounts.mjs'
+import { addAccount, setPassword } from '../../../server/accounts.mjs'
 import {
   createRemoteVault,
   describeDevice,
@@ -31,6 +31,7 @@ import {
   openWithAccount,
   probeServer,
   RemoteConflict,
+  RemoteRefused,
   signIn,
   signOut,
 } from './remoteVault'
@@ -189,6 +190,50 @@ describe('signing in', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   }, 30_000)
+
+  it('tells a refused credential apart from a server that is away', async () => {
+    // `--set-password` is documented as signing every device out, so this is
+    // the everyday case, not an edge one. Measured before this: the server
+    // answered 200 on /api/health and 401 on the credential, and the reader
+    // was told their server could not be reached and to reload once it was
+    // back — which it already was, and reloading would never have helped.
+    const revoked = join(home, 'revoked.json')
+    await addAccount({ file: revoked, email: 'lost@example.com', password: PASSWORD, vault: accountVault })
+    const sync = createSyncServer({
+      vault: join(home, 'Unused'),
+      token: 'f'.repeat(43),
+      distDir: join(home, '__no_dist__'),
+      accountsFile: revoked,
+    })
+    const server = createServer((request, response) => void sync.handle(request, response))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    try {
+      const session = await signIn(url, 'lost@example.com', PASSWORD)
+      expect(session.ok).toBe(true)
+      if (!session.ok) return
+
+      // The owner changes the password from the terminal, from anywhere.
+      await setPassword({ file: revoked, email: 'lost@example.com', password: 'a different long password' })
+
+      // The device relaunches, and the server is up the whole time.
+      expect((await fetch(`${url}/api/health`)).status, 'the server is not the problem').toBe(200)
+      await expect(
+        createRemoteVault({ url, token: session.token, email: 'lost@example.com' }),
+      ).rejects.toBeInstanceOf(RemoteRefused)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }, 30_000)
+
+  it('does not call a server that is simply away a refused credential', async () => {
+    // The other half. Nothing is listening on this port, so the failure is the
+    // network — the pairing is good and comes back by itself.
+    const away = 'http://127.0.0.1:1'
+    await expect(createRemoteVault({ url: away, token: 'g'.repeat(43) })).rejects.not.toBeInstanceOf(RemoteRefused)
+    await expect(createRemoteVault({ url: away, token: 'g'.repeat(43) })).rejects.toThrow(/could not reach/i)
+  }, 20_000)
 
   it('refuses to pair with a vault the server cannot read, in the server’s own words', async () => {
     // The pairing check answered from the vault's *name* — a string on the
