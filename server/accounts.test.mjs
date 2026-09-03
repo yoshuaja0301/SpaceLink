@@ -7,32 +7,13 @@
  * are the ones an attacker would try: the wrong password, a stolen file, a
  * session that outlived its password, a script guessing.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import {
-  MIN_PASSWORD_LENGTH,
-  SESSION_DAYS,
-  accountForSession,
-  addAccount,
-  createAttemptLimiter,
-  createSession,
-  findAccount,
-  hashPassword,
-  loadAccounts,
-  plainText,
-  revokeSession,
-  sameEmail,
-  saveAccounts,
-  sessionId,
-  setPassword,
-  updateAccounts,
-  verifyLogin,
-  verifyPassword,
-} from './accounts.mjs'
+import { accountForSession, addAccount, createAttemptLimiter, createSession, findAccount, hashPassword, loadAccounts, MIN_PASSWORD_LENGTH, plainText, revokeSession, sameEmail, saveAccounts, SESSION_DAYS, sessionId, setPassword, updateAccounts, verifyLogin, verifyPassword } from './accounts.mjs'
 
 /** @type {string} */
 let home
@@ -643,5 +624,43 @@ describe('the attempt limiter, under a run of made-up addresses', () => {
     expect(limiter.size).toBe(3)
     limiter.fail('fresh-a', t0 + 5001)
     expect(limiter.retryAfter('fresh-a', t0 + 5001), 'fresh-a went instead of the key whose wait was over').toBeGreaterThan(0)
+  })
+})
+
+describe('the label a device signs in under', () => {
+  /** @type {string} */ let home
+  /** @type {string} */ let file
+  /** @type {import('./accounts.mjs').Account} */ let account
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacelink-label-'))
+    file = join(home, 'accounts.json')
+    account = await addAccount({ file, email: 'label@example.com', password: 'a long enough password', vault: home })
+  })
+  afterAll(() => rm(home, { recursive: true, force: true }))
+
+  it('is cut by character, so an emoji at the edge is kept whole or dropped, never halved', async () => {
+    // Measured: 'a' and then fifty keys, cut at eighty code units, stored
+    // with half a surrogate pair on the end — and printed by --list-accounts
+    // as a replacement mark where the last key should be.
+    const { session } = await createSession({ file, account, device: 'a' + '🔑'.repeat(100) })
+    expect(session.device.isWellFormed(), 'half a character was stored').toBe(true)
+    // Eighty characters, which for this label is more than eighty code units.
+    expect([...session.device]).toHaveLength(80)
+    expect(session.device.endsWith('🔑'), 'the cut landed inside the last key').toBe(true)
+  })
+
+  it('falls back to "a device" for a label that is blank, not only for one that is missing', async () => {
+    // The header can be sent and empty — `??` treats '' as present — and
+    // the listing then showed "signed in   —" with nothing before the dash.
+    // A label that is only control characters is blank too, once they go.
+    for (const blank of ['', '   ', '\u0007\u0000', ' \u001b ']) {
+      const { session } = await createSession({ file, account, device: blank })
+      expect(session.device, JSON.stringify(blank)).toBe('a device')
+    }
+  })
+
+  it('keeps an ordinary label as it was', async () => {
+    const { session } = await createSession({ file, account, device: 'a Mac' })
+    expect(session.device).toBe('a Mac')
   })
 })

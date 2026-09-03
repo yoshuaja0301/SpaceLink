@@ -164,8 +164,12 @@ function clientAddress(request) {
 /** @param {import('node:http').IncomingMessage} request */
 function bearerToken(request) {
   const header = request.headers.authorization
-  if (typeof header === 'string' && header.startsWith('Bearer ')) return header.slice(7).trim()
-  return ''
+  // The scheme is matched without regard to case, as RFC 7235 says it is. The
+  // app always sends `Bearer`; a person at a terminal who types `bearer` was
+  // told their token was not accepted, which sends them to copy it again when
+  // it was fine all along.
+  const match = typeof header === 'string' ? /^bearer\s+(.*)$/i.exec(header) : null
+  return match ? match[1].trim() : ''
 }
 
 /** Addresses this machine can be reached on, for the startup banner. */

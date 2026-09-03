@@ -461,7 +461,12 @@ export async function createSession({ file, account, device = 'a device', now = 
   const session = {
     id: sessionId(token),
     accountId: account.id,
-    device: plainText(device).slice(0, 80),
+    // Cut by character, not by code unit: a label of emoji cut at eighty
+    // units was stored with half a surrogate pair on the end, and the listing
+    // printed a replacement mark where the last one should be. A label that
+    // is blank once its control characters are gone is no label — the list
+    // showed "signed in   —" with nothing before the dash.
+    device: [...plainText(device)].slice(0, 80).join('').trim() || 'a device',
     createdAt: now,
     expiresAt: now + SESSION_DAYS * 24 * 60 * 60 * 1000,
   }

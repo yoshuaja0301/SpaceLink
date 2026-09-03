@@ -1720,6 +1720,19 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     expect((await as(laptop.token, '/api/files')).status).toBe(200)
   })
 
+  it('reads the Bearer scheme without regard to case, as the RFC says', async () => {
+    // The app always sends `Bearer`. A person at a terminal who typed
+    // `bearer` was told their token was not accepted, and sent to copy it
+    // again when it was fine all along.
+    for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+      const response = await fetch(`${at}/api/files`, { headers: { authorization: `${scheme} ${TOKEN}` } })
+      expect(response.status, scheme).toBe(200)
+    }
+    // Case is the only latitude: another scheme carrying the token is not it.
+    const basic = await fetch(`${at}/api/files`, { headers: { authorization: `Basic ${TOKEN}` } })
+    expect(basic.status).toBe(401)
+  })
+
   it('answers a body that is JSON but not an object with a 400, quietly', async () => {
     // `null` is valid JSON. It parsed cleanly and then threw on `.email`,
     // which reached the caller as a 500 — and, thrown before the limiter had
