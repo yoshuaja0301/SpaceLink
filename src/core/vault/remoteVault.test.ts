@@ -547,3 +547,171 @@ describe('the remote adapter behaves like every other adapter', () => {
     expect(listed.indexOf('B.md')).toBeLessThan(listed.indexOf('a.md'))
   })
 })
+
+describe('the change stream, when the connection drops', () => {
+  /** A stand-in for `EventSource`, which jsdom does not have. */
+  function fakeEventSource(): {
+    opened: { url: string; open(): void; fail(): void; say(data: unknown): void }[]
+    live(): number
+    restore(): void
+  } {
+    class Fake {
+      closed = false
+      onopen: (() => void) | null = null
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: (() => void) | null = null
+      constructor(public url: string) {
+        instances.push(this)
+      }
+      close(): void {
+        this.closed = true
+      }
+    }
+    const instances: Fake[] = []
+    const before = (globalThis as { EventSource?: unknown }).EventSource
+    ;(globalThis as { EventSource?: unknown }).EventSource = Fake
+    return {
+      get opened() {
+        // A closed EventSource delivers nothing more, and neither does this:
+        // a stand-in that kept firing would hide the very thing being counted.
+        return instances.map((instance) => ({
+          url: instance.url,
+          open: () => void (instance.closed || instance.onopen?.()),
+          fail: () => void (instance.closed || instance.onerror?.()),
+          say: (data: unknown) =>
+            void (instance.closed || instance.onmessage?.({ data: JSON.stringify(data) })),
+        }))
+      },
+      live: () => instances.filter((instance) => !instance.closed).length,
+      restore: () => {
+        if (before === undefined) delete (globalThis as { EventSource?: unknown }).EventSource
+        else (globalThis as { EventSource?: unknown }).EventSource = before
+      },
+    }
+  }
+
+  /** Longer than the first back-off, which is a second. */
+  const pastTheReconnect = () => new Promise((done) => setTimeout(done, 1400))
+
+  it('opens one stream however many watchers there are', async () => {
+    // Every watcher asks to connect; only the first should. The rest share the
+    // one connection, which is the only reason a note edited elsewhere is not
+    // fetched once per panel that happens to be listening.
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const stops = [remote.watch!(() => {}), remote.watch!(() => {}), remote.watch!(() => {})]
+      expect(sources.opened, 'a stream per watcher').toHaveLength(1)
+      for (const stop of stops) stop()
+    } finally {
+      sources.restore()
+    }
+  })
+
+  it('waits out the back-off rather than reconnecting the moment a watcher arrives', async () => {
+    // The back-off is what keeps a server that is down from being asked again
+    // every second. A watcher added while it is waiting must not skip it:
+    // opening a panel would otherwise reset the wait, and a device with a
+    // busy interface would hammer a server that is simply not there.
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const stop = remote.watch!(() => {})
+      sources.opened[0].fail()
+
+      const alsoStop = remote.watch!(() => {})
+      expect(sources.opened, 'a new watcher reconnected before the back-off was up').toHaveLength(1)
+
+      await pastTheReconnect()
+      expect(sources.opened, 'the back-off passed and nothing reconnected').toHaveLength(2)
+      stop()
+      alsoStop()
+    } finally {
+      sources.restore()
+    }
+  })
+
+  it('opens one stream, not two, when a watcher arrives while it is reconnecting', async () => {
+    // Measured before this held: a watcher added between the error and the
+    // reconnect it had scheduled opened its own stream, and the reconnect then
+    // opened another. Two live connections, every change announced twice.
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const stop = remote.watch!(() => {})
+      expect(sources.opened).toHaveLength(1)
+
+      sources.opened[0].fail()
+      // Another part of the app starts watching before the reconnect fires.
+      const alsoStop = remote.watch!(() => {})
+      await pastTheReconnect()
+
+      expect(sources.live(), 'the device is holding more than one stream open').toBe(1)
+      stop()
+      alsoStop()
+    } finally {
+      sources.restore()
+    }
+  })
+
+  it('announces a change once however many times it has reconnected', async () => {
+    // What two connections cost the reader: every note edited on another
+    // device arriving twice, and every watcher doing its work twice.
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const seen: string[] = []
+      const stop = remote.watch!((change) => seen.push(String(change.path)))
+      sources.opened[0].fail()
+      remote.watch!(() => {})
+      await pastTheReconnect()
+
+      for (const source of sources.opened) source.say({ type: 'upsert', path: 'Elsewhere.md', hash: 'x' })
+      expect(seen, 'the same change arrived more than once').toEqual(['Elsewhere.md'])
+      stop()
+    } finally {
+      sources.restore()
+    }
+  })
+
+  it('leaves nothing open once the last watcher goes', async () => {
+    // The part that outlived everything: a stream the adapter had lost track
+    // of could not be closed by disposing the watchers, so it stayed open —
+    // and counted by the server as a device worth writing to — for the life
+    // of the page, whatever the reader did next.
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const stop = remote.watch!(() => {})
+      sources.opened[0].fail()
+      const alsoStop = remote.watch!(() => {})
+      await pastTheReconnect()
+
+      stop()
+      alsoStop()
+      expect(sources.live(), 'a change stream was left open with nothing holding it').toBe(0)
+    } finally {
+      sources.restore()
+    }
+  })
+
+  it('does come back after a drop, which is the point of reconnecting at all', async () => {
+    const sources = fakeEventSource()
+    try {
+      const remote = await connect()
+      const seen: string[] = []
+      const stop = remote.watch!((change) => seen.push(String(change.path)))
+      sources.opened[0].open()
+      sources.opened[0].fail()
+      await pastTheReconnect()
+
+      expect(sources.opened.length, 'the stream never came back').toBeGreaterThan(1)
+      expect(sources.live()).toBe(1)
+      sources.opened[sources.opened.length - 1].say({ type: 'upsert', path: 'Back.md', hash: 'x' })
+      expect(seen, 'the stream came back but delivered nothing').toEqual(['Back.md'])
+      stop()
+    } finally {
+      sources.restore()
+    }
+  })
+})

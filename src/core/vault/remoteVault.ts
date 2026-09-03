@@ -296,6 +296,14 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
 
   function connect(): void {
     if (typeof EventSource !== 'function' || listeners.size === 0) return
+    // Already connected, or already on the way back. Without this, a watcher
+    // added between an error and the reconnect it scheduled opened a second
+    // stream, and the pending reconnect then opened a third — leaving two live
+    // connections announcing every change twice, and one of them held by
+    // nothing: `stream` points at the newest, so disposing every watcher
+    // closed one and left the other open for the life of the page, still
+    // counted by the server as a device to write to.
+    if (stream || reconnectTimer !== null) return
     // EventSource cannot carry an Authorization header, so the token rides in
     // the query string. It never leaves the connection to this server, and the
     // server treats both places the same.
@@ -328,7 +336,12 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
       stream = null
       if (listeners.size === 0) return
       // Back off, so a server that is down does not turn into a reconnect storm.
-      reconnectTimer = setTimeout(connect, reconnectDelay)
+      reconnectTimer = setTimeout(() => {
+        // Cleared before connecting, not after: it is what marks "on the way
+        // back", and connect() refuses to run while it is set.
+        reconnectTimer = null
+        connect()
+      }, reconnectDelay)
       reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
     }
   }
@@ -537,7 +550,8 @@ export async function createRemoteVault(options: RemoteVaultOptions): Promise<Va
 
     watch(listener: (change: VaultChange) => void): () => void {
       listeners.add(listener)
-      if (!stream) connect()
+      // connect() decides: it is a no-op when a stream is open or on its way.
+      connect()
       return () => {
         listeners.delete(listener)
         if (listeners.size === 0) {
