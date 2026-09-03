@@ -466,6 +466,8 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
 - **Plain HTTP on a local network is readable by anything else on that network.**
   For a home Wi-Fi that is usually acceptable; on a café or office network it is
   not. Both tunnel options above give you HTTPS.
+- **The token file is readable by you alone** (`0600`), written whole or not
+  at all, and tightened on the next start if something left it wider.
 - **Rotate the token** by deleting `~/.spacelink/server.json` and restarting;
   **change a password** with `--set-password`. Either signs every device out,
   which is exactly what you want if one has been lost — including a device that

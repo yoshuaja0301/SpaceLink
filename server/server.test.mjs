@@ -2495,6 +2495,67 @@ describe('the folder the server keeps its token in', { timeout: 60_000 }, () => 
     return { code, out, err }
   }
 
+  /** Ask the token module, with `HOME` pointed somewhere of our choosing. */
+  async function tokenAt(home) {
+    const { spawn } = await import('node:child_process')
+    const { fileURLToPath } = await import('node:url')
+    const config = fileURLToPath(new URL('./config.mjs', import.meta.url))
+    const script = `import(${JSON.stringify(config)}).then((m) => m.loadOrCreateToken()).then((r) => console.log(JSON.stringify(r)))`
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HOME: home },
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += String(chunk)))
+    child.stderr.on('data', (chunk) => (err += String(chunk)))
+    const code = await new Promise((done) => child.on('close', done))
+    if (code !== 0) throw new Error(err)
+    return JSON.parse(out)
+  }
+
+  const modeOf = async (file) => ((await stat(file)).mode & 0o777).toString(8)
+
+  it('tightens a token file that was left readable by everyone on the machine', async () => {
+    // The token is the whole of the vault's access. The file is read on every
+    // start and rewritten on none, so one left at 644 — by an older build, or
+    // by whatever copied it here — stayed that way for as long as the token
+    // was valid. Measured: 644 in, 644 out, token kept.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      const file = join(home, '.spacelink', 'server.json')
+      await mkdir(join(home, '.spacelink'), { recursive: true })
+      await writeFile(file, JSON.stringify({ token: 'q'.repeat(43) }), { mode: 0o644 })
+      expect(await modeOf(file)).toBe('644')
+
+      const got = await tokenAt(home)
+      expect(got.created, 'a valid token was rotated').toBe(false)
+      expect(got.token).toBe('q'.repeat(43))
+      expect(await modeOf(file), 'still readable by every other user').toBe('600')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('lands a fresh token at 600 even over a file that was 644', async () => {
+    // `mode` on a write applies only to a file being created. A token rotated
+    // into a file that already existed kept that file's mode — measured, 644.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      const file = join(home, '.spacelink', 'server.json')
+      await mkdir(join(home, '.spacelink'), { recursive: true })
+      await writeFile(file, JSON.stringify({ token: 'too-short' }), { mode: 0o644 })
+
+      const got = await tokenAt(home)
+      expect(got.created, 'a token too short to be one was kept').toBe(true)
+      expect(await modeOf(file), 'the new token is readable by every other user').toBe('600')
+      // And nothing half-written is left beside it.
+      expect((await readdir(join(home, '.spacelink'))).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('is ~/.spacelink on a machine that has never run this server', async () => {
     const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
     try {

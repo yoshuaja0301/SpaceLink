@@ -9,7 +9,7 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
@@ -66,6 +66,13 @@ export async function loadOrCreateToken() {
     const raw = await readFile(CONFIG_FILE, 'utf8')
     const parsed = JSON.parse(raw)
     if (typeof parsed?.token === 'string' && parsed.token.length >= 32) {
+      // The token is the whole of the vault's access, and this file is read on
+      // every start and rewritten on none — so a file left readable by every
+      // account on the machine, by an older build or by whatever copied it
+      // here, stayed that way for as long as it was valid. Measured: 644 in,
+      // 644 out, token kept. Tightened on the way past, which costs nothing
+      // when it is already right.
+      await tightenMode(CONFIG_FILE)
       return { token: parsed.token, created: false, file: CONFIG_FILE }
     }
   } catch {
@@ -73,8 +80,23 @@ export async function loadOrCreateToken() {
   }
   const token = generateToken()
   await mkdir(CONFIG_DIRECTORY, { recursive: true })
-  await writeFile(CONFIG_FILE, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 })
+  // Through a temporary file and a rename, for two reasons. A power cut in the
+  // middle of a plain write would leave half a file, and half a file is a
+  // fresh token on the next start and every paired device sent to copy it
+  // again. And `mode` on a write applies only to a file being created: a
+  // fresh token written over a file that already existed, readable by all,
+  // kept that file's mode — measured, 644 — while the rename always lands the
+  // new file with its own.
+  const temporary = `${CONFIG_FILE}.${randomBytes(6).toString('hex')}.tmp`
+  await writeFile(temporary, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 })
+  await rename(temporary, CONFIG_FILE)
   return { token, created: true, file: CONFIG_FILE }
+}
+
+/** Make `file` readable by its owner only, when it is not already. */
+async function tightenMode(file) {
+  const info = await stat(file)
+  if ((info.mode & 0o077) !== 0) await chmod(file, 0o600)
 }
 
 /**
