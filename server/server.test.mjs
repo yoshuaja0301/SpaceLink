@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -1722,6 +1722,59 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     expect((await fetch(`${at}/api/health`)).status).toBe(200)
     expect((await login('me@example.com', MY_PASSWORD)).status).toBe(200)
   })
+
+  it('does not let a stranger make it rewrite its accounts file', async () => {
+    // `/api/auth/logout` is answered before any credential is checked, because
+    // the thing it retires *is* the credential. That makes it the one write
+    // path an anonymous caller can reach — and measured before this was fixed,
+    // three hundred nonsense tokens meant three hundred read-modify-writes of
+    // the accounts file, each one holding its lock while real sign-ins queued.
+    const before = (await stat(accountsFile)).mtimeMs
+    await new Promise((done) => setTimeout(done, 20))
+
+    const statuses = await Promise.all(
+      Array.from({ length: 30 }, (_, index) =>
+        fetch(`${at}/api/auth/logout`, {
+          method: 'POST',
+          headers: { authorization: `Bearer nonsense-${index}` },
+        }).then((response) => response.status),
+      ),
+    )
+    // Still answered the same way to everyone: whether that token was a session
+    // is not news an unauthenticated caller needs.
+    expect([...new Set(statuses)]).toEqual([200])
+    expect((await stat(accountsFile)).mtimeMs, 'a stranger made the server rewrite its accounts').toBe(before)
+
+    // And a real sign-out still reaches the file.
+    const device = await signIn('me@example.com', MY_PASSWORD)
+    expect((await as(device.token, '/api/auth/logout', { method: 'POST' })).status).toBe(200)
+    expect((await as(device.token, '/api/files')).status).toBe(401)
+  }, 30_000)
+
+  it('answers a stranger without queueing behind whatever is writing', async () => {
+    // Not rewriting the file is half of it. The other half is not asking for
+    // the lock at all: a token nobody has ever held is settled from the store
+    // already in memory, so a flood of them cannot hold real sign-ins up behind
+    // it. Held deliberately here rather than raced for, so this measures the
+    // shape rather than the machine's mood.
+    const { updateAccounts } = await import('./accounts.mjs')
+    const held = updateAccounts(accountsFile, async () => {
+      await new Promise((done) => setTimeout(done, 1500))
+    })
+    try {
+      await settle(100)
+      const started = performance.now()
+      const response = await fetch(`${at}/api/auth/logout`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer a token nobody has ever held' },
+      })
+      const took = performance.now() - started
+      expect(response.status).toBe(200)
+      expect(took, `it waited ${took.toFixed(0)}ms for a lock it had no need of`).toBeLessThan(700)
+    } finally {
+      await held
+    }
+  }, 30_000)
 
   it('refuses a body that is not JSON without taking the server down', async () => {
     const response = await fetch(`${at}/api/auth/login`, {

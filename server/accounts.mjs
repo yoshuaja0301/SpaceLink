@@ -184,6 +184,12 @@ async function withFileLock(file, work) {
 }
 
 /**
+ * Returned by a change that decided there was nothing to do: the file is left
+ * exactly as it was, and not rewritten.
+ */
+export const UNCHANGED = Symbol('the accounts file needs no change')
+
+/**
  * Read the file, change it, and write it back — with nothing else allowed in
  * between.
  *
@@ -210,7 +216,11 @@ export async function updateAccounts(file, change) {
         // of date by the time the write happens.
         const store = await loadAccounts(file)
         const result = await change(store)
-        await saveAccounts(file, store)
+        // A change that found nothing to do writes nothing. Without this, an
+        // endpoint that can be reached without credentials — signing out is
+        // one — hands an anonymous caller a way to make the server rewrite this
+        // file, and to hold its lock while doing it.
+        if (result !== UNCHANGED) await saveAccounts(file, store)
         return result
       }),
     )
@@ -321,6 +331,54 @@ export async function verifyLogin(accounts, email, password) {
 }
 
 /**
+ * Text that is safe to print, from text that came from somewhere else.
+ *
+ * The device label arrives in a request header, and ends up in
+ * `--list-accounts` — the one command whose whole job is to tell the truth
+ * about who is signed in. A label carrying `\u001b[2K` would erase the line it
+ * was printed on. Control characters are dropped rather than escaped: nothing
+ * of value is ever lost, because nothing of value was ever in them.
+ *
+ * @param {unknown} text
+ */
+export function plainText(text) {
+  // eslint-disable-next-line no-control-regex
+  return String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+}
+
+/**
+ * Refuse an address that would not survive being written down and read back.
+ *
+ * Not an attempt at RFC 5322 — addresses are stranger than anyone expects and
+ * a strict pattern would refuse real ones. This asks only what this program
+ * actually needs of the text: that it be one line, without control characters,
+ * with something either side of a single `@`.
+ *
+ * Which sounds like tidiness and is not. `--list-accounts` prints these to a
+ * terminal, and it is the command you run to see who has access. An address
+ * holding a newline forges an entry in that listing; one holding `\u001b[2K`
+ * erases the line it was printed on and writes a different address in its
+ * place. The command that answers "who can reach my notes?" must not be
+ * something an address can lie to.
+ *
+ * @param {string} address
+ */
+function assertUsableEmail(address) {
+  if (address.length < 3 || address.length > 254) {
+    throw new Error(`"${address}" does not look like an email address.`)
+  }
+  // C0 and C1 control characters, and anything that would break a line.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(address)) {
+    throw new Error('An email address cannot contain control characters.')
+  }
+  if (/\s/.test(address)) throw new Error('An email address cannot contain spaces.')
+  const at = address.indexOf('@')
+  if (at <= 0 || at !== address.lastIndexOf('@') || at === address.length - 1) {
+    throw new Error(`"${address}" does not look like an email address.`)
+  }
+}
+
+/**
  * Create an account. The caller has already decided this is allowed — there is
  * no sign-up endpoint, only the command line.
  * @param {{ file: string, email: string, password: string, vault: string }} details
@@ -328,7 +386,7 @@ export async function verifyLogin(accounts, email, password) {
  */
 export async function addAccount({ file, email, password, vault }) {
   const address = String(email ?? '').trim()
-  if (!address.includes('@') || address.length < 3) throw new Error(`"${address}" does not look like an email address.`)
+  assertUsableEmail(address)
   if (String(password ?? '').length < MIN_PASSWORD_LENGTH) {
     throw new Error(`The password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
   }
@@ -403,7 +461,7 @@ export async function createSession({ file, account, device = 'a device', now = 
   const session = {
     id: sessionId(token),
     accountId: account.id,
-    device: String(device).slice(0, 80),
+    device: plainText(device).slice(0, 80),
     createdAt: now,
     expiresAt: now + SESSION_DAYS * 24 * 60 * 60 * 1000,
   }
@@ -441,14 +499,14 @@ export function accountForSession(store, token, now = Date.now()) {
  */
 export async function revokeSession({ file, token }) {
   const id = sessionId(token)
-  return updateAccounts(file, (store) => {
+  const outcome = await updateAccounts(file, (store) => {
     const before = store.sessions.length
     store.sessions = store.sessions.filter((session) => session.id !== id)
-    // Rewritten either way. Returning early on "nothing to remove" would skip
-    // the write, but the read already happened inside the lock and the cost of
-    // writing a small file back unchanged is not worth a second code path.
-    return store.sessions.length !== before
+    // Nothing matched, so nothing is written. This is reachable without
+    // credentials, and a token nobody has ever held must not cost a write.
+    return store.sessions.length === before ? UNCHANGED : true
   })
+  return outcome !== UNCHANGED
 }
 
 /* ------------------------------------------------------------------ *

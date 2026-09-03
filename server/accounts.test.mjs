@@ -23,6 +23,7 @@ import {
   findAccount,
   hashPassword,
   loadAccounts,
+  plainText,
   revokeSession,
   sameEmail,
   saveAccounts,
@@ -305,6 +306,75 @@ describe('sessions', () => {
   })
 })
 
+describe('text that came from somewhere else', () => {
+  it('refuses an address that would forge a line in the listing', async () => {
+    // `--list-accounts` is the command you run to see who can reach your
+    // notes. An address holding a newline prints a second `notes` line under
+    // its own entry; one holding an erase sequence rewrites the line it is on.
+    // The command that answers "who has access?" must not be something an
+    // address can lie to.
+    const file = join(home, 'accounts.json')
+    const vault = join(home, 'Notes')
+    for (const bad of [
+      'victim@example.com\n      notes  /somewhere-else',
+      'a@b.c\u001b[2K\u001b[Gimposter@example.com',
+      'a@b.c\rimposter@example.com',
+      'tab@ex\tample.com',
+    ]) {
+      await expect(addAccount({ file, email: bad, password: PASSWORD, vault }), JSON.stringify(bad)).rejects.toThrow()
+    }
+    expect((await loadAccounts(file)).accounts).toHaveLength(0)
+  })
+
+  it('refuses an address with nothing either side of the @, or more than one', async () => {
+    const file = join(home, 'accounts.json')
+    const vault = join(home, 'Notes')
+    for (const bad of ['@example.com', 'me@', 'me@@example.com', 'no-at-sign', '@', 'a b@example.com']) {
+      await expect(addAccount({ file, email: bad, password: PASSWORD, vault }), bad).rejects.toThrow()
+    }
+  })
+
+  it('still takes the addresses people actually have', async () => {
+    // Not an attempt at RFC 5322: a rule strict enough to be clever would
+    // refuse real addresses. `me@nas` is a perfectly good address on a network
+    // that has one.
+    const file = join(home, 'accounts.json')
+    const vault = join(home, 'Notes')
+    for (const good of ['me@nas', 'first.last+tag@example.co.uk', "o'brien@example.com", 'me@[192.168.1.20]']) {
+      await expect(addAccount({ file, email: good, password: PASSWORD, vault }), good).resolves.toMatchObject({
+        email: good,
+      })
+    }
+  }, 30_000)
+
+  it('keeps control characters out of a device label, which a client chooses', async () => {
+    // The label arrives in a request header. Sliced to 80 characters was not
+    // enough: eighty characters of escape sequence is still an escape sequence.
+    const account = await make()
+    const file = join(home, 'accounts.json')
+    const { session } = await createSession({
+      file,
+      account,
+      device: 'a Mac\u001b[2K\u001b[Gsomething else\nnotes  /elsewhere',
+    })
+    // The escape itself is gone, so what is left is inert text: without the
+    // ESC in front of it, `[2K` is four characters a terminal simply prints.
+    expect(session.device).toBe('a Mac[2K[Gsomething elsenotes  /elsewhere')
+    expect(session.device).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
+    // And it is stored that way, not merely returned that way.
+    const stored = JSON.parse(await readFile(file, 'utf8')).sessions.at(-1)
+    expect(stored.device).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
+  })
+
+  it('drops control characters and keeps everything else', () => {
+    expect(plainText('a Mac')).toBe('a Mac')
+    expect(plainText('an iPhone — Ana’s')).toBe('an iPhone — Ana’s')
+    expect(plainText('one\ntwo')).toBe('onetwo')
+    expect(plainText('\u001b[31mred\u001b[0m')).toBe('[31mred[0m')
+    expect(plainText(undefined)).toBe('')
+  })
+})
+
 describe('changing the file while something else is changing it', () => {
   it('keeps every session when several devices sign in at the same moment', async () => {
     // The shape that broke: read, change, write, with nothing stopping two of
@@ -352,6 +422,24 @@ describe('changing the file while something else is changing it', () => {
     const store = await loadAccounts(file)
     expect(store.accounts.filter((one) => sameEmail(one.email, 'twin@example.com'))).toHaveLength(1)
   }, 30_000)
+
+  it('writes nothing when the change finds nothing to do', async () => {
+    // Signing out can be asked for without credentials — it has to be, since
+    // its whole job is to retire one — so a token nobody has ever held must not
+    // cost a rewrite of this file, nor the lock while it happens.
+    const account = await make()
+    const file = join(home, 'accounts.json')
+    const { token } = await createSession({ file, account, device: 'a Mac' })
+
+    const before = (await stat(file)).mtimeMs
+    await new Promise((done) => setTimeout(done, 20))
+    expect(await revokeSession({ file, token: 'a token nobody has ever held' })).toBe(false)
+    expect((await stat(file)).mtimeMs, 'a token that matched nothing rewrote the file').toBe(before)
+
+    // And the check is not vacuous: a real one does rewrite it.
+    expect(await revokeSession({ file, token })).toBe(true)
+    expect((await stat(file)).mtimeMs).not.toBe(before)
+  })
 
   it('leaves no lock behind when the change itself fails', async () => {
     // A lock kept after an error would block every later write until it went

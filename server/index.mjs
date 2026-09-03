@@ -35,6 +35,7 @@ import {
   createAttemptLimiter,
   createSession,
   loadAccounts,
+  plainText,
   revokeSession,
   setPassword,
   verifyLogin,
@@ -733,8 +734,15 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       const presented = bearerToken(request)
       if (accountsFile && presented) {
-        await revokeSession({ file: accountsFile, token: presented })
-        forgetAccounts()
+        // Checked against the store already in memory before the file is
+        // touched at all. This endpoint takes no credentials — it cannot, since
+        // its whole job is to retire one — so a token nobody has ever held must
+        // cost nothing beyond this lookup.
+        const store = await accountsStore()
+        if (accountForSession(store, presented)) {
+          await revokeSession({ file: accountsFile, token: presented })
+          forgetAccounts()
+        }
       }
       // Always the same answer: whether that token was a session is not news
       // an unauthenticated caller needs.
@@ -1010,12 +1018,16 @@ async function runAccountCommand(options, accountsFile) {
     process.stdout.write(`\n  Accounts in ${accountsFile}\n\n`)
     for (const account of store.accounts) {
       const devices = store.sessions.filter((session) => session.accountId === account.id && session.expiresAt > now)
-      process.stdout.write(`    ${account.email}\n      notes  ${account.vault}\n`)
+      // Printed through `plainText` even though what is written now is clean:
+      // this file can be older than that rule, or edited by hand.
+      process.stdout.write(`    ${plainText(account.email)}\n      notes  ${plainText(account.vault)}\n`)
       if (devices.length === 0) process.stdout.write('      no device signed in\n')
       // Each device by what it said it was and when, so it is obvious whether
       // the list holds one you no longer recognise.
       for (const device of devices.sort((a, b) => a.createdAt - b.createdAt)) {
-        process.stdout.write(`      signed in  ${device.device} — ${new Date(device.createdAt).toISOString().slice(0, 10)}\n`)
+        process.stdout.write(
+          `      signed in  ${plainText(device.device)} — ${new Date(device.createdAt).toISOString().slice(0, 10)}\n`,
+        )
       }
       process.stdout.write('\n')
     }

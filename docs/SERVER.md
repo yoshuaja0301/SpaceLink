@@ -185,7 +185,12 @@ surface.
 
 `--add-account` insists on `--vault` rather than defaulting it: a default would
 write whichever folder you happened to be standing in into the account record,
-permanently.
+permanently. It also refuses an address carrying control characters or spaces —
+this listing is what you read to see who has access, and an address holding a
+newline prints a second `notes` line under its own entry, while one holding a
+terminal escape rewrites the line it is on. The command that answers "who can
+reach my notes?" must not be something an address can lie to. Device labels,
+which the device itself chooses, are stripped the same way.
 
 ```
 $ npm run server -- --list-accounts
