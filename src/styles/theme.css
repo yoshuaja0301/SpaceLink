@@ -1,0 +1,182 @@
+/*
+ * SpaceFore — design tokens.
+ *
+ * One token layer, three states:
+ *   1. `:root`                                     → light values (the base)
+ *   2. `prefers-color-scheme: dark` + no override  → dark values
+ *   3. `[data-theme='dark']`                       → dark values, always wins
+ *
+ * So an explicit `[data-theme='light']` beats a dark OS preference and an
+ * explicit `[data-theme='dark']` beats a light one. Every colour is defined
+ * on `:root` first — no value exists only inside a media query.
+ *
+ * The two dark blocks are deliberate duplicates; keep them in sync.
+ *
+ * Contrast: every ratio noted below is measured against --bg-primary unless
+ * the comment names another surface. --text-normal / --text-muted / --link /
+ * --link-unresolved / --text-error / --text-success / --accent-text all clear
+ * WCAG AA (>= 4.5:1) there in both themes, and --text-on-accent clears it on
+ * --accent. --accent itself does not (3.8:1 in dark), which is why anything
+ * that paints the accent as text or as a glyph reaches for --accent-text.
+ *
+ * --text-faint is the exception worth stating: it is painted on all four
+ * surfaces (inactive tab titles on --bg-tertiary, count badges and kbd chips
+ * on --bg-tertiary, palette sections and settings descriptions on --bg-modal),
+ * so it is sized against the worst of --bg-primary / --bg-secondary /
+ * --bg-tertiary / --bg-modal — which is --bg-tertiary in both themes.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg-primary: #ffffff;     /* editor / preview canvas */
+  --bg-secondary: #f6f5f9;   /* sidebars, ribbon, status bar */
+  --bg-tertiary: #edebf3;    /* tab bar, inset wells, chips */
+  --bg-hover: rgba(28, 22, 54, 0.055);
+  --bg-active: rgba(108, 79, 245, 0.12);
+  --bg-modal: #ffffff;
+  --bg-overlay: rgba(30, 27, 45, 0.38);
+
+  /* text */
+  --text-normal: #22212a;      /* 15.9:1 */
+  --text-muted: #5d5a6b;       /*  6.7:1 */
+  --text-faint: #67647a;       /*  5.7:1 — 4.8:1 on --bg-tertiary, its worst surface */
+  --text-on-accent: #ffffff;   /*  5.2:1 on --accent */
+  --text-error: #c3352b;       /*  5.4:1 */
+  --text-success: #1f7a4d;     /*  5.3:1 */
+
+  /* accent + lines */
+  --accent: #6c4ff5;
+  --accent-hover: #5a3ee0;
+  --accent-text: #5b3fd6;      /*  6.7:1 — the accent where it has to read as text */
+  --accent-soft: rgba(108, 79, 245, 0.12);
+  --border: #e3e1ea;
+  --border-strong: #c9c6d6;
+  --divider: #ecebf2;
+
+  /* content */
+  --link: #5b3fd6;             /*  6.7:1 */
+  --link-unresolved: #6d5f9c;  /*  5.6:1 */
+  --tag-bg: rgba(108, 79, 245, 0.1);
+  --tag-text: #5b3fd6;
+  --callout-info: #1f5f96;     /*  5.9:1 on its own 9% wash over --bg-primary */
+  --callout-warning: #8a5a00;  /*  5.2:1 on its own 9% wash over --bg-primary */
+  --code-bg: #f2f0f7;
+  --code-text: #7a3bd0;        /*  5.4:1 on --code-bg */
+  --highlight: rgba(255, 205, 70, 0.5);
+  --selection: rgba(108, 79, 245, 0.22);
+
+  /* elevation + shape */
+  --shadow-sm: 0 1px 2px rgba(24, 20, 40, 0.09);
+  --shadow-md: 0 6px 18px rgba(24, 20, 40, 0.12);
+  --shadow-lg: 0 20px 50px rgba(24, 20, 40, 0.2);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  /* type — system stacks only, nothing fetched over the network */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', sans-serif;
+  --font-editor: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --font-size-ui: 13px;
+  --line-height-normal: 1.6;
+
+  /* spacing — 4px scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  /* chrome metrics */
+  --header-height: 40px;
+  --ribbon-width: 44px;
+  --tab-height: 34px;
+  --statusbar-height: 24px;
+}
+
+/* Dark, following the OS — unless the user pinned the light theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg-primary: #1e1e22;
+    --bg-secondary: #191a1e;
+    --bg-tertiary: #26262d;
+    --bg-hover: rgba(255, 255, 255, 0.055);
+    --bg-active: rgba(116, 88, 255, 0.18);
+    --bg-modal: #26262c;
+    --bg-overlay: rgba(9, 9, 14, 0.62);
+    --text-normal: #e6e4ee;      /* 13.2:1 */
+    --text-muted: #a5a2b5;       /*  6.7:1 */
+    --text-faint: #928ea1;       /*  5.2:1 — 4.7:1 on --bg-tertiary and --bg-modal */
+    --text-on-accent: #ffffff;   /*  4.6:1 on --accent */
+    --text-error: #ff7b72;       /*  6.6:1 */
+    --text-success: #6ddba0;     /*  9.7:1 */
+    --accent: #7458ff;
+    --accent-hover: #6544ee;
+    --accent-text: #9b83ff;      /*  5.6:1 */
+    --accent-soft: rgba(116, 88, 255, 0.18);
+    --border: #2f2f38;
+    --border-strong: #3f3f4b;
+    --divider: #292930;
+    --link: #9b83ff;             /*  5.6:1 */
+    --link-unresolved: #8f7ec0;  /*  4.7:1 */
+    --tag-bg: rgba(116, 88, 255, 0.2);
+    --tag-text: #b9a6ff;
+    --callout-info: #5aa9e6;     /*  5.6:1 on its own 9% wash over --bg-primary */
+    --callout-warning: #d08a1f;  /*  5.1:1 on its own 9% wash over --bg-primary */
+    --code-bg: #26262f;
+    --code-text: #d7b3ff;        /*  8.4:1 on --code-bg */
+    --highlight: rgba(255, 205, 100, 0.26);
+    --selection: rgba(116, 88, 255, 0.32);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 22px 56px rgba(0, 0, 0, 0.58);
+  }
+}
+
+/* Dark, explicitly chosen — so it also wins on a light OS. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-primary: #1e1e22;
+  --bg-secondary: #191a1e;
+  --bg-tertiary: #26262d;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(116, 88, 255, 0.18);
+  --bg-modal: #26262c;
+  --bg-overlay: rgba(9, 9, 14, 0.62);
+  --text-normal: #e6e4ee;
+  --text-muted: #a5a2b5;
+  --text-faint: #928ea1;
+  --text-on-accent: #ffffff;
+  --text-error: #ff7b72;
+  --text-success: #6ddba0;
+  --accent: #7458ff;
+  --accent-hover: #6544ee;
+  --accent-text: #9b83ff;
+  --accent-soft: rgba(116, 88, 255, 0.18);
+  --border: #2f2f38;
+  --border-strong: #3f3f4b;
+  --divider: #292930;
+  --link: #9b83ff;
+  --link-unresolved: #8f7ec0;
+  --tag-bg: rgba(116, 88, 255, 0.2);
+  --tag-text: #b9a6ff;
+  --callout-info: #5aa9e6;
+  --callout-warning: #d08a1f;
+  --code-bg: #26262f;
+  --code-text: #d7b3ff;
+  --highlight: rgba(255, 205, 100, 0.26);
+  --selection: rgba(116, 88, 255, 0.32);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 22px 56px rgba(0, 0, 0, 0.58);
+}
+
+/* An explicit light choice on a dark OS: the `:root` values above already are
+ * the light theme, so only the native control scheme needs restating. */
+:root[data-theme='light'] { color-scheme: light; }

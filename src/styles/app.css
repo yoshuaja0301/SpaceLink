@@ -1,0 +1,1546 @@
+/*
+ * SpaceFore — application styles.
+ *
+ * Load order matters: tokens first, then rendered-note typography, then the
+ * shell. Nothing below hardcodes a colour — every value is a token from
+ * `theme.css`, so the whole app themes in one place.
+ */
+@import './theme.css';
+@import './markdown.css';
+
+/* ======================================================================= *
+ * 1. Reset + base
+ * ======================================================================= */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+a { color: var(--link); }
+h1, h2, h3, h4, h5, h6, p, figure { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+::selection { background: var(--selection); color: var(--text-normal); }
+
+/* Focus rings: keyboard only, one shape everywhere. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); }
+
+/* ---- scrollbars: thin, on-theme, out of the way ----------------------- */
+
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: var(--border-strong);
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+
+/* Opt-out for horizontal strips that must not show a bar. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { width: 0; height: 0; }
+
+/* ======================================================================= *
+ * 2. App shell
+ *
+ * ribbon | sidebar | workspace | right sidebar, status bar underneath.
+ * Each of those declares its own `grid-column` / `grid-row` down in its own
+ * section, so the tracks below and the placements never drift apart. The
+ * sidebars carry an inline pixel width from the store, which the `auto`
+ * tracks size themselves to. Overlays (palette, modals, toasts, picker) are
+ * `position: fixed`, so they are out of flow and never create phantom rows.
+ * ======================================================================= */
+
+.app {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-normal);
+}
+
+/* ---- boot splash ------------------------------------------------------ */
+
+.app-booting { display: flex; align-items: center; justify-content: center; }
+.boot-splash { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); color: var(--text-muted); }
+.boot-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(140deg, var(--accent), var(--link));
+  box-shadow: var(--shadow-md);
+  animation: boot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* Only shown once the note count is known, so it never sits empty. */
+.boot-progress {
+  width: 220px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+.boot-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* While a lazily fetched view is in flight. Usually never seen: the chunks are
+   prefetched as soon as the browser is idle. */
+.view-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: var(--space-6);
+  color: var(--text-faint, var(--text-muted));
+  font-size: 13px;
+}
+
+/* ======================================================================= *
+ * 3. Ribbon
+ * ======================================================================= */
+
+.ribbon {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: var(--ribbon-width);
+  padding: var(--space-2) 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.ribbon-spacer { flex: 1 1 auto; }
+.ribbon-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.ribbon-btn:hover { background: var(--bg-hover); color: var(--text-normal); }
+.ribbon-btn.is-active,
+.ribbon-btn[aria-pressed='true'],
+.ribbon-btn[aria-current='true'] { background: var(--accent-soft); color: var(--accent); }
+.ribbon-btn.is-active::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+/* Tooltip on hover — `data-tooltip` preferred, `aria-label` as fallback. */
+.ribbon-btn[data-tooltip]:hover::after,
+.ribbon-btn[data-tooltip]:focus-visible::after,
+.ribbon-btn[aria-label]:not([data-tooltip]):hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  z-index: 60;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-md);
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  pointer-events: none;
+  animation: tooltip-in 0.1s ease-out;
+}
+.ribbon-btn[aria-label]:not([data-tooltip]):hover::after { content: attr(aria-label); }
+@keyframes tooltip-in { from { opacity: 0; transform: translate(-3px, -50%); } }
+
+/* ======================================================================= *
+ * 4. Sidebars
+ * ======================================================================= */
+
+.sidebar, .right-sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.sidebar { grid-column: 2; grid-row: 1; border-right: 1px solid var(--border); }
+.right-sidebar { grid-column: 4; grid-row: 1; border-left: 1px solid var(--border); }
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 5;
+  width: 7px;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.right-sidebar .sidebar-resizer { right: auto; left: -3px; }
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 1px;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sidebar-resizer:hover::after, .sidebar-resizer.is-dragging::after { opacity: 1; }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--header-height);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--divider);
+}
+.sidebar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.sidebar-actions button, .panel-header button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.sidebar-actions button:hover, .panel-header button:hover { background: var(--bg-hover); color: var(--text-normal); }
+/* Sort control in the explorer header — a compact chip, not a browser select. */
+.nav-sort {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  height: 24px;
+  max-width: 92px;
+  padding: 0 var(--space-5) 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 9px center, right 5px center;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+.nav-sort:hover { background-color: var(--bg-hover); color: var(--text-normal); }
+.nav-sort:focus-visible { border-color: var(--accent); color: var(--text-normal); }
+.nav-sort option { background: var(--bg-secondary); color: var(--text-normal); }
+
+/* Right sidebar tablist.
+ *
+ * Four tabs (Backlinks / Outline / Local graph / Info) do not fit a narrow
+ * sidebar, so the strip scrolls horizontally rather than wrapping onto a
+ * second line. The active tab is marked by weight and an underline as well as
+ * colour, so the state does not depend on hue alone. */
+.right-sidebar-header { gap: var(--space-2); }
+
+.right-sidebar-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--space-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.right-sidebar-tabs::-webkit-scrollbar { display: none; }
+
+.right-sidebar-tab {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.right-sidebar-tab:hover { background: var(--bg-hover); color: var(--text-normal); }
+.right-sidebar-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--text-normal);
+  font-weight: 650;
+}
+
+/* The panels flow normally, but the local graph is `flex: 1 1 auto` and needs a
+ * flex column to stretch into — without one it collapses to a canvas's intrinsic
+ * 150px and leaves the rest of the sidebar empty. */
+.right-sidebar-body {
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--space-2);
+}
+.right-sidebar-body > * { flex: 0 0 auto; }
+.right-sidebar-body > .graph-view { flex: 1 1 auto; min-height: 240px; }
+
+.sidebar-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-1) var(--space-6); }
+
+/* ======================================================================= *
+ * 5. File tree
+ * ======================================================================= */
+
+.nav-file, .nav-folder { display: block; min-width: 0; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 3px var(--space-2);
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 13px);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  line-height: 1.55;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.nav-item:hover, .nav-item.is-hovered { background: var(--bg-hover); color: var(--text-normal); }
+.nav-item.is-active,
+.nav-item[aria-current='true'],
+.nav-file.is-active > .nav-item { background: var(--bg-active); color: var(--text-normal); font-weight: 550; }
+.nav-item .icon { flex: none; color: var(--text-faint); }
+.nav-item.is-active .icon { color: var(--accent); }
+.nav-item-title, .nav-file-title, .nav-folder-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Drag feedback. `FileExplorer` and `StarredPanel` mark the row being dragged
+ * and the row under the pointer; without these the drop state is computed on
+ * every dragover and shown nowhere. The inset ring is a shape cue, so the drop
+ * target does not rest on the tint alone. */
+.nav-item.is-dragging { opacity: 0.45; }
+.nav-item.is-drop-target {
+  background: var(--accent-soft);
+  color: var(--text-normal);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* Dropping on the vault root: the whole file list is the target. */
+.nav-files-container.is-drop-target { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* Delete confirmation — `FileExplorer` renders this strip
+ * (`role="alertdialog"`) directly under the row it is about, indented to the
+ * same depth by the same `--depth` the rows use. The buttons opt into
+ * `.btn-danger` / `.btn-ghost` for their palette, so only the compact geometry
+ * belongs here: `Delete` is the one filled control in the strip, in
+ * --text-error. */
+.nav-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  margin: 2px 0;
+  padding: 3px var(--space-2);
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 13px);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--text-error);
+}
+.nav-confirm-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-confirm-yes, .nav-confirm-no {
+  flex: none;
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Collapse arrow: rotated in place, so only one chevron icon ever ships. */
+.nav-folder-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-left: -2px;
+  color: var(--text-faint);
+  transition: transform 0.12s ease;
+}
+.nav-folder.is-collapsed .nav-folder-collapse { transform: rotate(-90deg); }
+.nav-folder-children { display: block; position: relative; }
+.nav-folder.is-collapsed > .nav-folder-children { display: none; }
+/* Guide line under an open folder. */
+.nav-folder-children::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 2px;
+  left: calc(var(--space-4) + var(--depth, 0) * 13px);
+  width: 1px;
+  background: var(--divider);
+}
+
+.nav-file-tag {
+  flex: none;
+  max-width: 40%;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-file-count, .tag-count {
+  flex: none;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.empty-state {
+  padding: var(--space-6) var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--font-size-ui);
+  line-height: 1.7;
+  text-align: center;
+}
+
+/* ======================================================================= *
+ * 6. Workspace, panes, tabs
+ * ======================================================================= */
+
+.workspace-area, .workspace {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+.workspace { flex: 1 1 auto; gap: 1px; background: var(--border); }
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+/* Only the focused pane advertises its active tab. */
+.pane.is-active .tab.is-active { box-shadow: inset 0 2px 0 var(--accent); }
+.pane-content { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+
+/* ---- tab bar ---------------------------------------------------------- */
+
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  height: var(--tab-height);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+/* Tabs overflow horizontally; the scrollbar itself stays hidden. */
+.tab-bar-scroll, .tab-bar > .tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar,
+.tab-bar-scroll::-webkit-scrollbar,
+.tab-bar > .tabs::-webkit-scrollbar { width: 0; height: 0; }
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 190px;
+  min-width: 44px;
+  max-width: 220px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--font-size-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.tab:hover { background: var(--bg-hover); color: var(--text-muted); }
+.tab.is-active { background: var(--bg-primary); color: var(--text-normal); }
+.tab.is-pinned { flex-basis: auto; max-width: 160px; }
+.tab-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
+}
+.tab:hover .tab-close, .tab.is-active .tab-close, .tab-close:focus-visible { opacity: 1; }
+.tab-close:hover { background: var(--bg-hover); color: var(--text-normal); }
+/* An unsaved tab shows a dot; hovering swaps it for the close button. */
+.tab-dirty-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.tab:hover .tab-dirty-dot { display: none; }
+
+/* Reorder feedback: the dragged tab dims and a 2px accent bar marks the edge
+ * the drop would land on. `.tab` is already `position: relative`. */
+.tab.is-dragging { opacity: 0.45; }
+.tab.is-drop-before::before,
+.tab.is-drop-after::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 2px;
+  background: var(--accent);
+}
+.tab.is-drop-before::before { left: 0; }
+.tab.is-drop-after::after { right: 0; }
+
+.tab-actions {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 0 var(--space-1);
+  border-left: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+.tab-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.tab-actions button:hover { background: var(--bg-hover); color: var(--text-normal); }
+/* The active view mode is not signalled by hue alone: it is lifted onto the
+ * canvas colour the way `.tab.is-active` is, and underlined. The accent-soft
+ * fill it used before sat 1% off --bg-tertiary and carried the glyph at 3.7:1
+ * light / 2.7:1 dark; on --bg-primary the text-safe accent is 6.7:1 / 5.6:1,
+ * and the 2px rule reads at 5.7:1 / 5.1:1 against the surrounding bar. */
+.tab-actions button.is-active {
+  background: var(--bg-primary);
+  color: var(--accent-text);
+  box-shadow: inset 0 -2px 0 var(--accent-text);
+}
+
+/* ---- split view (edit + preview side by side) -------------------------- */
+
+.split-view { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.split-editor, .split-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+}
+.split-editor { overflow: hidden; border-right: 1px solid var(--border); }
+.split-preview { overflow: auto; background: var(--bg-primary); }
+
+/* ======================================================================= *
+ * 7. Editor host + CodeMirror
+ *
+ * CodeMirror injects its own base theme, so these selectors are scoped to
+ * `.editor-host` to out-specify it without `!important`.
+ * ======================================================================= */
+
+.editor-host { flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--bg-primary); }
+.editor-host .cm-editor {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-family: var(--font-editor);
+  font-size: 1rem;
+  line-height: var(--line-height-normal);
+}
+.editor-host .cm-editor.cm-focused { outline: none; }
+.editor-host .cm-scroller { padding: var(--space-6) 0 40vh; font-family: inherit; line-height: inherit; overflow: auto; }
+.editor-host .cm-content { padding: 0 var(--space-6); caret-color: var(--accent); }
+.editor-host .cm-line { padding: 0 2px; }
+.editor-host .cm-cursor, .editor-host .cm-dropCursor { border-left: 2px solid var(--accent); }
+.editor-host .cm-selectionBackground,
+.editor-host .cm-editor.cm-focused .cm-selectionBackground,
+.editor-host .cm-content ::selection { background: var(--selection); }
+.editor-host .cm-gutters {
+  border-right: 1px solid var(--divider);
+  background: var(--bg-primary);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+}
+.editor-host .cm-lineNumbers .cm-gutterElement { padding: 0 var(--space-2) 0 var(--space-3); }
+.editor-host .cm-activeLine { background: var(--bg-hover); }
+.editor-host .cm-activeLineGutter { background: var(--bg-hover); color: var(--text-muted); }
+.editor-host .cm-foldPlaceholder {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+.editor-host .cm-panels { border-color: var(--border); background: var(--bg-secondary); color: var(--text-normal); }
+.editor-host .cm-searchMatch { border-radius: 2px; background: var(--highlight); }
+.editor-host .cm-searchMatch-selected { background: var(--accent-soft); outline: 1px solid var(--accent); }
+/* A search hit, backlink or outline heading that scrolls a line into view
+ * flashes it, so the eye has somewhere to land after the jump. The fade runs
+ * for the same 1.2s `Editor` holds the decoration before clearing it. */
+.editor-host .cm-flash-line { background-color: var(--accent-soft); animation: flash-line 1.2s ease-out forwards; }
+@keyframes flash-line { from { background-color: var(--accent-soft); } to { background-color: transparent; } }
+.editor-host .cm-tooltip {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-md);
+  color: var(--text-normal);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-ui);
+}
+.editor-host .cm-tooltip-autocomplete > ul > li { padding: var(--space-1) var(--space-3); font-family: var(--font-ui); }
+.editor-host .cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--accent-soft); color: var(--text-normal); }
+.editor-host .cm-completionMatchedText { color: var(--accent-text); font-weight: 700; text-decoration: none; }
+.editor-host .cm-completionDetail { color: var(--text-faint); font-style: normal; }
+
+/* ---- markdown decorations inside the editor ---------------------------- */
+
+.cm-wikilink { color: var(--link); cursor: pointer; }
+.cm-wikilink-unresolved {
+  color: var(--link-unresolved);
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.cm-tag { padding: 0 4px; border-radius: 999px; background: var(--tag-bg); color: var(--tag-text); }
+.cm-heading-1, .cm-heading-2, .cm-heading-3,
+.cm-heading-4, .cm-heading-5, .cm-heading-6 { font-weight: 650; line-height: 1.3; }
+.cm-heading-1 { font-size: 1.7em; }
+.cm-heading-2 { font-size: 1.42em; }
+.cm-heading-3 { font-size: 1.22em; }
+.cm-heading-4 { font-size: 1.1em; }
+.cm-heading-5 { font-size: 1em; }
+.cm-heading-6 { font-size: 0.94em; color: var(--text-muted); }
+.cm-bold { font-weight: 700; }
+.cm-italic { font-style: italic; }
+.cm-code {
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.cm-quote { color: var(--text-muted); font-style: italic; }
+.cm-strikethrough { color: var(--text-faint); text-decoration: line-through; }
+.cm-list-marker { color: var(--text-faint); }
+/* Markers folded away while the cursor sits elsewhere. */
+.cm-hidden-syntax { display: inline-block; width: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+/* Markers revealed but dimmed (cursor inside the construct). */
+.cm-syntax-marker { color: var(--text-faint); opacity: 0.7; }
+
+/* ---- readable line length ---------------------------------------------- */
+
+.is-readable-width .cm-content,
+.is-readable-width .markdown-preview { max-width: 700px; margin-inline: auto; }
+
+/* ---- preview host ------------------------------------------------------ */
+
+.preview-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-6) var(--space-6) 40vh;
+  background: var(--bg-primary);
+}
+
+/* ---- wiki-link hover card ---------------------------------------------- *
+ * `Preview` renders this next to the pointer and owns its geometry inline
+ * (`position: fixed`, left/top/max-width), so only the surface lives here.
+ * It floats above the panes and the mobile sidebars (50) and the ribbon
+ * tooltips (60), but below the command palette (100) and everything above it.
+ * `pointer-events: none` keeps the card from stealing the hover that is
+ * keeping it open. */
+.hover-preview {
+  z-index: 90;
+  width: max-content;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  line-height: 1.55;
+  pointer-events: none;
+}
+.hover-preview-title { font-weight: 650; }
+.hover-preview-excerpt {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ======================================================================= *
+ * 8. Panels — backlinks, outline, note info
+ * ======================================================================= */
+
+.panel { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--divider); }
+.panel:last-child { border-bottom: 0; }
+.panel.is-collapsed .panel-body { display: none; }
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--header-height);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.panel-header > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 var(--space-2) var(--space-3); }
+
+.backlink-group { margin-bottom: var(--space-2); }
+.backlink-group > .nav-item { color: var(--text-normal); font-weight: 550; }
+.backlink-context {
+  display: -webkit-box;
+  width: calc(100% - var(--space-3));
+  margin-left: var(--space-3);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-left: 2px solid var(--divider);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.backlink-context:hover { border-left-color: var(--accent); background: var(--bg-hover); color: var(--text-normal); }
+
+/* The row that reveals the rest of a group that was too long to render at once. */
+.backlink-more {
+  width: calc(100% - var(--space-3));
+  margin-left: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid transparent;
+  color: var(--accent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.backlink-more:hover { background: var(--bg-hover); text-decoration: underline; }
+
+/* Outline indents by heading level — `--level` or `data-level`, either works. */
+.outline-item {
+  display: block;
+  width: 100%;
+  padding: 2px var(--space-2);
+  padding-left: calc(var(--space-2) + (var(--level, 1) - 1) * 12px);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.outline-item[data-level='1'] { padding-left: var(--space-2); color: var(--text-normal); font-weight: 600; }
+.outline-item[data-level='2'] { padding-left: calc(var(--space-2) + 12px); }
+.outline-item[data-level='3'] { padding-left: calc(var(--space-2) + 24px); }
+.outline-item[data-level='4'] { padding-left: calc(var(--space-2) + 36px); }
+.outline-item[data-level='5'] { padding-left: calc(var(--space-2) + 48px); }
+.outline-item[data-level='6'] { padding-left: calc(var(--space-2) + 60px); color: var(--text-faint); }
+.outline-item:hover { background: var(--bg-hover); color: var(--text-normal); }
+.outline-item.is-active { background: var(--bg-active); color: var(--text-normal); }
+
+/* ======================================================================= *
+ * 9. Search
+ * ======================================================================= */
+
+.search-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.search-input {
+  flex: none;
+  width: 100%;
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.search-input::placeholder { color: var(--text-faint); }
+.search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-toolbar { display: flex; align-items: center; gap: var(--space-2); flex: none; padding: var(--space-2) var(--space-3); }
+.search-summary { flex: none; padding: 0 var(--space-3) var(--space-2); color: var(--text-faint); font-size: 11px; }
+.search-results { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 var(--space-2) var(--space-6); }
+.search-result { margin-bottom: var(--space-2); border-radius: var(--radius-md); }
+.search-result-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.search-result-title:hover { background: var(--bg-hover); }
+.search-result-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-faint);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-match {
+  display: block;
+  width: calc(100% - var(--space-3));
+  margin-left: var(--space-3);
+  padding: 2px var(--space-2) 2px var(--space-3);
+  border-left: 2px solid var(--divider);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.search-match:hover { border-left-color: var(--accent); background: var(--bg-hover); color: var(--text-normal); }
+.search-match mark, .search-result-title mark, .palette-item mark { padding: 0; background: var(--highlight); color: var(--text-normal); font-weight: 700; }
+
+/* ======================================================================= *
+ * 10. Command palette
+ * ======================================================================= */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh var(--space-4) var(--space-4);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(2px);
+  animation: fade-in 0.12s ease-out;
+}
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: 60vh;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop-in 0.14s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.palette-input {
+  flex: none;
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 15px;
+  outline: none;
+}
+.palette-input::placeholder { color: var(--text-faint); }
+.palette-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--space-2); list-style: none; }
+.palette-section {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.palette-item-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.palette-item-subtitle { flex: 0 1 auto; min-width: 0; color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.palette-item:hover { background: var(--bg-hover); color: var(--text-normal); }
+.palette-item.is-selected { background: var(--accent-soft); color: var(--text-normal); box-shadow: inset 2px 0 0 var(--accent); }
+.palette-item.is-selected .palette-item-subtitle { color: var(--text-muted); }
+.palette-shortcut {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.palette-empty { padding: var(--space-6) var(--space-4); color: var(--text-faint); font-size: 14px; text-align: center; }
+
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-8px) scale(0.985); } }
+
+/* ======================================================================= *
+ * 11. Graph view
+ * ======================================================================= */
+
+.graph-view { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--bg-primary); }
+.graph-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.graph-canvas:active { cursor: grabbing; }
+.graph-controls {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 210px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-md);
+}
+.graph-controls label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); color: var(--text-muted); font-size: 12px; }
+.graph-legend {
+  position: absolute;
+  bottom: var(--space-3);
+  left: var(--space-3);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.graph-legend > span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.graph-legend > span::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.graph-legend > span.is-unresolved::before { background: transparent; border: 1.5px dashed var(--link-unresolved); }
+.graph-legend > span.is-tag::before { background: var(--tag-text); }
+/* The compact graph in the right sidebar has no room for chrome. */
+.graph-view.is-compact .graph-controls, .graph-view.is-compact .graph-legend { display: none; }
+
+/* ======================================================================= *
+ * 12. Tags
+ * ======================================================================= */
+
+.tag-tree-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 3px var(--space-2);
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 13px);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.tag-tree-item:hover { background: var(--bg-hover); color: var(--text-normal); }
+.tag-tree-item.is-active { background: var(--bg-active); color: var(--text-normal); }
+.tag-tree-item > span:first-of-type { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ======================================================================= *
+ * 13. Status bar
+ * ======================================================================= */
+
+.statusbar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--statusbar-height);
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusbar-item { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-sm); color: inherit; }
+button.statusbar-item { padding: 0 var(--space-1); }
+button.statusbar-item:hover { background: var(--bg-hover); color: var(--text-normal); }
+.statusbar-spacer { flex: 1 1 auto; }
+/* --accent is only 3.8:1 on --bg-secondary in dark, and this 11px readout is
+ * the only sign the file is not written yet; --accent-text is 5.9:1. */
+.statusbar-item.is-dirty { color: var(--accent-text); }
+.statusbar-item.is-error { color: var(--text-error); }
+
+/* ======================================================================= *
+ * 14. Form controls
+ * ======================================================================= */
+
+/* The app's own prompt/confirm, rendered by DialogHost inside a Modal. */
+.dialog-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.dialog-message { margin: 0; color: var(--text-muted); }
+.dialog-input { width: 100%; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.btn:hover { background: var(--bg-hover); border-color: var(--text-faint); }
+.btn:disabled, .btn[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { border-color: transparent; background: var(--accent); color: var(--text-on-accent); }
+.btn-primary:hover { border-color: transparent; background: var(--accent-hover); }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--text-muted); }
+.btn-ghost:hover { border-color: transparent; background: var(--bg-hover); color: var(--text-normal); }
+.btn-danger { border-color: transparent; background: var(--text-error); color: var(--bg-primary); }
+
+.input, .select {
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+textarea.input { height: auto; padding: var(--space-2) var(--space-3); line-height: var(--line-height-normal); resize: vertical; }
+.input::placeholder { color: var(--text-faint); }
+.input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:disabled, .select:disabled { opacity: 0.55; cursor: not-allowed; }
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: var(--space-7);
+  /* Chevron drawn with gradients, so no image asset is needed. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 15px center, right 10px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+/* Switch — works both as `<input type="checkbox" class="switch">` and as a
+ * `<label class="switch">` wrapping a checkbox. */
+.switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  appearance: none;
+  -webkit-appearance: none;
+  vertical-align: middle;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform 0.14s ease, background 0.14s ease;
+}
+.switch:checked, .switch:has(> input[type='checkbox']:checked) { border-color: var(--accent); background: var(--accent); }
+.switch:checked::after,
+.switch:has(> input[type='checkbox']:checked)::after { background: var(--text-on-accent); transform: translateX(14px); }
+.switch > input[type='checkbox'] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.slider { width: 140px; height: 18px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.slider::-webkit-slider-runnable-track { height: 4px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-tertiary); }
+.slider::-moz-range-track { height: 4px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-tertiary); }
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+.slider::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--accent); box-shadow: var(--shadow-sm); }
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ======================================================================= *
+ * 15. Modals, settings, toasts
+ * ======================================================================= */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(2px);
+  animation: fade-in 0.12s ease-out;
+}
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(80vh, 720px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop-in 0.14s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--divider);
+  font-size: 15px;
+  font-weight: 650;
+}
+.modal-header > :first-child { flex: 1 1 auto; min-width: 0; }
+.modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--space-3) var(--space-5); }
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--divider);
+  background: var(--bg-secondary);
+}
+.settings-section {
+  padding: var(--space-4) 0 var(--space-1);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.settings-row { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--divider); }
+.settings-row:last-child { border-bottom: 0; }
+.settings-row-label { flex: 1 1 auto; min-width: 0; font-weight: 550; }
+.settings-row-description { margin-top: 2px; color: var(--text-faint); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.settings-row-control { display: flex; align-items: center; gap: var(--space-2); flex: none; }
+
+.toast-stack {
+  position: fixed;
+  right: var(--space-4);
+  bottom: calc(var(--statusbar-height) + var(--space-4));
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 360px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-md);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  pointer-events: auto;
+  animation: toast-in 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.toast.is-error { border-left-color: var(--text-error); color: var(--text-error); }
+.toast.is-success { border-left-color: var(--text-success); }
+.toast button { flex: none; color: var(--text-faint); }
+.toast button:hover { color: var(--text-normal); }
+@keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
+
+/* ======================================================================= *
+ * 16. Context menu
+ * ======================================================================= */
+
+.context-menu {
+  position: fixed;
+  z-index: 130;
+  min-width: 190px;
+  max-width: 280px;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.1s ease-out;
+}
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-normal);
+  font-size: var(--font-size-ui);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.context-menu-item:hover, .context-menu-item.is-selected { background: var(--accent-soft); }
+.context-menu-item.is-danger { color: var(--text-error); }
+.context-menu-item:disabled { color: var(--text-faint); cursor: default; }
+.context-menu-item:disabled:hover { background: transparent; }
+.context-menu-item .icon { flex: none; color: var(--text-faint); }
+.context-menu-separator { height: 1px; margin: var(--space-1) 0; background: var(--divider); }
+
+/* ======================================================================= *
+ * 17. Vault picker (first run)
+ * ======================================================================= */
+
+.vault-picker-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(3px);
+}
+.vault-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-modal);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.vault-picker h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; }
+.vault-picker p { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
+.vault-picker-options { display: flex; flex-direction: column; gap: var(--space-2); }
+.vault-picker-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-normal);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.vault-picker-option:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.vault-picker-option:disabled { opacity: 0.5; cursor: not-allowed; }
+.vault-picker-option .icon { flex: none; margin-top: 2px; color: var(--accent); }
+/* The title and its description are two lines, not one run-on sentence: as
+ * inline spans they rendered as "Try the demo vaultRecommended — 22 notes…". */
+.vault-picker-option > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.vault-picker-option-title { display: block; font-size: 14px; font-weight: 650; }
+.vault-picker-option-description { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+
+/* ======================================================================= *
+ * 18. Icons
+ * ======================================================================= */
+
+.icon { display: inline-block; flex: none; vertical-align: -0.15em; }
+
+/* ======================================================================= *
+ * 19. Mobile — the sidebars become overlays over the workspace.
+ * ======================================================================= */
+
+/* Sits behind an open sidebar so it can be dismissed by tapping the note.
+   Off entirely where the sidebars are columns rather than overlays. */
+.sidebar-scrim { display: none; }
+
+@media (max-width: 800px) {
+  .app { grid-template-columns: auto minmax(0, 1fr); }
+  .workspace-area, .workspace { grid-column: 2; }
+  .sidebar, .right-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: var(--statusbar-height);
+    z-index: 50;
+    max-width: calc(100vw - var(--ribbon-width));
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar { left: var(--ribbon-width); }
+  .right-sidebar { right: 0; max-width: calc(100vw - var(--ribbon-width) - var(--space-8)); }
+  .sidebar-resizer { display: none; }
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: var(--statusbar-height);
+    left: var(--ribbon-width);
+    z-index: 49; /* under the drawer at 50, over everything else */
+    border: 0;
+    padding: 0;
+    background: var(--bg-overlay);
+    backdrop-filter: blur(2px);
+    cursor: default;
+  }
+  .tab { flex-basis: 150px; }
+  .graph-controls { width: 170px; }
+  .palette-backdrop { padding-top: 6vh; }
+  .editor-host .cm-content, .preview-host { padding-left: var(--space-4); padding-right: var(--space-4); }
+  /* The bar cannot hold seven items at this width, and the one that gets
+     pushed off the end is the save state — the only one that matters. */
+  .statusbar-item.is-secondary { display: none; }
+}
+
+/* ======================================================================= *
+ * 20. Reduced motion — keep the layout, drop the movement.
+ * ======================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The rule above would end the flash before it is seen, and the flash is the
+   * only cue that the jump landed. Drop the fade, keep the highlight: `Editor`
+   * clears the decoration itself after 1.2s. */
+  .editor-host .cm-flash-line { animation: none; background-color: var(--accent-soft); }
+}
+
+/* Prompt field inside a DialogHost modal. */
+.dialog-field { display: flex; flex-direction: column; gap: var(--space-2); }
+.dialog-field > span { color: var(--text-muted); font-size: var(--font-size-ui); }
+
+/* Connect-to-a-server form inside the vault picker. */
+.vault-connect {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 520px;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+/* The two ways in to a sync server: an account, or the server's access token. */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+.segmented-option {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+}
+.segmented-option:hover { color: var(--text-primary); }
+.segmented-option.is-selected {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+.segmented-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The line under a field that explains where its value comes from. */
+.dialog-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  line-height: 1.5;
+}
+.dialog-hint code {
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}

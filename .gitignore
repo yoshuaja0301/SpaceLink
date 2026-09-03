@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.vite/
+*.local
+.DS_Store
+macos/build/
+# Xcode: window state, breakpoints and the like, written the moment the project
+# is opened, plus a DerivedData folder for anyone who keeps it beside the
+# project. None of it belongs to anybody but the person at the keyboard.
+macos/DerivedData/
+xcuserdata/
+*.xcuserstate
