@@ -358,6 +358,23 @@ describe('the project directory', () => {
     expect(existsSync(join(PROJECT, 'project.xcworkspace', 'contents.xcworkspacedata'))).toBe(true)
   })
 
+  it('keeps the per-user files Xcode writes out of the repository', () => {
+    // Opening the project writes `xcuserdata/` immediately — window positions,
+    // the last scheme, breakpoints — and anyone who keeps DerivedData beside
+    // the project gets that too. None of it is anybody else's business, and
+    // all of it turns `git status` into noise the moment Xcode starts.
+    const ignore = readFileSync(join(HERE, '..', '.gitignore'), 'utf8')
+    for (const pattern of ['xcuserdata/', 'macos/DerivedData/', 'macos/build/']) {
+      expect(ignore, `.gitignore does not cover ${pattern}`).toMatch(
+        new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      )
+    }
+    // …while everything that makes the project open correctly stays tracked.
+    for (const kept of ['SpaceFore.xcodeproj/project.pbxproj', 'SpaceFore.xcodeproj/xcshareddata/xcschemes/SpaceFore.xcscheme']) {
+      expect(existsSync(join(HERE, kept)), kept).toBe(true)
+    }
+  })
+
   it('agrees with Info.plist about what is being built', () => {
     const plist = readFileSync(join(HERE, 'Info.plist'), 'utf8')
     const [, target] = withIsa('PBXNativeTarget')[0]

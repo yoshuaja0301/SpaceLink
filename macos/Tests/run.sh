@@ -55,7 +55,9 @@ echo "==> Typechecking SpaceForeApp.swift against the API as Apple documents it"
 # delegate signature that does not match will not compile.
 #
 # What this does NOT check is in Stubs/AppKitStub.swift, and worth knowing:
-# `#selector` and the responder chain, and availability on older macOS.
+# `#selector` and the responder chain. Availability is checked, but not here —
+# Swift ignores `@available(macOS …)` when it is not compiling for macOS, so
+# macos/availability.test.mjs reads the versions off the stubs instead.
 swiftc -emit-module -module-name AppKit -emit-module-path "$OUT/AppKit.swiftmodule" \
   "$HERE/Stubs/AppKitStub.swift"
 swiftc -emit-module -module-name WebKit -emit-module-path "$OUT/WebKit.swiftmodule" -I "$OUT" \

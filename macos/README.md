@@ -95,7 +95,38 @@ breaking eight of them on purpose:
 **What this still cannot tell you.** That a symbol exists at all beyond the ones
 declared — anything the app uses has to be in the stub, and that is where a
 wrong memory could slip back in, which is why each declaration cites its source.
-Nor availability on older macOS. Nor, of course, whether the window looks right.
+Nor, of course, whether the window looks right.
+
+### Every API checked against the version the app promises
+
+Typechecking says a symbol exists. It does not say *when* it arrived, and an
+API newer than `MACOSX_DEPLOYMENT_TARGET` stops the first ⌘R with "is only
+available in macOS 13.3 or newer". Swift would normally catch that itself —
+but only when it is compiling for macOS. On Linux `@available(macOS …)` is
+inert, which was confirmed rather than assumed: a stub property marked
+`@available(macOS 13.3, *)` compiles here with no guard at all.
+
+So the versions are checked separately. A stub declaration newer than the
+target carries the version from the page it was copied from:
+
+```swift
+/// webkit/wkwebview/isinspectable — macOS 13.3+, default false
+@available(macOS 13.3, *)
+open var isInspectable: Bool { get { false } set {} }
+```
+
+`availability.test.mjs` reads those, finds every use in the app, and insists
+each one sits inside an `#available` guard for at least that version. It
+refuses a guard shape it cannot place — `guard #available`, whose scope runs to
+the end of the block — rather than passing it. Today one API is above the
+12.0 target, `isInspectable`, and it is guarded; taking the guard away, or
+weakening it to 12.0, fails the check. Every version was read off
+developer.apple.com: `WKDownload` and its delegate 11.3, `shouldPerformDownload`
+11.3, `runOpenPanelWith` 10.12, `activate(ignoringOtherApps:)` 10.0.
+
+The two checks compose. An API that is too new fails here; one that does not
+exist at all — `NSApp.activate()`, macOS 14 — is not in the stub, so the
+typecheck fails instead.
 
 Objective-C interop does not exist off Apple's platforms, so `#selector` and
 `@objc` are rewritten before the typecheck — and only those; the rest is the
@@ -183,6 +214,8 @@ reproduced, or confirmed from the documentation it cites.
 | the server dying when the app does — **including a crash** | `SIGKILL`ed the parent; server was gone in 2 s, port released |
 | the script phase is not sandboxed | `ENABLE_USER_SCRIPT_SANDBOXING = NO`, asserted — it reads the whole repository and writes into the bundle, which a sandboxed phase may not |
 | the iconset handed to `iconutil` | exactly Apple's ten names, checked through the real script with shims |
+| no API newer than the 12.0 deployment target is used unguarded | `availability.test.mjs`, against versions read off Apple's own pages |
+| opening the project does not dirty the repository | `xcuserdata/` and `DerivedData/` ignored, the shared scheme not |
 
 The project file's checks were confirmed by breaking it ten different ways — a
 dangling reference, the App Sandbox creeping back in, a renamed source file, the
@@ -271,6 +304,7 @@ drop a `node` binary into the target's Resources yourself, or use the script.
 | `build.sh` | builds without Xcode |
 | `SpaceFore.xcodeproj` | builds with it |
 | `pbxproj.test.mjs` | checks the project file, since Xcode cannot be run here |
+| `availability.test.mjs` | checks no API is newer than the deployment target, since Swift will not off a Mac |
 | `copy-resources.test.mjs` | checks the iconset the script builds, since `iconutil` cannot be run here |
 
 ---
