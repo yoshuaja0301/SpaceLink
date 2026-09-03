@@ -1323,6 +1323,11 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     // Two people, one folder — and not the folder the server was started on.
     await addAccount({ file: accountsFile, email: 'ana@example.com', password: MY_PASSWORD, vault: teamVault })
     await addAccount({ file: accountsFile, email: 'budi@example.com', password: MY_PASSWORD, vault: teamVault })
+    // Its own account: this one's password gets changed out from under it.
+    await addAccount({ file: accountsFile, email: 'revoked@example.com', password: MY_PASSWORD, vault: primaryVault })
+    // Its own account too: this one holds a stream open while the accounts
+    // file is unreadable, which is not a state to leave another test in.
+    await addAccount({ file: accountsFile, email: 'fragile@example.com', password: MY_PASSWORD, vault: myVault })
 
     accountsSync = createSyncServer({
       vault: primaryVault,
@@ -1388,6 +1393,7 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    const state = { closed: false }
     const pump = (async () => {
       while (true) {
         const { value, done } = await reader.read()
@@ -1400,8 +1406,11 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
           if (line.startsWith('data: ')) events.push(JSON.parse(line.slice(6)))
         }
       }
-    })().catch(() => {})
-    return { events, close: () => (controller.abort(), pump) }
+      state.closed = true
+    })().catch(() => {
+      state.closed = true
+    })
+    return { events, state, close: () => (controller.abort(), pump) }
   }
 
   const settle = (ms = 400) => new Promise((done) => setTimeout(done, ms))
@@ -1619,6 +1628,181 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
 
     expect((await as(phone.token, '/api/files')).status).toBe(401)
     expect((await as(laptop.token, '/api/files')).status).toBe(200)
+  })
+
+  it('stops an open change stream once the session behind it is revoked', async () => {
+    // A stream is authorised when it opens and can stay open for days. Asked
+    // once and never again, a device whose password had been changed — the
+    // command that promises to sign every device out — kept receiving every
+    // change to the vault, by path and by hash, for as long as its connection
+    // happened to last. Measured: a note written *after* the change arrived.
+    const { setPassword } = await import('./accounts.mjs')
+    const lost = await signIn('revoked@example.com', MY_PASSWORD)
+    const stream = await openStream(lost.token)
+    try {
+      await settle(200)
+      expect((await as(TOKEN, '/api/file?path=Seen.md', { method: 'PUT', body: 'a' })).status).toBe(200)
+      await settle()
+      expect(stream.events.map((event) => event.path), 'the stream was not working to begin with').toEqual(['Seen.md'])
+
+      // The owner changes the password, from anywhere.
+      await setPassword({ file: accountsFile, email: 'revoked@example.com', password: 'a brand new long password' })
+      expect((await as(lost.token, '/api/files')).status).toBe(401)
+
+      // The already-open stream has to notice too, not only new requests.
+      const deadline = Date.now() + 20_000
+      while (Date.now() < deadline && !stream.state.closed) await settle(200)
+      expect(stream.state.closed, 'a revoked device kept its change stream open').toBe(true)
+
+      const seen = stream.events.length
+      expect((await as(TOKEN, '/api/file?path=Unseen.md', { method: 'PUT', body: 'b' })).status).toBe(200)
+      await settle(600)
+      expect(stream.events.length, 'a revoked device was still being told about changes').toBe(seen)
+
+      // And the server is not left holding it: a dead response kept in the
+      // listeners is written to on every change, once per revoked device, for
+      // as long as the server runs.
+      expect(accountsSync.listeners.has(undefined)).toBe(false)
+      expect(accountsSync.listeners.size, 'a revoked stream was left in the listeners').toBe(0)
+    } finally {
+      await stream.close()
+      await rm(join(primaryVault, 'Seen.md'), { force: true })
+      await rm(join(primaryVault, 'Unseen.md'), { force: true })
+    }
+  }, 40_000)
+
+  it('leaves a stream alone for as long as its credential holds', async () => {
+    // The other half of asking again: a stream that is still allowed must
+    // survive being asked, and go on delivering. A check that closed every
+    // stream on its next tick would look like the feature working right up
+    // until somebody left the app open for a minute.
+    const mine = await signIn('me@example.com', MY_PASSWORD)
+    const stream = await openStream(mine.token)
+    try {
+      // Comfortably longer than the interval that re-checks the credential.
+      await settle(7000)
+      expect(stream.state.closed, 'a valid stream was closed by the re-check').toBe(false)
+
+      expect((await as(mine.token, '/api/file?path=Later.md', { method: 'PUT', body: 'c' })).status).toBe(200)
+      await settle()
+      expect(stream.events.map((event) => event.path)).toContain('Later.md')
+    } finally {
+      await stream.close()
+      await rm(join(myVault, 'Later.md'), { force: true })
+    }
+  }, 40_000)
+
+  it('survives an accounts file it cannot read while a stream is open', async () => {
+    // Re-checking a stream means reading the accounts file on a timer, and a
+    // file can go bad: a half-written save, a hand edit, a drive answering EIO.
+    // Measured before this was guarded: the rejection escaped the interval and
+    // ended the process — one unreadable file took down every device's sync,
+    // not the one device whose credential could not be confirmed.
+    const escaped = []
+    const collect = (error) => escaped.push(error)
+    process.on('unhandledRejection', collect)
+
+    const mine = await signIn('fragile@example.com', MY_PASSWORD)
+    // Read after signing in: the sign-in wrote this session into the file, and
+    // restoring a snapshot taken before it would revoke the very stream under
+    // test — the fix would then be indistinguishable from the bug.
+    const original = await readFile(accountsFile, 'utf8')
+    const stream = await openStream(mine.token)
+    try {
+      await settle(200)
+      await writeFile(accountsFile, '{ not JSON at all')
+
+      // Past the interval, several times over.
+      await settle(7000)
+      expect(escaped.map((error) => String(error?.message ?? error)), 'the re-check threw where nothing catches').toEqual([])
+      expect(stream.state.closed, 'an unreadable file signed a device out').toBe(false)
+      // And the server is still serving: the plain token never needed the file.
+      expect((await as(TOKEN, '/api/files')).status).toBe(200)
+
+      // Repaired, the stream carries on rather than needing a reconnect.
+      await writeFile(accountsFile, original)
+      await settle(6000)
+      expect(stream.state.closed, 'a repaired file did not save the stream').toBe(false)
+      expect((await as(mine.token, '/api/file?path=Repaired.md', { method: 'PUT', body: 'd' })).status).toBe(200)
+      await settle()
+      expect(stream.events.map((event) => event.path)).toContain('Repaired.md')
+    } finally {
+      process.off('unhandledRejection', collect)
+      await writeFile(accountsFile, original)
+      await stream.close()
+      await rm(join(myVault, 'Repaired.md'), { force: true })
+    }
+  }, 60_000)
+
+  it('survives a change landing on a stream it has just ended itself', async () => {
+    // The window the revocation check opens: `response.end()` returns, and the
+    // connection's `close` — which is what takes the listener out of the set —
+    // is a later tick. A note saved in between is broadcast to a response that
+    // has ended. That does not throw where the loop could catch it: `write()`
+    // returns false and raises an `error` event with nothing listening, which
+    // ends the process. Measured against a real ServerResponse:
+    // ERR_STREAM_WRITE_AFTER_END, uncaught, exit code 9.
+    //
+    // A real response cannot be held in that state on purpose — `close` fires
+    // within a tick or two, long before an HTTP round-trip comes back — so the
+    // window is held open by a stand-in that answers `write()` the way the
+    // measured one did. The half below runs the realistic path as well.
+    const escaped = []
+    const collect = (error) => escaped.push(error)
+    process.on('uncaughtException', collect)
+    process.on('unhandledRejection', collect)
+
+    let written = 0
+    const ended = {
+      writableEnded: true,
+      destroyed: false,
+      write() {
+        written += 1
+        // What Node does: nothing the caller can catch, and then a throw from
+        // a job nobody owns.
+        queueMicrotask(() => {
+          throw Object.assign(new Error('write after end'), { code: 'ERR_STREAM_WRITE_AFTER_END' })
+        })
+        return false
+      },
+    }
+    // An account on the folder the server was started on, so its stream shares
+    // the listeners this test reaches into.
+    const mine = await signIn('shared@example.com', MY_PASSWORD)
+    const stream = await openStream(mine.token)
+    try {
+      await settle(200)
+      expect(accountsSync.listeners.size, 'the stream never reached the server').toBe(1)
+      accountsSync.listeners.add(ended)
+
+      expect((await as(TOKEN, '/api/file?path=Landed.md', { method: 'PUT', body: 'e' })).status).toBe(200)
+      await settle()
+
+      expect(written, 'a stream that had ended was written to anyway').toBe(0)
+      expect(escaped.map((error) => error?.code ?? String(error)), 'a broadcast to an ended stream escaped').toEqual([])
+      // And it is gone, rather than being skipped on every change for as long
+      // as the server runs.
+      expect(accountsSync.listeners.has(ended), 'an ended stream was kept in the listeners').toBe(false)
+
+      // The live stream beside it was not collateral: it still got the change.
+      expect(stream.events.map((event) => event.path)).toContain('Landed.md')
+
+      // And the realistic path, end to end: a real response the server ends
+      // itself, then a change, then the server still serving everybody.
+      const [live] = [...accountsSync.listeners]
+      live.end()
+      expect((await as(TOKEN, '/api/file?path=Landed2.md', { method: 'PUT', body: 'f' })).status).toBe(200)
+      await settle()
+      expect(escaped.map((error) => error?.code ?? String(error))).toEqual([])
+      expect((await as(TOKEN, '/api/files')).status).toBe(200)
+    } finally {
+      process.off('uncaughtException', collect)
+      process.off('unhandledRejection', collect)
+      accountsSync.listeners.delete(ended)
+      await stream.close()
+      await rm(join(primaryVault, 'Landed.md'), { force: true })
+      await rm(join(primaryVault, 'Landed2.md'), { force: true })
+    }
   })
 
   it('keeps the token out of the file it writes, so a stolen backup is not a way in', async () => {

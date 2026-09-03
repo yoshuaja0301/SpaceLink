@@ -468,7 +468,11 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
   not. Both tunnel options above give you HTTPS.
 - **Rotate the token** by deleting `~/.spacelink/server.json` and restarting;
   **change a password** with `--set-password`. Either signs every device out,
-  which is exactly what you want if one has been lost.
+  which is exactly what you want if one has been lost — including a device that
+  is connected right now: an open change stream is asked again every few seconds
+  whether its credential still holds, and is closed within seconds of the answer
+  becoming no, rather than staying open until the reader happens to close the
+  app.
 - **Hidden files and folders, `node_modules`, and anything behind a symlink are
   never listed, served, announced or written to.** A `.obsidian` folder in the
   same vault is left alone, and a link inside the vault is not followed — not
@@ -563,7 +567,7 @@ which vault the request reaches.
 | `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash. Writes to one file run one at a time, so two devices saving against the same hash at the same moment get one `200` and one `409`, never two `200`s |
 | `DELETE /api/file?path=…` | remove it |
 | `POST /api/rename` | `{ from, to }` |
-| `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers |
+| `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers. The credential is re-checked every five seconds while the stream is open, so revoking it closes the stream rather than only refusing the next request |
 
 Writes are atomic: the file is written beside the target and moved into place, so
 an interrupted save leaves the previous version whole rather than a truncated

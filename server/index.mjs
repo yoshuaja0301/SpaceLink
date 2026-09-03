@@ -67,6 +67,15 @@ const LOGIN_BODY_BYTES = 4 * 1024
 /** How long an API write suppresses the watcher's echo for the same content. */
 const ECHO_WINDOW_MS = 4000
 
+/**
+ * How often an open change stream is asked whether its credential still holds.
+ *
+ * The bound on how long a revoked device keeps hearing about a vault. Short,
+ * because that is the point; and cheap, because the accounts file is only read
+ * again when its mtime has moved.
+ */
+const REVOCATION_CHECK_MS = 5000
+
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -185,7 +194,24 @@ function createVault(root) {
   function broadcast(event) {
     const payload = `data: ${JSON.stringify(event)}\n\n`
     for (const listener of listeners) {
-      listener.write(payload)
+      /*
+       * A listener the server has ended itself — a stream dropped because the
+       * credential behind it stopped holding — stays in this set until its
+       * connection's `close` fires, which is a later tick. Writing to it in
+       * between does not fail where a caller could see it: `write()` returns
+       * false and raises an `error` event with nothing listening, and that
+       * ends the process. One reader losing its stream at the wrong moment
+       * must not take everyone else's sync down with it.
+       */
+      if (listener.writableEnded || listener.destroyed) {
+        listeners.delete(listener)
+        continue
+      }
+      try {
+        listener.write(payload)
+      } catch {
+        listeners.delete(listener)
+      }
     }
   }
 
@@ -485,7 +511,9 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     }
 
     try {
-      await handleApi(request, response, url, caller.context)
+      // The credential is handed along so an open change stream can ask again
+      // later whether it is still one.
+      await handleApi(request, response, url, caller.context, () => identify(presented).then(Boolean))
     } catch (error) {
       // Only an error raised on purpose carries a status and a message written
       // for the caller. Anything else is Node's own, and those name the file
@@ -511,7 +539,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * @param {import('node:http').ServerResponse} response
    * @param {URL} url
    */
-  async function handleApi(request, response, url, context) {
+  async function handleApi(request, response, url, context, stillAllowed = null) {
     const path = url.searchParams.get('path') ?? ''
     const client = String(request.headers['x-spacelink-client'] ?? '')
 
@@ -640,8 +668,54 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // A comment every 25s keeps proxies and phone radios from closing an idle
       // stream, which would otherwise look like the server going away.
       const keepAlive = setInterval(() => response.write(': ping\n\n'), 25_000)
+
+      /*
+       * A stream is authorised when it opens, and it can stay open for days.
+       * Without this it is never asked again: a device whose session has been
+       * revoked — signed out, or its account's password changed, which is the
+       * command that promises to sign every device out — kept receiving every
+       * change to the vault, by path and by hash, for as long as the connection
+       * happened to last. Measured: a note written *after* the password change
+       * still arrived.
+       *
+       * So the credential is re-checked while the stream is open. Often enough
+       * to matter, cheaply enough not to: the accounts file is read only when
+       * its mtime has changed, so this is a `stat` a few times a minute.
+       */
+      let complained = false
+      const recheck = stillAllowed
+        ? setInterval(async () => {
+            try {
+              if (await stillAllowed()) return
+              // Stop asking, and end it. Everything else — the keep-alive, the
+              // listeners set — the connection's `close` handler below already
+              // owns, and ending the response is what fires it.
+              clearInterval(recheck)
+              response.end()
+            } catch (error) {
+              /*
+               * A check that could not be made is not an answer of "no". An
+               * accounts file missing a brace, or a drive answering EIO, is the
+               * same failure an ordinary request meets — and a request that
+               * meets it gets a 500 and keeps its credential, rather than being
+               * signed out. So the stream is kept, and the next tick decides
+               * once the file can be read again.
+               *
+               * Unhandled, this was worse than either answer: the rejection
+               * escaped the interval and ended the process, so one unreadable
+               * file took down every device's sync rather than none. Said once
+               * per stream — every five seconds would bury the reason.
+               */
+              if (complained) return
+              complained = true
+              process.stderr.write(`SpaceLink: could not re-check an open stream (${error?.message ?? error}).\n`)
+            }
+          }, REVOCATION_CHECK_MS)
+        : null
+
       request.on('close', () => {
         clearInterval(keepAlive)
+        if (recheck) clearInterval(recheck)
         context.listeners.delete(response)
       })
       return
