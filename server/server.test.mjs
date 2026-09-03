@@ -1720,6 +1720,31 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     expect((await as(laptop.token, '/api/files')).status).toBe(200)
   })
 
+  it('answers a body that is JSON but not an object with a 400, quietly', async () => {
+    // `null` is valid JSON. It parsed cleanly and then threw on `.email`,
+    // which reached the caller as a 500 — and, thrown before the limiter had
+    // counted anything, wrote a line to stderr per request for anyone on the
+    // network, no token needed and no cost. Measured: 40 of them, one log line
+    // each, and the limiter none the wiser.
+    const said = []
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (text) => void said.push(String(text)) || true
+    try {
+      for (const body of ['null', '[]', '"just a string"', '123', 'true']) {
+        const response = await fetch(`${at}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+        })
+        expect(response.status, `body ${body}`).toBe(400)
+        expect(((await response.json()).error ?? '').toLowerCase(), `body ${body}`).toContain('json object')
+      }
+      expect(said, 'a body the caller controls wrote to the log').toEqual([])
+    } finally {
+      process.stderr.write = write
+    }
+  })
+
   it('stops an open change stream once the session behind it is revoked', async () => {
     // A stream is authorised when it opens and can stay open for days. Asked
     // once and never again, a device whose password had been changed — the

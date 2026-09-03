@@ -798,6 +798,14 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
         sendJson(response, 400, { error: 'The request body is not valid JSON.' })
         return true
       }
+      // Valid JSON is not the same as a JSON object. `null` parsed cleanly and
+      // then threw on `.email`, which reached the caller as a 500 — and, being
+      // thrown before the limiter counted anything, wrote a line to stderr per
+      // request for anyone on the network, no token needed, at no cost.
+      if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+        sendJson(response, 400, { error: 'The request body must be a JSON object with an email and a password.' })
+        return true
+      }
       const email = String(body.email ?? '').trim()
       const password = String(body.password ?? '')
       // Two keys, and an attempt has to clear both.
