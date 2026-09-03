@@ -1427,6 +1427,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   pushToast(message, kind = 'info') {
+    // Said once while it is still on screen. A device whose sign-in has been
+    // revoked fails every autosave the same way, and a reader typing a
+    // paragraph pauses several times a minute — measured: five pauses, four
+    // identical "sign in again" toasts stacked at once, with anything else
+    // worth reading buried under them. A message that is already showing is
+    // not shown again beside itself; once it has gone, it may come back.
+    if (get().toasts.some((showing) => showing.message === message && showing.kind === kind)) return
     const toast: Toast = { id: newId('toast'), message, kind }
     set((state) => ({ toasts: [...state.toasts, toast] }))
     setTimeout(() => get().dismissToast(toast.id), 4000)

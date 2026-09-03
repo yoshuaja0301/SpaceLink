@@ -1454,3 +1454,41 @@ describe('where an edit can be lost, and now is not', () => {
     })
   })
 })
+
+describe('a toast that is already on screen', () => {
+  it('is not shown again beside itself', () => {
+    // A device whose sign-in was revoked fails every autosave the same way.
+    // Measured: five typing pauses, four identical "sign in again" toasts
+    // stacked at once, with anything else worth reading buried under them.
+    const { pushToast } = useAppStore.getState()
+    pushToast('Could not save Home.md: That sign-in is no longer valid. Sign in again.', 'error')
+    pushToast('Could not save Home.md: That sign-in is no longer valid. Sign in again.', 'error')
+    pushToast('Could not save Home.md: That sign-in is no longer valid. Sign in again.', 'error')
+    expect(useAppStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      'Could not save Home.md: That sign-in is no longer valid. Sign in again.',
+    ])
+  })
+
+  it('does not swallow a different message, or the same words in a different kind', () => {
+    const { pushToast } = useAppStore.getState()
+    pushToast('Saved', 'success')
+    pushToast('Deleted Home.md', 'info')
+    pushToast('Saved', 'error')
+    expect(useAppStore.getState().toasts.map((toast) => `${toast.kind}:${toast.message}`)).toEqual([
+      'success:Saved',
+      'info:Deleted Home.md',
+      'error:Saved',
+    ])
+  })
+
+  it('may be shown again once it has gone', () => {
+    // The point is repetition on screen, not a message being said only once
+    // ever: a second failure ten seconds later is news again.
+    const { pushToast, dismissToast } = useAppStore.getState()
+    pushToast('Could not save Home.md', 'error')
+    const [first] = useAppStore.getState().toasts
+    dismissToast(first!.id)
+    pushToast('Could not save Home.md', 'error')
+    expect(useAppStore.getState().toasts.map((toast) => toast.message)).toEqual(['Could not save Home.md'])
+  })
+})
