@@ -76,6 +76,18 @@ const ECHO_WINDOW_MS = 4000
  */
 const REVOCATION_CHECK_MS = 5000
 
+/**
+ * How long to wait before trying again to watch a folder that is not there.
+ *
+ * A vault folder can be missing when the watch is first set up: an account
+ * whose folder is made a moment after `--add-account`, a server started before
+ * an external drive is plugged in, a folder that happened to be away when its
+ * owner's first request came in. Without a retry the first failure was final —
+ * that vault was read and written correctly for the rest of the run and never
+ * announced a change again.
+ */
+const WATCH_RETRY_MS = 5000
+
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -299,7 +311,6 @@ function createVault(root) {
     if (signal?.aborted) return null
     const watcher = new EventEmitter()
     let stop = () => {}
-    watcher.close = () => stop()
 
     watcher.on('error', (error) => {
       // A folder that went away mid-scan. There is nothing to do about it and
@@ -318,12 +329,45 @@ function createVault(root) {
       })
     })
 
-    try {
-      stop = mode === 'recursive' ? watchRecursively(store.root, watcher) : watchEachFolder(store.root, watcher, store)
-    } catch (error) {
-      process.stderr.write(`SpaceLink: could not watch the vault (${error?.message ?? error}).\n`)
-      return null
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let retry = null
+    watcher.close = () => {
+      if (retry) clearTimeout(retry)
+      retry = null
+      stop()
     }
+
+    /**
+     * Take the watch, or arrange to take it later.
+     *
+     * A folder that is not there yet is the one failure worth waiting on, and
+     * the only one that comes back by itself. Anything else — a permission, a
+     * filesystem that cannot watch at all — would repeat forever without
+     * getting anywhere, so it is reported once and left.
+     *
+     * What happened while the folder was away is not announced: there was no
+     * watch to see it. A device's next listing is what reconciles that, which
+     * is the same thing that reconciles a device that was simply offline.
+     */
+    const attach = () => {
+      retry = null
+      try {
+        stop = mode === 'recursive' ? watchRecursively(store.root, watcher) : watchEachFolder(store.root, watcher, store)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          process.stderr.write(`SpaceLink: could not watch the vault (${error?.message ?? error}).\n`)
+          return
+        }
+        retry = setTimeout(attach, WATCH_RETRY_MS)
+        // Nothing should be kept alive by the wait: a server with nothing else
+        // to do must still be able to exit.
+        retry.unref?.()
+      }
+    }
+
+    const first = store.root
+    attach()
+    if (retry) process.stderr.write(`SpaceLink: ${first} is not there yet; watching for it.\n`)
 
     signal?.addEventListener('abort', () => watcher.close(), { once: true })
     return watcher

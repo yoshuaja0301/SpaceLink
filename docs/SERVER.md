@@ -510,7 +510,11 @@ account's folder has been moved, renamed, or is on a drive that is not mounted.
 The server answers `503` rather than reporting an empty vault, because "I cannot
 see your notes" and "you have no notes" are not the same sentence. Put the folder
 back, or point the account at where it went with a new `--add-account`, and it
-starts working again by itself — no restart.
+starts working again by itself — no restart. Its live change feed comes back
+too: a folder that is not there when the server tries to watch it is checked
+for again every few seconds. Changes made while it was away are not announced,
+since nothing was watching to see them; a device's next listing reconciles
+those, the same as for a device that was simply offline.
 
 **A device says it cannot reach the server.** Check the server is running, that
 it was started with `--host 0.0.0.0` if the device is not the same machine, and

@@ -994,6 +994,96 @@ describe('a folder that vanishes while the watcher is scanning it', () => {
     controller.abort()
     expect(server.startWatching(controller.signal)).toBeNull()
   })
+
+  it('waits for a vault folder that is not there yet, and watches it once it is', async () => {
+    // The folder can be missing exactly when the watch is set up: a server
+    // started before an external drive is plugged in, or an account whose
+    // folder is made a moment after `--add-account`. Measured: the first
+    // failure was final. That vault was listed and written correctly for the
+    // rest of the run and never announced a change again — a device syncing
+    // by hand and no sign anything was wrong.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-late-'))
+    const root = join(home, 'NotYet')
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(home, '__no_dist__') })
+    const controller = new AbortController()
+    const said = []
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (text) => void said.push(String(text)) || true
+
+    const changes = []
+    server.listeners.add({ writableEnded: false, destroyed: false, write: (text) => void changes.push(text) })
+    try {
+      expect(server.startWatching(controller.signal), 'a missing folder gave up instead of waiting').not.toBeNull()
+      expect(said.join(''), 'nothing said about a folder it is waiting for').toMatch(/is not there yet/)
+
+      await mkdir(root, { recursive: true })
+      await writeFile(join(root, 'Arrived.md'), '# Arrived\n')
+      // Past the retry, and then some for the change to be announced.
+      await new Promise((done) => setTimeout(done, 7000))
+      await writeFile(join(root, 'Typed.md'), '# Typed\n')
+      await new Promise((done) => setTimeout(done, 1200))
+
+      expect(changes.join(''), 'the folder came back and was still not watched').toContain('Typed.md')
+    } finally {
+      process.stderr.write = write
+      controller.abort()
+      await rm(home, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it('stops waiting for a folder once the watch is closed', async () => {
+    // The wait is a timer that re-arms itself, and `close()` is what has to
+    // end it. Closing without a signal to abort — which is how the watch is
+    // stopped when the vault turns out to be unwatchable — would otherwise
+    // leave it re-arming for the life of the process, once per server.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-late-'))
+    const root = join(home, 'NeverMade')
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(home, '__no_dist__') })
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = () => true
+    try {
+      const watcher = server.startWatching()
+      expect(watcher).not.toBeNull()
+      watcher.close()
+
+      // The folder appears after the watch was closed. Nothing should pick
+      // it up.
+      await mkdir(root, { recursive: true })
+      const changes = []
+      server.listeners.add({ writableEnded: false, destroyed: false, write: (text) => void changes.push(text) })
+      await new Promise((done) => setTimeout(done, 7000))
+      await writeFile(join(root, 'TooLate.md'), '# Too late\n')
+      await new Promise((done) => setTimeout(done, 1200))
+      expect(changes, 'a closed watch went on waiting for the folder').toEqual([])
+    } finally {
+      process.stderr.write = write
+      await rm(home, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it('does not wait on a vault it could never watch, however long it waits', async () => {
+    // Only a missing folder is worth waiting for: it is the one failure that
+    // comes back by itself. A path that cannot be a folder at all would
+    // re-try every few seconds for the life of the process and never once
+    // get anywhere, with nothing said about why the vault is silent.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-late-'))
+    await writeFile(join(home, 'notafolder'), 'this is a file\n')
+    const root = join(home, 'notafolder', 'inside')
+    const server = createSyncServer({ vault: root, token: TOKEN, distDir: join(home, '__no_dist__') })
+    const said = []
+    const write = process.stderr.write.bind(process.stderr)
+    process.stderr.write = (text) => void said.push(String(text)) || true
+    const controller = new AbortController()
+    try {
+      server.startWatching(controller.signal)
+      expect(said.join(''), 'nothing said about a vault that cannot be watched').toMatch(/could not watch the vault/)
+      expect(said.join(''), 'it is waiting for something that will never arrive').not.toMatch(/is not there yet/)
+    } finally {
+      process.stderr.write = write
+      controller.abort()
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('a device that goes away half-way through the bundle', () => {
