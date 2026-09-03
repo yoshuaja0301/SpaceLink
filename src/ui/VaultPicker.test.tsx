@@ -24,13 +24,13 @@ vi.mock('../core/vault/directoryVault', () => ({
 // under test here is what the form does with the answer, not the HTTP.
 vi.mock('../core/vault/remoteVault', () => ({
   createRemoteVault: vi.fn(),
-  signIn: vi.fn(),
+  openWithAccount: vi.fn(),
   signOut: vi.fn(),
 }))
 
 import { createBrowserVault, hasStoredVault, seedVault } from '../core/vault/browserVault'
 import { isDirectoryVaultSupported, pickDirectoryVault } from '../core/vault/directoryVault'
-import { createRemoteVault, signIn, signOut } from '../core/vault/remoteVault'
+import { createRemoteVault, openWithAccount, signOut } from '../core/vault/remoteVault'
 
 const PRISTINE = useAppStore.getState()
 
@@ -92,7 +92,11 @@ beforeEach(() => {
   vi.mocked(seedVault).mockResolvedValue(undefined)
   vi.mocked(isDirectoryVaultSupported).mockReturnValue(false)
   vi.mocked(pickDirectoryVault).mockResolvedValue(null)
-  vi.mocked(signIn).mockResolvedValue({ ok: true, token: 'session-token', email: 'me@example.com', name: 'Notebook' })
+  vi.mocked(openWithAccount).mockImplementation(async () => ({
+    adapter: await vi.mocked(createRemoteVault)({ url: '', token: '' }),
+    token: 'session-token',
+    email: 'me@example.com',
+  }))
   vi.mocked(signOut).mockResolvedValue(undefined)
   vi.mocked(createRemoteVault).mockImplementation(async () => ({
     ...createMemoryVault({ 'Synced.md': '# Synced\n' }, { name: 'Notebook' }),
@@ -390,12 +394,14 @@ describe('VaultPicker', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
       })
 
-      expect(vi.mocked(signIn)).toHaveBeenCalledWith('http://mac.local:4899', 'me@example.com', 'a long enough password')
-      expect(vi.mocked(createRemoteVault)).toHaveBeenCalledWith({
-        url: 'http://mac.local:4899',
-        token: 'session-token',
-        email: 'me@example.com',
-      })
+      // One call, not two: signing in and opening the vault are a pair, and a
+      // sign-in that worked with an open that did not would leave a session on
+      // the server this device is about to forget.
+      expect(vi.mocked(openWithAccount)).toHaveBeenCalledWith(
+        'http://mac.local:4899',
+        'me@example.com',
+        'a long enough password',
+      )
       expect(useAppStore.getState().vaultName).toBe('Notebook')
       expect(onReady).toHaveBeenCalledTimes(1)
 
@@ -412,7 +418,7 @@ describe('VaultPicker', () => {
     })
 
     it('shows what the server said when the password is refused, and remembers nothing', async () => {
-      vi.mocked(signIn).mockResolvedValue({ ok: false, error: 'That email and password do not match an account.' })
+      vi.mocked(openWithAccount).mockRejectedValue(new Error('That email and password do not match an account.'))
       const onReady = vi.fn()
       await show(onReady)
       await fillSignIn()
@@ -421,8 +427,7 @@ describe('VaultPicker', () => {
       })
 
       expect(screen.getByRole('alert').textContent).toContain('do not match an account')
-      expect(vi.mocked(createRemoteVault)).not.toHaveBeenCalled()
-      expect(localStorage.getItem('spacelink.remote')).toBeNull()
+      expect(localStorage.getItem('spacelink.remote'), 'a refused sign-in was remembered').toBeNull()
       expect(onReady).not.toHaveBeenCalled()
     })
 

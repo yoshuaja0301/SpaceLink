@@ -124,8 +124,11 @@ export async function probeServer(
 
   const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` } })
   if (vault.status === 401) return { ok: false, error: refused(credential) }
-  if (!vault.ok) return { ok: false, error: `The server answered ${vault.status}.` }
-  const info = (await vault.json().catch(() => null)) as { name?: string } | null
+  const info = (await vault.json().catch(() => null)) as { name?: string; error?: string } | null
+  // The server's own words when it has any: "the folder this vault lives in is
+  // not there" tells the reader what to do about it, and a bare status code
+  // does not.
+  if (!vault.ok) return { ok: false, error: info?.error ?? `The server answered ${vault.status}.` }
   return { ok: true, name: info?.name ?? 'Sync server' }
 }
 
@@ -213,6 +216,41 @@ export async function signOut(url: string, token: string): Promise<void> {
     })
   } catch {
     /* the token is being forgotten locally regardless */
+  }
+}
+
+/**
+ * Sign in and open the vault, as one step.
+ *
+ * They have to be one step because the first half has a side effect on the
+ * server: a session that lasts thirty days, whether or not the second half
+ * works. When opening the vault fails — most often an account pointed at a
+ * folder that is not there, which answers 503 — the device throws its token
+ * away and walks off, and the server is left holding a signed-in device that
+ * nobody has. Measured: three attempts left three "a Mac" entries in
+ * `--list-accounts`, the one command whose job is to say who is signed in,
+ * and the owner's only way to clear them was changing the password.
+ *
+ * So a failed open ends the session it was just given. Best effort, like every
+ * other sign-out: a server that cannot be reached is not a reason to keep the
+ * reader waiting, and the session expires on its own.
+ *
+ * Both halves fail by throwing, which is what the caller already did with
+ * either one.
+ */
+export async function openWithAccount(
+  url: string,
+  email: string,
+  password: string,
+): Promise<{ adapter: VaultAdapter; token: string; email: string }> {
+  const session = await signIn(url, email, password)
+  if (!session.ok) throw new Error(session.error)
+  try {
+    const adapter = await createRemoteVault({ url, token: session.token, email: session.email })
+    return { adapter, token: session.token, email: session.email }
+  } catch (error) {
+    await signOut(url, session.token)
+    throw error
   }
 }
 

@@ -510,7 +510,10 @@ account's folder has been moved, renamed, or is on a drive that is not mounted.
 The server answers `503` rather than reporting an empty vault, because "I cannot
 see your notes" and "you have no notes" are not the same sentence. Put the folder
 back, or point the account at where it went with a new `--add-account`, and it
-starts working again by itself — no restart. Its live change feed comes back
+starts working again by itself — no restart. A device asked to pair with such
+an account is refused in those same words rather than paired and then broken,
+and the session that sign-in created is ended again rather than left in
+`--list-accounts` as a device that never got in. Its live change feed comes back
 too: a folder that is not there when the server tries to watch it is checked
 for again every few seconds. Changes made while it was away are not announced,
 since nothing was watching to see them; a device's next listing reconciles
@@ -564,7 +567,7 @@ which vault the request reaches.
 | `POST /api/auth/login` | `{ email, password }` → `{ token, email, vault }`. The token is this device's session. `401` for a wrong password *and* for an address with no account — identical byte for byte, and deliberately identical in how long it takes, so neither the message nor the delay says which addresses exist. `429` after a run of wrong guesses, with `Retry-After`. `404` on a server that has no accounts |
 | `POST /api/auth/logout` | end the session in the `Authorization` header — that device only, not the account's others. Always `200`, whether or not there was one |
 | `GET /api/auth/me` | `{ signedIn, email, vault }` for whatever credential was presented |
-| `GET /api/vault` | the vault's name |
+| `GET /api/vault` | the vault's name. Checks the folder as well as naming it, so a device deciding whether to keep a pairing is not told yes about a vault the server cannot read — `503` when it is missing |
 | `GET /api/files` | every file with size, mtime and a SHA-256 of its contents |
 | `GET /api/bundle` | every note's text in one streamed response, as newline-delimited JSON. This is what a device uses to open the vault — one request rather than one per note |
 | `GET /api/file?path=…` | the file; `ETag` is its hash |

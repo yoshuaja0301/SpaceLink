@@ -28,6 +28,7 @@ import {
   describeDevice,
   deviceId,
   normalizeServerUrl,
+  openWithAccount,
   probeServer,
   RemoteConflict,
   signIn,
@@ -157,6 +158,81 @@ describe('signing in', () => {
 
     const vault = await createRemoteVault({ url: accountOrigin, token: result.token, email: result.email })
     expect((await vault.list()).map((file) => file.path)).toEqual(['Only Mine.md'])
+  }, 20_000)
+
+  it('does not leave a session behind when the vault will not open', async () => {
+    // The account is real, the password is right, and the folder it points at
+    // is not there — a typo in `--add-account`, or a drive not plugged in.
+    // Measured before this: every attempt left a signed-in device on the
+    // server that nobody held, listed by `--list-accounts` as present, and
+    // clearable only by changing the password. Three tries, three phantoms.
+    const stray = join(home, 'strays.json')
+    await addAccount({ file: stray, email: 'typo@example.com', password: PASSWORD, vault: join(home, 'NotThere') })
+    const sync = createSyncServer({
+      vault: join(home, 'Unused'),
+      token: 'd'.repeat(43),
+      distDir: join(home, '__no_dist__'),
+      accountsFile: stray,
+    })
+    const server = createServer((request, response) => void sync.handle(request, response))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    const sessions = async (): Promise<unknown[]> => JSON.parse(await readFile(stray, 'utf8')).sessions
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await expect(openWithAccount(url, 'typo@example.com', PASSWORD)).rejects.toThrow()
+      }
+      expect(await sessions(), 'a device that never got in is still signed in').toEqual([])
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }, 30_000)
+
+  it('refuses to pair with a vault the server cannot read, in the server’s own words', async () => {
+    // The pairing check answered from the vault's *name* — a string on the
+    // server's own command line — without ever looking at the folder. So a
+    // vault whose folder is missing paired successfully, the connection was
+    // saved, and the reader met the failure on their first listing instead —
+    // and on every launch afterwards, since the saved pairing is what the app
+    // reconnects to.
+    const stray = join(home, 'unreadable.json')
+    await addAccount({ file: stray, email: 'gone@example.com', password: PASSWORD, vault: join(home, 'AlsoNotThere') })
+    const sync = createSyncServer({
+      vault: join(home, 'Unused'),
+      token: 'e'.repeat(43),
+      distDir: join(home, '__no_dist__'),
+      accountsFile: stray,
+    })
+    const server = createServer((request, response) => void sync.handle(request, response))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    try {
+      const session = await signIn(url, 'gone@example.com', PASSWORD)
+      expect(session.ok, 'the sign-in itself should still work').toBe(true)
+      if (!session.ok) return
+
+      const probe = await probeServer(url, session.token, 'account')
+      expect(probe.ok, 'paired with a vault the server cannot read').toBe(false)
+      // Not "the server answered 503": the reader is told the folder is
+      // missing, which is the one sentence that says what to do about it.
+      if (!probe.ok) expect(probe.error).toMatch(/folder this vault lives in is not there/i)
+      await signOut(url, session.token)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }, 30_000)
+
+  it('keeps the session when the vault does open, which is the whole point', async () => {
+    const opened = await openWithAccount(accountOrigin, 'me@example.com', PASSWORD)
+    expect((await opened.adapter.list()).map((file) => file.path)).toEqual(['Only Mine.md'])
+    expect(opened.email).toBe('me@example.com')
+    // The token it came back with is a working one, not one it has just ended.
+    const probe = await probeServer(accountOrigin, opened.token, 'account')
+    expect(probe.ok, 'the session was signed out on the way through').toBe(true)
+    await signOut(accountOrigin, opened.token)
   }, 20_000)
 
   it('passes the server’s own words back when the password is wrong', async () => {

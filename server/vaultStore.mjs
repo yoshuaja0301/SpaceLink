@@ -199,21 +199,19 @@ export class VaultStore {
   }
 
   /**
-   * `resolvePath`, then the check only the filesystem can make: that no link
-   * on the way leads out of the vault, or anywhere at all. Links are not
-   * followed — the listing skips them — so the file API must not quietly
-   * read, write or delete through one. A path that does not exist yet is
-   * judged by its deepest existing ancestor.
-   * @param {string} inputPath
-   * @returns {Promise<{ relative: string, absolute: string }>}
+   * The vault's own folder with symlinks resolved, and the check that it is
+   * there at all.
+   *
+   * Every path resolves through this, and so does anything that only needs to
+   * know whether the vault can be read: a device asking what it is about to
+   * pair with deserves the same answer as one asking for a file.
+   *
+   * @returns {Promise<string>}
    */
-  async resolveOnDisk(inputPath) {
-    const entry = this.resolvePath(inputPath)
+  async realRootPath() {
     this.realRoot ??= realpath(this.root)
-    /** @type {string} */
-    let realRoot
     try {
-      realRoot = await this.realRoot
+      return await this.realRoot
     } catch (error) {
       // The vault's folder is not there. Said plainly, and not cached as a
       // rejected promise: the drive may be mounted again a moment later, and a
@@ -226,6 +224,20 @@ export class VaultStore {
       }
       throw error
     }
+  }
+
+  /**
+   * `resolvePath`, then the check only the filesystem can make: that no link
+   * on the way leads out of the vault, or anywhere at all. Links are not
+   * followed — the listing skips them — so the file API must not quietly
+   * read, write or delete through one. A path that does not exist yet is
+   * judged by its deepest existing ancestor.
+   * @param {string} inputPath
+   * @returns {Promise<{ relative: string, absolute: string }>}
+   */
+  async resolveOnDisk(inputPath) {
+    const entry = this.resolvePath(inputPath)
+    const realRoot = await this.realRootPath()
     let probe = entry.absolute
     for (;;) {
       /** @type {string | null} */

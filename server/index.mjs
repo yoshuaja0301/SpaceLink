@@ -588,6 +588,12 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     const client = String(request.headers['x-spacelink-client'] ?? '')
 
     if (url.pathname === '/api/vault' && request.method === 'GET') {
+      // The folder is checked, not just named. This is the call a device makes
+      // to decide whether a pairing is worth keeping, and answering from the
+      // path string alone said yes to a vault the server cannot read: the
+      // device saved the pairing, opened, failed on its first listing, and
+      // reconnected to the same unreadable vault on every launch afterwards.
+      await context.store.realRootPath()
       sendJson(response, 200, { name: context.store.root.split(/[\\/]/).pop() || 'vault', writable: true })
       return
     }

@@ -21,7 +21,7 @@ import { useAppStore } from '../state/store'
 import { createBrowserVault, hasStoredVault, seedVault } from '../core/vault/browserVault'
 import { createDemoVault, DEMO_NOTES } from '../core/vault/demoVault'
 import { isDirectoryVaultSupported, pickDirectoryVault } from '../core/vault/directoryVault'
-import { createRemoteVault, signIn, signOut } from '../core/vault/remoteVault'
+import { createRemoteVault, openWithAccount, signOut } from '../core/vault/remoteVault'
 import { forgetRemoteConnection, loadRemoteConnection, saveRemoteConnection } from '../core/vault/remoteConnection'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
@@ -181,14 +181,15 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
         saveRemoteConnection({ url, token: serverToken.trim(), name: adapter.name })
         return adapter
       }
-      const session = await signIn(url, email, password)
-      if (!session.ok) throw new Error(session.error)
-      const adapter = await createRemoteVault({ url, token: session.token, email: session.email })
+      // Signing in and opening the vault are one call: a sign-in that works
+      // followed by an open that does not would otherwise leave a session on
+      // the server that this device is about to forget.
+      const opened = await openWithAccount(url, email, password)
       // The password goes no further than the request that just used it. What
       // this device keeps is the session, which can be ended from elsewhere.
       setPassword('')
-      saveRemoteConnection({ url, token: session.token, name: adapter.name, email: session.email })
-      return adapter
+      saveRemoteConnection({ url, token: opened.token, name: opened.adapter.name, email: opened.email })
+      return opened.adapter
     }
 
     // Seeding is skipped for a vault that already has content, so a returning
