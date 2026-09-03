@@ -350,4 +350,39 @@ describe('slowing down a password guesser', () => {
     expect(limiter.retryAfter('victim@example.com', now)).toBeGreaterThan(0)
     expect(limiter.retryAfter('someone-else@example.com', now)).toBe(0)
   })
+
+  it('is not a place an anonymous caller can put things', async () => {
+    // Every attempt names its own key — an email typed into the request — so a
+    // run of logins for made-up addresses would grow this map for as long as
+    // it was fed. Nothing else ever revisits those keys, so nothing else ever
+    // sweeps them.
+    const limiter = createAttemptLimiter({ maxKeys: 50 })
+    for (let attempt = 0; attempt < 5_000; attempt += 1) limiter.fail(`made-up-${attempt}@example.com`)
+    expect(limiter.size).toBeLessThanOrEqual(50)
+  })
+
+  it('keeps the run it is still counting and drops the ones nobody is making', () => {
+    const limiter = createAttemptLimiter({ maxKeys: 3 })
+    const now = 1_000_000
+    // A guesser working on one address, among a crowd of one-off keys.
+    limiter.fail('victim@example.com', now)
+    limiter.fail('victim@example.com', now + 1)
+    for (let index = 0; index < 10; index += 1) limiter.fail(`noise-${index}@example.com`, now + 2 + index)
+    // The victim's key was the least recently touched, so it goes — which is
+    // correct: it is the *recent* run that is worth counting, and the crowd of
+    // one-offs is itself the thing being counted now.
+    expect(limiter.size).toBeLessThanOrEqual(3)
+    // Whatever survived, the map is bounded and the newest key is in it.
+    expect(limiter.retryAfter(`noise-9@example.com`, now + 12)).toBe(0)
+  })
+
+  it('forgets a run once nobody has made an attempt for long enough', () => {
+    const limiter = createAttemptLimiter({ forgetAfterMs: 1000, maxKeys: 100 })
+    const now = 5_000_000
+    for (let index = 0; index < 10; index += 1) limiter.fail(`stale-${index}@example.com`, now)
+    expect(limiter.size).toBe(10)
+    // One more attempt, an hour later: the sweep goes with it.
+    limiter.fail('fresh@example.com', now + 10_000)
+    expect(limiter.size).toBe(1)
+  })
 })

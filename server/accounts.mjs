@@ -346,6 +346,12 @@ export async function revokeSession({ file, token }) {
  * ------------------------------------------------------------------ */
 
 /** Failures allowed before the wait starts growing. */
+/**
+ * How many keys the limiter will remember at once. Ten thousand is far more
+ * than a household of people mistyping passwords and far less than a way to
+ * spend the server's memory.
+ */
+const MAX_KEYS = 10_000
 const FREE_ATTEMPTS = 5
 /** The wait doubles per failure past that, up to this. */
 const MAX_DELAY_MS = 15 * 60 * 1000
@@ -360,9 +366,35 @@ const FORGET_AFTER_MS = 60 * 60 * 1000
  * weak password and a script — in memory, because a restart losing the
  * counters is a smaller problem than a file rewritten on every failed login.
  */
-export function createAttemptLimiter({ freeAttempts = FREE_ATTEMPTS, maxDelayMs = MAX_DELAY_MS, forgetAfterMs = FORGET_AFTER_MS } = {}) {
+export function createAttemptLimiter({
+  freeAttempts = FREE_ATTEMPTS,
+  maxDelayMs = MAX_DELAY_MS,
+  forgetAfterMs = FORGET_AFTER_MS,
+  maxKeys = MAX_KEYS,
+} = {}) {
   /** @type {Map<string, { failures: number, last: number }>} */
   const seen = new Map()
+
+  /**
+   * Keep the map from becoming somewhere an anonymous caller can put things.
+   *
+   * Every attempt names its own key — an email typed into the request — so
+   * without this, a run of logins for made-up addresses grows this map for as
+   * long as it is fed. Expired entries go first; if that is not enough, the
+   * least recently touched go, which is exactly the run nobody is still making.
+   */
+  const prune = (now) => {
+    for (const [key, record] of seen) {
+      if (now - record.last > forgetAfterMs) seen.delete(key)
+    }
+    // Map iterates in insertion order and `fail` re-inserts, so the front is
+    // the least recently touched.
+    while (seen.size > maxKeys) {
+      const oldest = seen.keys().next()
+      if (oldest.done) break
+      seen.delete(oldest.value)
+    }
+  }
 
   /** How long `key` must wait before another attempt is worth making. */
   const retryAfterMs = (key, now) => {
@@ -382,10 +414,24 @@ export function createAttemptLimiter({ freeAttempts = FREE_ATTEMPTS, maxDelayMs 
     retryAfter(key, now = Date.now()) {
       return retryAfterMs(key, now)
     },
+    /**
+     * Count one attempt against `key`.
+     *
+     * Called when an attempt *starts*, not when it turns out to have failed.
+     * Checking the count and then spending 90ms on a hash before recording
+     * anything is a check-then-act race, and a burst of concurrent requests
+     * all pass the check together — which is not a slower attack, it is no
+     * limit at all. Counting first makes concurrency count against the
+     * attacker rather than for them; `succeed` clears the run afterwards.
+     */
     fail(key, now = Date.now()) {
       const record = seen.get(key)
+      // Delete before setting, so the re-insert moves this key to the back of
+      // the map's order and `prune` can read that order as recency.
+      seen.delete(key)
       if (!record || now - record.last > forgetAfterMs) seen.set(key, { failures: 1, last: now })
       else seen.set(key, { failures: record.failures + 1, last: now })
+      prune(now)
     },
     /** A password that worked clears the run — the person is who they said. */
     succeed(key) {

@@ -124,6 +124,21 @@ function readBody(request, limit = MAX_BODY_BYTES) {
   })
 }
 
+/**
+ * Who a request came from, for rate-limiting purposes only.
+ *
+ * The socket's own address, never `x-forwarded-for`: that header is written by
+ * whoever is talking, so a limiter that trusted it would hand an attacker a
+ * fresh identity per request — worse than having no address key at all. The
+ * cost is that everyone behind one tunnel shares a key, which is why that key
+ * gets the wider budget.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ */
+function clientAddress(request) {
+  return request.socket?.remoteAddress ?? 'unknown'
+}
+
 /** @param {import('node:http').IncomingMessage} request */
 function bearerToken(request) {
   const header = request.headers.authorization
@@ -305,7 +320,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
   let watchSignal = null
 
   /** Password guessing is slowed per address; the token has never needed it. */
-  const attempts = createAttemptLimiter()
+  // The email key uses the default budget; the address key a wider one, since
+  // a tunnel puts a whole household behind a single address.
+  const attempts = createAttemptLimiter({ freeAttempts: 5 })
+  const byAddress = createAttemptLimiter({ freeAttempts: 25 })
 
   /**
    * The accounts file, re-read only when it has changed on disk.
@@ -636,9 +654,25 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       }
       const email = String(body.email ?? '').trim()
       const password = String(body.password ?? '')
-      const key = email.toLowerCase()
+      // Two keys, and an attempt has to clear both.
+      //
+      // The address alone is not enough: it is the account being guessed at,
+      // and someone may reach the server from anywhere. The email alone is not
+      // enough either, and that is the less obvious half — every attempt names
+      // its own email, so a caller who never repeats one is never counted,
+      // while each miss still costs a deliberate 90ms and 32 MiB of scrypt.
+      // Limiting only by email leaves the whole endpoint free to exhaust.
+      //
+      // Behind a tunnel every request shares one address, so that key is given
+      // a wider budget than the email's: enough that a household mistyping
+      // passwords is never locked out, small enough to bound the cost.
+      /** @type {[ReturnType<typeof createAttemptLimiter>, string][]} */
+      const limits = [
+        [attempts, email.toLowerCase()],
+        [byAddress, clientAddress(request)],
+      ]
 
-      const wait = attempts.retryAfter(key)
+      const wait = Math.max(...limits.map(([limiter, key]) => limiter.retryAfter(key)))
       if (wait > 0) {
         // A password can be guessed; the wait is what makes guessing it cost
         // something. Told in seconds so a person who mistyped theirs knows.
@@ -647,6 +681,12 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
         })
         return true
       }
+      // Counted here, before the hash rather than after it. Checking and then
+      // spending 90ms before recording anything lets a burst of concurrent
+      // requests all pass the check together — measured, and it is not a
+      // slower attack but an unlimited one. Nothing is awaited between the
+      // check above and this, so the whole burst is counted in order.
+      for (const [limiter, key] of limits) limiter.fail(key)
 
       const store = await accountsStore()
       // The same answer either way, and the same time either way: which
@@ -654,11 +694,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // gets to learn, by reading the message or by timing it.
       const account = await verifyLogin(store.accounts, email, password)
       if (!account) {
-        attempts.fail(key)
         sendJson(response, 401, { error: 'That email and password do not match an account.' })
         return true
       }
-      attempts.succeed(key)
+      for (const [limiter, key] of limits) limiter.succeed(key)
       const device = String(request.headers['x-spacelink-device'] ?? body.device ?? 'a device')
       const { token: session } = await createSession({ file: accountsFile, account, device })
       forgetAccounts()

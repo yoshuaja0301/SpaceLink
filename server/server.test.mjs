@@ -1197,6 +1197,7 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     // Its own account, so the wrong guesses the timing check makes are not
     // added to another test's run and tripping the rate limiter.
     await addAccount({ file: accountsFile, email: 'timing@example.com', password: MY_PASSWORD, vault: myVault })
+    await addAccount({ file: accountsFile, email: 'clears@example.com', password: MY_PASSWORD, vault: myVault })
 
     accountsSync = createSyncServer({
       vault: primaryVault,
@@ -1499,6 +1500,22 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
     expect((await login('slow@example.com', MY_PASSWORD)).status).toBe(200)
   })
 
+  it('starts the count over once the right password arrives', async () => {
+    // Otherwise the next mistype after a successful sign-in resumes an
+    // escalating wait the person already worked off — and since an attempt is
+    // now counted when it starts, even the successful one leaves a mark unless
+    // this clears it.
+    const near = () => login('clears@example.com', 'wrong').then((response) => response.status)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(await near(), `guess ${attempt + 1} should still be allowed`).toBe(401)
+    }
+    expect((await login('clears@example.com', MY_PASSWORD)).status).toBe(200)
+
+    // The run is over, so this is guess number one again rather than number
+    // seven — allowed through to be refused on its merits.
+    expect(await near()).toBe(401)
+  }, 30_000)
+
   it('offers no way to make an account over the network', async () => {
     // The choice this server is built around: accounts exist because someone
     // typed a command on the machine holding the notes. There is no sign-up
@@ -1730,6 +1747,85 @@ describe('the account commands', { timeout: 60_000 }, () => {
  * explaining why. Run as a child process with `HOME` pointed at a temporary
  * directory, because the path is resolved once when the module loads.
  */
+/**
+ * Hammering the sign-in endpoint.
+ *
+ * On a server of its own, deliberately: these tests exhaust the limiter for
+ * the address they come from, which is the point of them, and sharing that
+ * with the other tests would have them refuse perfectly good sign-ins made
+ * afterwards. That is the limiter working — but in a test it reads as a
+ * failure somewhere else entirely.
+ */
+describe('a caller leaning on the sign-in endpoint', { timeout: 60_000 }, () => {
+  const PASSWORD = 'a long enough password'
+  /** @type {string} */
+  let home
+  /** @type {import('node:http').Server} */
+  let listener
+  /** @type {string} */
+  let at
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacelink-hammer-'))
+    const notes = join(home, 'Notes')
+    await mkdir(notes, { recursive: true })
+    const accountsFile = join(home, 'accounts.json')
+    await addAccount({ file: accountsFile, email: 'burst@example.com', password: PASSWORD, vault: notes })
+
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(home, '__no_dist__'), accountsFile })
+    listener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => listener.listen(0, '127.0.0.1', done))
+    const address = listener.address()
+    at = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  })
+
+  afterAll(async () => {
+    await new Promise((done) => listener.close(done))
+    await rm(home, { recursive: true, force: true })
+  })
+
+  /** @param {string} email @param {string} password */
+  const login = (email, password) =>
+    fetch(`${at}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+
+  it('counts a burst of guesses sent all at once, not just one after another', async () => {
+    // The limiter reads a count, then spends ~90ms hashing, then records the
+    // failure. If it recorded only at the end, every request in a burst would
+    // read the same count and pass together — which is not a slower attack but
+    // an unlimited one. Measured before this was fixed: twenty concurrent
+    // guesses, twenty 401s, nothing throttled.
+    const guess = () => login('burst@example.com', 'wrong every time').then((response) => response.status)
+    const statuses = await Promise.all(Array.from({ length: 20 }, guess))
+
+    const refused = statuses.filter((status) => status === 429).length
+    const reached = statuses.filter((status) => status === 401).length
+    expect(reached + refused).toBe(20)
+    // Five free attempts, so a handful get through and the rest do not. The
+    // exact split does not matter; that most of them are stopped does.
+    expect(refused, `only ${refused} of 20 concurrent guesses were throttled`).toBeGreaterThan(10)
+    expect(reached).toBeLessThanOrEqual(8)
+  }, 30_000)
+
+  it('counts a caller who never repeats an address, too', async () => {
+    // Every attempt names its own email, so limiting by email alone never
+    // counts a caller who uses a fresh one each time — while each miss still
+    // costs a deliberate 90ms and 32 MiB of scrypt. That is the whole endpoint
+    // left free to exhaust, and it needs the caller's address to catch.
+    const statuses = await Promise.all(
+      Array.from({ length: 40 }, (_, index) =>
+        login(`nobody-${index}-${Date.now()}@example.com`, 'wrong').then((response) => response.status),
+      ),
+    )
+    const refused = statuses.filter((status) => status === 429).length
+    expect(refused, `${refused} of 40 unrelated-address guesses were throttled`).toBeGreaterThan(5)
+  }, 30_000)
+
+})
+
 describe('the folder the server keeps its token in', { timeout: 60_000 }, () => {
   /** @type {string} */
   let entry

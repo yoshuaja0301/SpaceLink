@@ -234,10 +234,29 @@ So that file in a backup, or over your shoulder in a screenshot, is not a way
 in: neither the password nor any device's session appears in it, and a test
 reads the file back after signing in to check.
 
-Repeated wrong passwords for one address are slowed down — five free attempts,
-then a doubling wait up to fifteen minutes — because a password, unlike 256 bits
-of random data, is guessable. A correct password clears the run at once, so
-mistyping yours is a pause and not a lockout.
+Repeated wrong passwords are slowed down — five free attempts, then a doubling
+wait up to fifteen minutes — because a password, unlike 256 bits of random data,
+is guessable. A correct password clears the run at once, so mistyping yours is a
+pause and not a lockout.
+
+Two things about that counter are worth stating, because both were wrong once
+and each was measured rather than reasoned about:
+
+- **An attempt is counted when it starts, not when it fails.** Checking the
+  count and *then* spending 90 ms on a hash before recording anything is a race:
+  twenty sign-ins sent at the same moment all read the same count and all get
+  through. Measured, that was exactly what happened — twenty guesses, nothing
+  slowed. Counting first makes sending them at once count against the sender.
+- **It counts the caller as well as the address being guessed at.** Every
+  attempt names its own email, so a caller who never repeats one would never be
+  counted — while each miss still costs that deliberate 90 ms and 32 MiB. Two
+  hundred sign-ins for two hundred made-up addresses used to sail through; now
+  the caller's own address is counted too, with a wider budget so a household
+  behind one tunnel is not locked out by one person's typo.
+
+The counter is bounded, for the same reason: the key is text from the request,
+and a map that grew whenever an anonymous caller invented a new address would be
+somewhere to put things. Runs nobody is still making are dropped.
 
 A refusal takes the same ~90 ms whether or not the address has an account: the
 miss is hashed against a decoy record rather than answered immediately. Wording
@@ -480,9 +499,11 @@ every device needs pairing again.
 wrong password and an address with no account, on purpose. `--list-accounts` on
 the host says which addresses exist; `--set-password` sets a new one.
 
-**"Too many attempts. Try again in 60s."** A run of wrong passwords for one
-address is slowed down. Wait the seconds it names — a correct password clears
-the run immediately, and nothing is locked.
+**"Too many attempts. Try again in 60s."** A run of wrong passwords is slowed
+down. Wait the seconds it names — a correct password clears the run, and nothing
+is locked. It counts the address being signed in to *and* where the attempt came
+from, so behind a tunnel — where every device shares one address — a housemate
+guessing at their own password can use up part of the same budget.
 
 **"This server does not use accounts."** It was started without any, so the
 access token is the way in. Make one with `--add-account` and restart if you
