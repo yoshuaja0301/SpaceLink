@@ -198,7 +198,13 @@ export function createSyncServer({ vault, token, distDir = DIST }) {
    * @param {import('node:http').ServerResponse} response
    */
   async function route(request, response) {
-    const url = new URL(request.url ?? '/', 'http://localhost')
+    // `request.url` is a path, and a path is all it is — but `new URL(path,
+    // base)` reads a leading `//` as the start of an authority. `GET //` threw
+    // "Invalid URL" from here, and `GET //api/health` quietly became the host
+    // `api` with the path `/health`, missing the API entirely. Prefixing the
+    // origin keeps the whole path, whatever it begins with.
+    const path = request.url?.startsWith('/') ? request.url : '/'
+    const url = new URL(`http://localhost${path}`)
     const origin = request.headers.origin
 
     // The API is protected by a bearer token, never by a cookie, so a page on

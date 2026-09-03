@@ -918,6 +918,34 @@ describe('a request that is not an address', () => {
   })
 })
 
+describe('a request path that begins with two slashes', () => {
+  it('is a path, not the start of a host', async () => {
+    // `GET //` used to throw "Invalid URL" out of the request handler, which
+    // nobody awaited: the process ended. Anyone who can reach the port could
+    // send it, and a browser will, for a link written `//something`.
+    const doubled = await fetch(`${base}//`)
+    const single = await fetch(`${base}/`)
+    expect(doubled.status).toBe(single.status)
+    expect(doubled.status).toBeLessThan(500)
+    expect((await fetch(`${base}///`)).status).toBeLessThan(500)
+    expect((await fetch(`${base}//assets/app.js`)).status).toBeLessThan(500)
+  })
+
+  it('does not let a doubled slash reach the API under another name', async () => {
+    // Parsed as a host, `//api/health` became `/health` and fell through to the
+    // static files — the API answering at a path that is not its own, or not
+    // answering at one that is, are both ways to be wrong.
+    const health = await fetch(`${base}//api/health`)
+    expect(health.status).toBeLessThan(500)
+    // Whatever it answers, it is not the health endpoint answering.
+    expect(await health.text()).not.toMatch(/"service"\s*:\s*"spacefore"/)
+
+    // …while the API itself is unmoved.
+    expect((await fetch(`${base}/api/health`)).status).toBe(200)
+    expect((await call('/api/files')).status).toBe(200)
+  })
+})
+
 describe('two devices saving the same note at the same moment', () => {
   it('lets exactly one conditional write through at the store', async () => {
     const store = new VaultStore(vault)
