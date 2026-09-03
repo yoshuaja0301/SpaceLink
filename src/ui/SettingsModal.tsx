@@ -20,7 +20,13 @@ import { formatShortcut } from './useHotkeys'
 /** Kept in step with `package.json` by hand — importing JSON would bloat the bundle. */
 const APP_VERSION = '0.1.0'
 
-const SOURCE_URL = 'https://github.com/spacelink/spacelink'
+/**
+ * Where "View the source" goes. It has to name the repository this app is
+ * actually kept in: it was a placeholder — `spacefore/spacefore` — that pointed
+ * at a namespace nobody here owns, and the rename would have moved it to
+ * another one. Change it if the repository moves.
+ */
+const SOURCE_URL = 'https://github.com/yoshuaja0301/spacelink'
 
 const THEMES: { value: ThemeName; label: string }[] = [
   { value: 'system', label: 'System' },
