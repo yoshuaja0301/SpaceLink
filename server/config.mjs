@@ -219,7 +219,8 @@ Accounts — sign in from any device instead of pasting a token
   --list-accounts         Show the accounts, where their notes live, and which
                           devices are signed in.
   --password <value>      Supply the password instead of being asked, for a
-                          script. It will be visible in your shell history.
+                          script. It will be visible in your shell history;
+                          piping it in, one line per prompt, is not.
   --accounts <file>       Where accounts live (default ~/.spacelink/accounts.json).
 
 See docs/SERVER.md for reaching it from other devices, and for keeping it

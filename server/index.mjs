@@ -1073,50 +1073,105 @@ async function serveStatic(pathname, response, distDir) {
  * @param {string} prompt
  * @returns {Promise<string>}
  */
+/**
+ * Fold one chunk of raw-mode keystrokes into what has been typed so far.
+ *
+ * A chunk is not a keystroke. Typing delivers one character at a time, but a
+ * paste delivers the whole clipboard in one chunk — and a password manager's
+ * clipboard ends in a newline. Read as a single "character", that chunk went
+ * straight into the password, newline and all, and the prompt then sat
+ * waiting for an Enter that had already been pasted. Measured at a real
+ * terminal: the account was made with a password ending in `\n`, the reader
+ * typed it into the app without one, and was refused with nothing said.
+ * "Again:" agreed, because it was pasted the same way.
+ *
+ * So the chunk is walked key by key, and the entry ends at the first Enter in
+ * it; whatever follows the Enter is dropped, not carried into the next prompt.
+ * Backspace removes a code point, not a code unit, so a password containing an
+ * emoji is not left holding half of one.
+ *
+ * Pure, and exported for the test that types at it.
+ *
+ * @param {string} typed
+ * @param {string} chunk
+ * @returns {{ typed: string, done: boolean, interrupted: boolean }}
+ */
+export function takeKeys(typed, chunk) {
+  for (const key of chunk) {
+    switch (key) {
+      case '\n':
+      case '\r':
+      case '\u0004': // Ctrl-D
+        return { typed, done: true, interrupted: false }
+      case '\u0003': // Ctrl-C
+        return { typed, done: true, interrupted: true }
+      case '\u007f': // backspace
+      case '\b':
+        typed = [...typed].slice(0, -1).join('')
+        break
+      default:
+        typed += key
+    }
+  }
+  return { typed, done: false, interrupted: false }
+}
+
+/**
+ * Everything a pipe had to say, read once and handed out a line at a time.
+ *
+ * Two prompts, one pipe. The first prompt used to read stdin to its end and
+ * take the first line; the second then listened for an `end` that had already
+ * happened, on a stream with nothing left to keep the process alive — so Node
+ * exited, code 0, with the account unmade and not a word said. To a script that
+ * is success. Now the pipe is read once, each prompt takes the next line, and a
+ * prompt the pipe has no line for fails out loud.
+ *
+ * @type {Promise<string[]> | null}
+ */
+let pipedLines = null
+
+/** @param {string} prompt */
 function askPassword(prompt) {
-  return new Promise((done, fail) => {
-    const input = process.stdin
-    process.stdout.write(prompt)
-    let typed = ''
-    if (!input.isTTY) {
+  const input = process.stdin
+  process.stdout.write(prompt)
+
+  if (!input.isTTY) {
+    pipedLines ??= new Promise((done, fail) => {
       let buffered = ''
       input.setEncoding('utf8')
       input.on('data', (chunk) => {
         buffered += chunk
       })
-      input.on('end', () => {
-        process.stdout.write('\n')
-        done(buffered.split('\n')[0] ?? '')
-      })
+      input.on('end', () => done(buffered.split(/\r?\n/)))
       input.on('error', fail)
-      return
-    }
+    })
+    return pipedLines.then((lines) => {
+      process.stdout.write('\n')
+      const line = lines.shift()
+      if (line === undefined || (line === '' && lines.length === 0)) {
+        throw new Error(
+          'The input ended before the password was confirmed. Pipe it in twice, once per prompt, or pass --password.',
+        )
+      }
+      return line
+    })
+  }
+
+  return new Promise((done) => {
+    let typed = ''
     input.setRawMode(true)
     input.resume()
     input.setEncoding('utf8')
-    const onData = (character) => {
-      switch (character) {
-        case '\n':
-        case '\r':
-        case '\u0004':
-          input.setRawMode(false)
-          input.pause()
-          input.removeListener('data', onData)
-          process.stdout.write('\n')
-          done(typed)
-          break
-        case '\u0003': // Ctrl-C
-          input.setRawMode(false)
-          process.stdout.write('\n')
-          process.exit(130)
-          break
-        case '\u007f': // backspace
-        case '\b':
-          typed = typed.slice(0, -1)
-          break
-        default:
-          typed += character
-      }
+    const onData = (chunk) => {
+      const next = takeKeys(typed, chunk)
+      typed = next.typed
+      if (!next.done) return
+      input.setRawMode(false)
+      input.pause()
+      input.removeListener('data', onData)
+      process.stdout.write('\n')
+      if (next.interrupted) process.exit(130)
+      done(typed)
     }
     input.on('data', onData)
   })

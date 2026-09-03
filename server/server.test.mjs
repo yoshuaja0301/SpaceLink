@@ -12,8 +12,8 @@ import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, un
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { accountForSession, addAccount, sessionId } from './accounts.mjs'
-import { createSyncServer } from './index.mjs'
+import { accountForSession, addAccount, loadAccounts, sessionId, verifyLogin } from './accounts.mjs'
+import { createSyncServer, takeKeys } from './index.mjs'
 import { VaultConflictError, VaultStore, hashOf } from './vaultStore.mjs'
 import { generateToken, parseArgs, tokensMatch } from './config.mjs'
 
@@ -2125,6 +2125,19 @@ describe('the account commands', { timeout: 60_000 }, () => {
     return { code, out, err }
   }
 
+  /** Run the CLI with something piped into it, the way a script would. */
+  async function runWithInput(input, ...args) {
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, [entry, ...args], { stdio: ['pipe', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += String(chunk)))
+    child.stderr.on('data', (chunk) => (err += String(chunk)))
+    child.stdin.end(input)
+    const code = await new Promise((done) => child.on('close', done))
+    return { code, out, err }
+  }
+
   const accountsFile = () => join(home, 'accounts.json')
   const PASSWORD = 'a long enough password'
 
@@ -2156,6 +2169,43 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(again.code).toBe(1)
     expect(again.err).toMatch(/already an account/i)
     expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
+  })
+
+  it('takes a password piped in, one line per prompt', async () => {
+    // What a script does instead of --password, which lands in shell history.
+    // Measured before this: the first prompt read the pipe to its end, the
+    // second waited for an end that had already come on a stream with nothing
+    // left to keep the process alive, and Node exited — code 0, no account,
+    // not a word. To a script that is success.
+    const piped = join(home, 'piped.json')
+    const made = await runWithInput(
+      `${PASSWORD}\n${PASSWORD}\n`,
+      '--vault', join(home, 'Notes'),
+      '--accounts', piped,
+      '--add-account', 'piped@example.com',
+    )
+    expect(made.code, made.err).toBe(0)
+    expect(made.out).toContain('Made an account for piped@example.com')
+
+    const store = await loadAccounts(piped)
+    expect(store.accounts.map((account) => account.email)).toEqual(['piped@example.com'])
+    // The password, not the password and the newline after it.
+    expect(await verifyLogin(store.accounts, 'piped@example.com', PASSWORD), 'the piped password does not sign in').not.toBeNull()
+  })
+
+  it('fails out loud when the pipe runs out before the password is confirmed', async () => {
+    // One line piped, two prompts. Exiting 0 with nothing made is the one
+    // outcome a script cannot tell from success.
+    const piped = join(home, 'piped-short.json')
+    const short = await runWithInput(
+      `${PASSWORD}\n`,
+      '--vault', join(home, 'Notes'),
+      '--accounts', piped,
+      '--add-account', 'short@example.com',
+    )
+    expect(short.code, 'the process claimed success').toBe(1)
+    expect(short.err).toMatch(/pipe it in twice|--password/i)
+    expect((await loadAccounts(piped)).accounts, 'an account was made from an unconfirmed password').toEqual([])
   })
 
   it('refuses a password too short to be worth hashing', async () => {
@@ -2477,5 +2527,48 @@ describe('a server started without accounts', () => {
     const response = await call('/api/auth/logout', { method: 'POST' })
     expect(response.status).toBe(200)
     expect((await call('/api/files')).status).toBe(200)
+  })
+})
+
+describe('typing a password at the terminal', () => {
+  // `takeKeys` is what the raw-mode prompt folds each chunk of input through.
+  // A chunk is a keystroke when typing and the whole clipboard when pasting.
+  const type = (...chunks) => {
+    let state = { typed: '', done: false, interrupted: false }
+    for (const chunk of chunks) {
+      state = takeKeys(state.typed, chunk)
+      if (state.done) break
+    }
+    return state
+  }
+
+  it('reads a paste that ends in a newline as the password and Enter, not as the password', () => {
+    // A password manager's clipboard. Measured at a real terminal before this:
+    // the newline went into the password, the prompt then waited for an Enter
+    // that had already been pasted, and the account was made with a password
+    // ending in `\n` — refused when typed into the app, with nothing said.
+    expect(type('a long enough password\n')).toEqual({ typed: 'a long enough password', done: true, interrupted: false })
+    expect(type('a long enough password\r\n')).toEqual({ typed: 'a long enough password', done: true, interrupted: false })
+  })
+
+  it('reads keystrokes one at a time, the ordinary way', () => {
+    expect(type('p', 'a', 's', 's', '\r')).toEqual({ typed: 'pass', done: true, interrupted: false })
+    expect(type('p', 'a').done).toBe(false)
+  })
+
+  it('drops what comes after the Enter rather than carrying it into the next prompt', () => {
+    // A clipboard holding two lines. The second is not the answer to "Again:".
+    expect(type('first\nsecond\n').typed).toBe('first')
+  })
+
+  it('takes backspace as one character, even when that character is an emoji', () => {
+    expect(type('pas', 's', '\u007f', '\r').typed).toBe('pas')
+    expect(type('pass🔑', '\u007f', '\r').typed).toBe('pass')
+    expect(type('\u007f', '\r').typed).toBe('')
+  })
+
+  it('ends on Ctrl-D and reports Ctrl-C, without either landing in the password', () => {
+    expect(type('pass', '\u0004')).toEqual({ typed: 'pass', done: true, interrupted: false })
+    expect(type('pass', '\u0003')).toEqual({ typed: 'pass', done: true, interrupted: true })
   })
 })
