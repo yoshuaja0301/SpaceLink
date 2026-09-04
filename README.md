@@ -16,8 +16,12 @@ yourself and sign in to it.
   you type — the markers reveal themselves when the cursor enters them
 - Edit / split / preview modes per tab, with synchronised scrolling in split
 - `[[` autocomplete over note names and aliases, `#` autocomplete over tags
+- `/` block menu on an empty block — heading, list, to-do, quote, callout,
+  toggle, code, table, divider — so the markup is picked rather than remembered
 - Formatting commands (bold, italic, code, highlight, callouts, tables, task
   checkboxes, heading cycling, line move/duplicate) on standard shortcuts
+- Fold a heading and everything under it, and collapse a callout written with
+  a fold marker (`> [!note]-`)
 
 **Linking**
 - `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`, `[[Note#^block]]` and
@@ -143,7 +147,7 @@ npm run build    # typecheck (app, server and scripts) + bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1793 unit and component tests
+npm test         # vitest — 1805 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 

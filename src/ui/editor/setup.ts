@@ -30,6 +30,7 @@ import {
 import type { NotePath } from '../../types'
 import { editorAppearance, editorHighlighting, editorTheme } from './editorTheme'
 import { flashLineHighlight, markdownDecorations } from './markdownDecorations'
+import { slashCompletion } from './slashMenu'
 import { wikilinkCompletion } from './wikilinkComplete'
 
 /** Wraps the gutter extensions, toggled by the `showLineNumbers` setting. */
@@ -95,7 +96,9 @@ export function createEditorExtensions(opts: EditorSetupOptions): Extension[] {
     highlightSelectionMatches(),
     closeBrackets(),
     autocompletion({
-      override: [wikilinkCompletion()],
+      // Two sources, never both at one cursor: `/` opens the block menu where a
+      // block can start, `[[` and `#` cover links and tags.
+      override: [wikilinkCompletion(), slashCompletion()],
       activateOnTyping: true,
       closeOnBlur: true,
       icons: false,
