@@ -494,7 +494,55 @@ export function accountForSession(store, token, now = Date.now()) {
   const id = sessionId(token)
   const session = store.sessions.find((candidate) => candidate.id === id)
   if (!session || session.expiresAt <= now) return null
-  return store.accounts.find((account) => account.id === session.accountId) ?? null
+  // The id is the only link between a session and an account, so two accounts
+  // carrying one id make that link unreadable — and picking the first is a
+  // guess about whose notes these are. Measured on a hand-edited file: an
+  // account signed in with its own password, was told it had opened its own
+  // vault, and was served somebody else's notes, silently. There is no answer
+  // here that is better than none.
+  const owners = store.accounts.filter((account) => account.id === session.accountId)
+  return owners.length === 1 ? owners[0] : null
+}
+
+/**
+ * What is wrong with an accounts file, if anything, said per account.
+ *
+ * Nothing here writes these; `addAccount` refuses a second account for one
+ * address, and ids are random. They come from a file edited by hand, or two
+ * backups merged — and both leave an account that does not work in a way the
+ * listing showed as working.
+ *
+ * @param {Account[]} accounts
+ * @returns {Map<number, string>} index in `accounts` to what is wrong with it
+ */
+export function accountProblems(accounts) {
+  /** @type {Map<number, string>} */
+  const problems = new Map()
+  /** @type {Map<string, number>} */
+  const addresses = new Map()
+  /** @type {Map<string, number[]>} */
+  const ids = new Map()
+
+  accounts.forEach((account, index) => {
+    const folded = String(account?.email ?? '').trim().toLowerCase()
+    if (addresses.has(folded)) {
+      problems.set(index, 'another account already has this address, so this one can never be signed in to')
+    } else {
+      addresses.set(folded, index)
+    }
+    const id = String(account?.id ?? '')
+    ids.set(id, [...(ids.get(id) ?? []), index])
+  })
+
+  for (const shared of ids.values()) {
+    if (shared.length < 2) continue
+    for (const index of shared) {
+      // Said for every one of them: none of these can be signed in to, and
+      // which of them a session was meant for is exactly what has been lost.
+      problems.set(index, 'this account shares its id with another, so no device can sign in to either')
+    }
+  }
+  return problems
 }
 
 /**

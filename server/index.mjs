@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   accountForSession,
+  accountProblems,
   addAccount,
   createAttemptLimiter,
   createSession,
@@ -1274,8 +1275,12 @@ async function runAccountCommand(options, accountsFile) {
       return true
     }
     const now = Date.now()
+    // Nothing this server writes produces these; a hand-edited file or two
+    // backups merged do. The listing is where somebody looks to see who can
+    // reach the notes, so it is where an account that cannot has to say so.
+    const problems = accountProblems(store.accounts)
     process.stdout.write(`\n  Accounts in ${accountsFile}\n\n`)
-    for (const account of store.accounts) {
+    for (const [index, account] of store.accounts.entries()) {
       const devices = store.sessions.filter((session) => session.accountId === account.id && session.expiresAt > now)
       // Printed through `plainText` even though what is written now is clean:
       // this file can be older than that rule, or edited by hand.
@@ -1286,6 +1291,8 @@ async function runAccountCommand(options, accountsFile) {
       // one that is, while every device on that account got 503.
       const there = await stat(account.vault).then((info) => info.isDirectory()).catch(() => false)
       if (!there) process.stdout.write('             not there — moved, renamed, unmounted, or mistyped in --add-account\n')
+      const wrong = problems.get(index)
+      if (wrong) process.stdout.write(`      ** ${wrong}\n`)
       if (devices.length === 0) process.stdout.write('      no device signed in\n')
       // Each device by what it said it was and when, so it is obvious whether
       // the list holds one you no longer recognise.

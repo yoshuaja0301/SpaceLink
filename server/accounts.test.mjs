@@ -13,7 +13,7 @@ import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { accountForSession, addAccount, createAttemptLimiter, createSession, findAccount, hashPassword, loadAccounts, MIN_PASSWORD_LENGTH, plainText, revokeSession, sameEmail, saveAccounts, SESSION_DAYS, sessionId, setPassword, updateAccounts, verifyLogin, verifyPassword } from './accounts.mjs'
+import { accountForSession, accountProblems, addAccount, createAttemptLimiter, createSession, findAccount, hashPassword, loadAccounts, MIN_PASSWORD_LENGTH, plainText, revokeSession, sameEmail, saveAccounts, SESSION_DAYS, sessionId, setPassword, updateAccounts, verifyLogin, verifyPassword } from './accounts.mjs'
 
 /** @type {string} */
 let home
@@ -662,5 +662,67 @@ describe('the label a device signs in under', () => {
   it('keeps an ordinary label as it was', async () => {
     const { session } = await createSession({ file, account, device: 'a Mac' })
     expect(session.device).toBe('a Mac')
+  })
+})
+
+describe('an accounts file that two backups or a hand edit have damaged', () => {
+  const shell = (id, email) => ({ id, email, vault: `/notes/${id}`, salt: '', hash: '', kdf: {}, createdAt: 0 })
+
+  it('names the account an address was taken from, and only that one', () => {
+    // addAccount refuses a second account for one address, so this comes from
+    // outside: a file edited by hand, or two merged. The first wins every
+    // sign-in and the second can never be reached — which the listing showed
+    // as two working accounts.
+    const problems = accountProblems([
+      shell('a', 'me@example.com'),
+      shell('b', 'ME@Example.com'),
+      shell('c', 'other@example.com'),
+    ])
+    expect(problems.get(1), 'the shadowed account was not named').toMatch(/already has this address/i)
+    expect(problems.has(0), 'the account that does work was called broken').toBe(false)
+    expect(problems.has(2)).toBe(false)
+  })
+
+  it('names every account in a shared id, because none of them can be resolved', () => {
+    // Sharper: the id is the only link a session has to an account, and two
+    // accounts holding one make that link unreadable in both directions.
+    const problems = accountProblems([shell('same', 'one@example.com'), shell('same', 'two@example.com')])
+    expect(problems.get(0)).toMatch(/shares its id/i)
+    expect(problems.get(1)).toMatch(/shares its id/i)
+  })
+
+  it('finds nothing wrong with a file this server wrote', () => {
+    expect(accountProblems([shell('a', 'one@example.com'), shell('b', 'two@example.com')]).size).toBe(0)
+    expect(accountProblems([]).size).toBe(0)
+  })
+})
+
+describe('a session whose account cannot be told apart from another', () => {
+  const account = (id, email) => ({ id, email, vault: `/notes/${id}`, salt: '', hash: '', kdf: {}, createdAt: 0 })
+  const session = (token, accountId) => ({
+    id: sessionId(token),
+    accountId,
+    device: 'a device',
+    createdAt: 0,
+    expiresAt: Date.now() + 60_000,
+  })
+
+  it('is refused, rather than resolved to whichever account came first', () => {
+    // Measured on a hand-edited file: an account signed in with its own
+    // password, was told it had opened its own vault, and was handed somebody
+    // else's notes — silently, because the id is all there is to go on.
+    const store = {
+      accounts: [account('same', 'me@example.com'), account('same', 'them@example.com')],
+      sessions: [session('a-token', 'same')],
+    }
+    expect(accountForSession(store, 'a-token'), 'a guess was made about whose notes these are').toBeNull()
+  })
+
+  it('still resolves a session whose account is the only one with its id', () => {
+    const store = {
+      accounts: [account('mine', 'me@example.com'), account('theirs', 'them@example.com')],
+      sessions: [session('a-token', 'theirs')],
+    }
+    expect(accountForSession(store, 'a-token')?.email).toBe('them@example.com')
   })
 })

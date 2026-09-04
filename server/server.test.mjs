@@ -13,7 +13,7 @@ import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, un
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { accountForSession, addAccount, loadAccounts, sessionId, verifyLogin } from './accounts.mjs'
+import { accountForSession, addAccount, loadAccounts, saveAccounts, sessionId, verifyLogin } from './accounts.mjs'
 import { createSyncServer, takeKeys } from './index.mjs'
 import { VaultConflictError, VaultStore, hashOf } from './vaultStore.mjs'
 import { generateToken, parseArgs, tokensMatch } from './config.mjs'
@@ -2299,6 +2299,24 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(again.code).toBe(1)
     expect(again.err).toMatch(/already an account/i)
     expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
+  })
+
+  it('marks an account the listing would otherwise show as working', async () => {
+    // The listing is where somebody looks to see who can reach the notes, so
+    // an account that cannot has to say so there. Neither of these can be made
+    // by this server — they come from a hand edit or two merged backups.
+    const damaged = join(home, 'damaged.json')
+    await addAccount({ file: damaged, email: 'first@example.com', password: PASSWORD, vault: join(home, 'Notes') })
+    await addAccount({ file: damaged, email: 'second@example.com', password: PASSWORD, vault: join(home, 'Notes') })
+    const store = await loadAccounts(damaged)
+    store.accounts[1].email = 'FIRST@example.com'
+    await saveAccounts(damaged, store)
+
+    const shown = await run('--accounts', damaged, '--list-accounts')
+    expect(shown.code, shown.err).toBe(0)
+    const [, forFirst = '', forSecond = ''] = shown.out.split(/\n {4}(?=\S)/)
+    expect(forSecond, 'an unreachable account was listed as if it worked').toMatch(/can never be signed in to/i)
+    expect(forFirst, 'the account that does work was marked broken').not.toMatch(/never be signed in/i)
   })
 
   it('refuses a vault that exists and is not a folder, while the person is still here', async () => {

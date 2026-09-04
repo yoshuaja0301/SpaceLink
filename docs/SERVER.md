@@ -183,6 +183,14 @@ surface.
 | `--password <value>` | give the password instead of being asked, for a script. It lands in your shell history — piping it in keeps it out: `printf 'pw\npw\n' \| … --add-account you@example.com`, one line per prompt |
 | `--accounts <file>` | where accounts live (default `~/.spacelink/accounts.json`) |
 
+The listing also marks an account that cannot be signed in to at all. Neither
+of the two ways that happens can be made by this server — `--add-account`
+refuses a second account for one address, and ids are random — so they arrive
+from a file edited by hand, or two backups merged. A second account on one
+address can never be reached; two accounts sharing an id cannot be told apart,
+and no device can sign in to either, because the id is the only thing linking a
+session to an account.
+
 `--add-account` insists on `--vault` rather than defaulting it: a default would
 write whichever folder you happened to be standing in into the account record,
 permanently. It also refuses an address carrying control characters or spaces —
