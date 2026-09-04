@@ -42,6 +42,27 @@ const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 30_000
 
 /**
+ * How long a pairing call — the probe, signing in, signing out — waits for a
+ * server before giving up on it.
+ *
+ * A fetch to an address nothing is listening at does not fail quickly; it
+ * hangs until the connection times out, which on some stacks is minutes.
+ * Measured: with a server that never answers, the probe and the sign-in were
+ * both still pending after fifteen seconds, and the picker's Connect button
+ * sat on "Opening…" for all of it. Ten seconds is longer than any server that
+ * is actually there takes to say hello, and short enough that a mistyped
+ * address is an error rather than a wait. Saving a note is not bounded by
+ * this: a large note over a slow link is meant to take as long as it takes.
+ */
+const REACH_MS = 10_000
+
+/** A signal that gives up after `REACH_MS`, where the runtime can make one. */
+function withinReach(): { signal?: AbortSignal } {
+  const timeout = (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout
+  return typeof timeout === 'function' ? { signal: timeout.call(AbortSignal, REACH_MS) } : {}
+}
+
+/**
  * How many notes `readAll` hands over at a time. Large enough that the yield
  * itself is not the cost, small enough that the caller can paint between
  * batches instead of freezing until the last note lands.
@@ -112,7 +133,7 @@ export async function probeServer(
 
   let health: Response
   try {
-    health = await fetch(`${origin}/api/health`)
+    health = await fetch(`${origin}/api/health`, withinReach())
   } catch {
     return { ok: false, error: `Could not reach ${origin}. Is the server running, and is this device allowed to see it?` }
   }
@@ -122,7 +143,7 @@ export async function probeServer(
     return { ok: false, error: `Something is running at ${origin}, but it is not a SpaceLink server.` }
   }
 
-  const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` } })
+  const vault = await fetch(`${origin}/api/vault`, { headers: { authorization: `Bearer ${token}` }, ...withinReach() })
   if (vault.status === 401) return { ok: false, error: refused(credential), refused: true }
   const info = (await vault.json().catch(() => null)) as { name?: string; error?: string } | null
   // The server's own words when it has any: "the folder this vault lives in is
@@ -179,6 +200,7 @@ export async function signIn(
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-spacelink-device': describeDevice() },
       body: JSON.stringify({ email: email.trim(), password }),
+      ...withinReach(),
     })
   } catch {
     return { ok: false, error: `Could not reach ${origin}. Is the server running, and is this device allowed to see it?` }
@@ -213,6 +235,7 @@ export async function signOut(url: string, token: string): Promise<void> {
     await fetch(`${normalizeServerUrl(url)}/api/auth/logout`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}` },
+      ...withinReach(),
     })
   } catch {
     /* the token is being forgotten locally regardless */

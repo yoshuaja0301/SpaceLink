@@ -11,7 +11,7 @@
  * The change stream is the one thing not covered: jsdom has no `EventSource`,
  * so live updates are exercised by the browser suite instead.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -835,4 +835,41 @@ describe('the change stream, when the connection drops', () => {
       sources.restore()
     }
   })
+})
+
+describe('a server that never answers', () => {
+  it('is given up on within ten seconds by the probe, the sign-in and the sign-out alike', async () => {
+    // An address nothing is listening at does not fail quickly: the fetch
+    // hangs until the connection times out, which on some stacks is minutes.
+    // Measured with a fetch that never settles: the probe and the sign-in
+    // were both still pending after fifteen seconds, and the picker's Connect
+    // button sat on "Opening…" for all of it.
+    // Never answers — but is still a fetch: it honours the signal it is
+    // given, as the real one does. A stand-in that ignored the signal would
+    // hang whatever the code under test did, and show nothing.
+    const silent = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+        }),
+    )
+    vi.stubGlobal('fetch', silent)
+    try {
+      const outcomes: Record<string, string> = { probe: 'still pending', signIn: 'still pending', signOut: 'still pending' }
+      void probeServer('http://10.255.255.1:4899', 'x'.repeat(43)).then((r) => (outcomes.probe = r.ok ? 'ok' : r.error))
+      void signIn('http://10.255.255.1:4899', 'me@example.com', 'a long enough password').then(
+        (r) => (outcomes.signIn = r.ok ? 'ok' : r.error),
+      )
+      void signOut('http://10.255.255.1:4899', 'x'.repeat(43)).then(() => (outcomes.signOut = 'done'))
+
+      await new Promise((done) => setTimeout(done, 11_000))
+
+      expect(outcomes.probe, 'the probe never gave up').toMatch(/could not reach/i)
+      expect(outcomes.signIn, 'the sign-in never gave up').toMatch(/could not reach/i)
+      expect(outcomes.signOut, 'the sign-out never gave up').toBe('done')
+      expect(silent).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }, 20_000)
 })
