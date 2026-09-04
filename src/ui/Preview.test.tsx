@@ -74,6 +74,18 @@ afterEach(() => {
 })
 
 describe('Preview — rendering', () => {
+  it('does not print the properties the page header is already showing', () => {
+    // `renderMarkdown` prints a frontmatter table above the note, and still
+    // does for anyone who asks. The preview does not, because the header above
+    // it shows the same properties and lets them be edited — printing them
+    // again underneath is the same list twice.
+    seed({ 'Props.md': '---\ntitle: Chores\nstatus: draft\n---\n\n# Chores\n' })
+    const { container } = render(<Preview path="Props.md" paneId={PANE_ID} />)
+    expect(container.querySelector('.frontmatter')).toBeNull()
+    // The note itself is still there.
+    expect(container.querySelector('h1')?.textContent).toContain('Chores')
+  })
+
   it('renders the note as sanitized markdown', () => {
     seed({
       'A.md': [

@@ -13,9 +13,10 @@
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 
-import type { Pane, Tab } from '../types'
+import type { NotePath, Pane, Tab } from '../types'
 import { useAppStore } from '../state/store'
 import { Editor, GraphView } from './lazy'
+import { PageHeader } from './PageHeader'
 import { Preview } from './Preview'
 import { SearchPanel } from './SearchPanel'
 import { TabBar } from './TabBar'
@@ -129,20 +130,36 @@ function TabContent({ tab, paneId }: { tab: Tab | null; paneId: string }): JSX.E
   if (tab.kind === 'search') return <SearchPanel variant="tab" />
   if (tab.path === null) return <PaneEmptyState paneId={paneId} />
 
-  if (tab.mode === 'preview') return <Preview path={tab.path} paneId={paneId} />
-  if (tab.mode === 'split') {
+  // The header sits above whichever view the tab is in, because the icon, the
+  // cover and the properties belong to the *note* rather than to reading it or
+  // to writing it — they were only ever visible in the reading view, printed as
+  // a table nobody could edit.
+  return (
+    <div className="note-view">
+      <PageHeader path={tab.path} />
+      <div className="note-view-body">
+        <NoteContent path={tab.path} mode={tab.mode} paneId={paneId} />
+      </div>
+    </div>
+  )
+}
+
+/** The note itself, in whichever mode the tab is in. */
+function NoteContent({ path, mode, paneId }: { path: NotePath; mode: Tab['mode']; paneId: string }): JSX.Element {
+  if (mode === 'preview') return <Preview path={path} paneId={paneId} />
+  if (mode === 'split') {
     return (
       <div className="split-view">
         <div className="split-editor">
-          <Editor path={tab.path} paneId={paneId} />
+          <Editor path={path} paneId={paneId} />
         </div>
         <div className="split-preview">
-          <Preview path={tab.path} paneId={paneId} scrollSync />
+          <Preview path={path} paneId={paneId} scrollSync />
         </div>
       </div>
     )
   }
-  return <Editor path={tab.path} paneId={paneId} />
+  return <Editor path={path} paneId={paneId} />
 }
 
 export function Workspace(): JSX.Element {

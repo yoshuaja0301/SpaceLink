@@ -62,6 +62,14 @@ export interface RenderContext {
   getEmbedContent?(path: NotePath): string | null
   /** Recursion guard used internally by embeds. */
   depth?: number
+  /**
+   * Whether to print the frontmatter as a table above the note.
+   *
+   * On by default, which is what it has always done. The preview turns it off:
+   * the page header above it shows the same properties and lets them be
+   * *edited*, and printing them again underneath is the same list twice.
+   */
+  showProperties?: boolean
 }
 
 /** `![[Note]]` transclusions never nest deeper than this. */
@@ -1429,7 +1437,7 @@ export function renderMarkdown(source: string, ctx: RenderContext): string {
   const { frontmatter, body, bodyOffset } = parseFrontmatter(source)
   const lineOffset = countLines(source.slice(0, bodyOffset))
   const html = renderBody(body, ctx, lineOffset)
-  return sanitize(renderFrontmatterTable(frontmatter) + html)
+  return sanitize((ctx.showProperties === false ? '' : renderFrontmatterTable(frontmatter)) + html)
 }
 
 /** Rendered HTML for a heading-anchored table of contents. */

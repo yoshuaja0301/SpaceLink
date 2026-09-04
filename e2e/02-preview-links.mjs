@@ -5,6 +5,11 @@ console.log('== 2. preview, links, tags, tasks, embeds ==')
 await open(page, 'Formatting Playground'); await mode(page, 'Preview')
 
 await step('every renderer feature appears', async () => {
+  // The page header keeps its properties collapsed, so counting them without
+  // opening it would pass on a header that never showed anything.
+  const properties = page.locator('.page-properties-toggle').first()
+  await properties.click()
+  await page.waitForTimeout(200)
   const c = await page.evaluate(() => ({
     headings: document.querySelectorAll('.markdown-preview h1,.markdown-preview h2,.markdown-preview h3').length,
     links: document.querySelectorAll('.markdown-preview .internal-link').length,
@@ -16,13 +21,17 @@ await step('every renderer feature appears', async () => {
     code: document.querySelectorAll('.markdown-preview .code-block').length,
     katex: document.querySelectorAll('.markdown-preview .katex').length,
     embeds: document.querySelectorAll('.markdown-preview .embed').length,
-    frontmatter: document.querySelectorAll('.markdown-preview .frontmatter').length,
+    frontmatter: document.querySelectorAll('.page-properties:not([hidden]) .page-property').length,
     footnotes: document.querySelectorAll('.markdown-preview .footnotes').length,
     scripts: document.querySelectorAll('.markdown-preview script').length,
   }))
   for (const k of ['headings','links','tags','tasks','tables','callouts','code','katex','frontmatter'])
     must(c[k] > 0, `${k} = 0 — ${JSON.stringify(c)}`)
   must(c.scripts === 0, 'a <script> survived sanitisation')
+  // Closed again: left open it is a tall header for every step after this one,
+  // and the note scrolls behind it.
+  await properties.click()
+  await page.waitForTimeout(200)
   return JSON.stringify(c)
 })
 
@@ -79,6 +88,12 @@ await step('an embed renders the target note inline', async () => {
 
 await step('hover card appears over a resolved link', async () => {
   const link = page.locator('.markdown-preview .internal-link:not(.is-unresolved)').first()
+  // Into view first. `boundingBox` reports a rect for an element that has been
+  // scrolled out of its container, and hovering that lands the pointer on
+  // whatever is painted there instead — which is how this read as "no hover
+  // card" when the note was scrolled.
+  await link.scrollIntoViewIfNeeded()
+  await page.waitForTimeout(200)
   const b = await link.boundingBox()
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
   await page.waitForTimeout(1000)

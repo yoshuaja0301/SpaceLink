@@ -93,8 +93,37 @@ Requirements:
 - Fenced code blocks render `<pre class="code-block" data-lang="LANG"><code>…</code></pre>`.
   No syntax-highlighting dependency — just escape.
 - Frontmatter is rendered as a small `<div class="frontmatter">` property table,
-  not as body text.
+  not as body text — unless `ctx.showProperties` is `false`, which the preview
+  passes because the page header above it shows the same properties and lets
+  them be edited.
+- A callout written with a fold marker (`> [!note]-` or `> [!note]+`) renders as
+  `<details class="callout">` with the title as its `<summary>`; `+` carries
+  `open`. Without a marker it stays a `<div>`, and nothing folds.
 - External links get `target="_blank" rel="noopener noreferrer"` and class `external-link`.
+
+## `src/core/markdown/frontmatter.ts`
+
+```ts
+export function withFrontmatter(source: string, properties: Readonly<Record<string, unknown>>): string
+export function setProperty(source: string, key: string, value: PropertyValue | undefined): string
+export function renameProperty(source: string, from: string, to: string): string
+export function serializeFrontmatter(properties: Readonly<Record<string, unknown>>): string
+export function readProperties(source: string): NoteFrontmatter
+```
+
+- **The body is preserved byte for byte.** Everything below the closing `---` is
+  sliced out and put back untouched. This is the one guarantee that matters:
+  editing a property can never disturb a character of what was written.
+- The block itself is rewritten from the values given, so comments and
+  hand-formatting inside it do not survive an edit.
+- A value is quoted whenever it would not read back as itself — empty, padded,
+  numeric-looking, boolean-looking, or holding `:`/`#`. Over-quoting is free;
+  under-quoting silently changes a value.
+- A key that could not round-trip (empty, or holding whitespace, `:` or `#`) is
+  not written at all, and neither is a non-finite number.
+- Key order is the order of the object given. `setProperty` keeps a property
+  where it was and puts a new one last; `renameProperty` keeps its place.
+- No properties left means no block, and no blank line where it was.
 
 ## `src/core/graph/index.ts`
 

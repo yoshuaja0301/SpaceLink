@@ -23,6 +23,14 @@ yourself and sign in to it.
 - Fold a heading and everything under it, and collapse a callout written with
   a fold marker (`> [!note]-`)
 
+**Properties**
+- A page header on every note: an emoji icon, a cover image, and the
+  frontmatter as editable rows — collapsed until you ask for them
+- `icon:` and `cover:` are ordinary frontmatter keys, so they travel with the
+  file and can be typed by hand
+- Editing a value keeps the kind it was: a list stays a list, a number stays a
+  number while it still reads as one
+
 **Linking**
 - `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`, `[[Note#^block]]` and
   `![[Note]]` transclusion
@@ -147,7 +155,7 @@ npm run build    # typecheck (app, server and scripts) + bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1805 unit and component tests
+npm test         # vitest — 1841 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 

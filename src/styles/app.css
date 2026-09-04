@@ -629,6 +629,153 @@ ul, ol { margin: 0; padding: 0; }
 
 /* ---- split view (edit + preview side by side) -------------------------- */
 
+/* ---- the page header (icon, cover, properties) --------------------------- *
+ * Above whichever view the tab is in, and scrolling is left to the view below:
+ * the header is short, and a header that scrolled away would take the property
+ * you were about to edit with it. */
+
+.note-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.note-view-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+
+.page-header {
+  flex: none;
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.page-cover { position: relative; margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-4)) var(--space-3); }
+.page-cover img { display: block; width: 100%; height: 160px; object-fit: cover; }
+.page-cover-missing {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-muted);
+  font-size: 0.85em;
+  background: var(--bg-secondary);
+}
+.page-cover-remove {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 0.8em;
+  cursor: pointer;
+}
+.page-cover-remove:hover { color: var(--text-normal); background: var(--bg-hover); }
+
+.page-header-title { display: flex; gap: var(--space-2); align-items: center; }
+.page-header-title h1 { margin: 0; font-size: 1.35em; line-height: 1.3; }
+.page-icon {
+  flex: none;
+  width: 2em;
+  height: 2em;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.2em;
+  line-height: 1;
+  cursor: pointer;
+}
+.page-icon:hover { background: var(--bg-hover); border-color: var(--border); }
+
+.page-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.page-icon-picker > button {
+  width: 1.9em;
+  height: 1.9em;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 1.05em;
+  line-height: 1;
+  cursor: pointer;
+}
+.page-icon-picker > button:hover { background: var(--bg-hover); }
+.page-icon-any {
+  flex: 1 1 8em;
+  min-width: 6em;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font: inherit;
+}
+
+.page-properties-toggle {
+  flex: none;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82em;
+  cursor: pointer;
+}
+.page-properties-toggle:hover { background: var(--bg-hover); color: var(--text-normal); border-color: var(--border); }
+.page-properties-toggle[aria-expanded='true'] { background: var(--bg-hover); color: var(--text-normal); }
+
+.page-properties { display: flex; flex-direction: column; gap: 1px; margin-top: var(--space-2); }
+.page-properties[hidden] { display: none; }
+.page-property { display: flex; gap: var(--space-2); align-items: center; }
+.page-property-name,
+.page-property-value {
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 0.9em;
+}
+.page-property-name { flex: none; width: 10em; color: var(--text-muted); }
+.page-property-value { flex: 1 1 auto; min-width: 0; }
+.page-property-name:hover,
+.page-property-value:hover { background: var(--bg-hover); }
+.page-property-name:focus,
+.page-property-value:focus { border-color: var(--border); background: var(--bg-primary); outline: none; }
+.page-property-remove {
+  flex: none;
+  width: 1.5em;
+  height: 1.5em;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.page-property:hover .page-property-remove,
+.page-property-remove:focus-visible { opacity: 1; }
+.page-property-remove:hover { background: var(--bg-hover); color: var(--text-error); }
+
+.page-header-actions { display: flex; gap: var(--space-2); margin-top: 2px; }
+.page-header-actions > button {
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.page-header-actions > button:hover { background: var(--bg-hover); color: var(--text-normal); }
+
 .split-view { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .split-editor, .split-preview {
   display: flex;

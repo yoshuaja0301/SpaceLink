@@ -142,7 +142,9 @@ export function Preview({ path, paneId, scrollSync = false }: PreviewProps): JSX
   const html = useMemo(() => {
     if (!note) return ''
     try {
-      return renderMarkdown(content, ctx)
+      // The page header above this shows the properties, and lets them be
+      // edited; printing them again here is the same list twice.
+      return renderMarkdown(content, { ...ctx, showProperties: false })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return `<p class="preview-error">This note could not be rendered: ${escapeHtml(message)}</p>`
