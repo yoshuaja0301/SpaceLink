@@ -41,7 +41,7 @@ import {
   setPassword,
   verifyLogin,
 } from './accounts.mjs'
-import { ACCOUNTS_FILE, HELP, loadOrCreateToken, parseArgs, tokensMatch } from './config.mjs'
+import { ACCOUNTS_FILE, HELP, loadOrCreateToken, parseArgs, tightenMode, tokensMatch } from './config.mjs'
 import { SKIP_DIRECTORIES, TEMP_PREFIX, VaultConflictError, VaultNotFoundError, VaultPathError, VaultStore, hashOf } from './vaultStore.mjs'
 
 /**
@@ -1409,6 +1409,15 @@ async function main() {
   }
 
   const accountsFile = options.accounts ?? ACCOUNTS_FILE
+  // Before anything reads it, and whatever this command turns out to be. The
+  // token file has been tightened on the way past since it was measured 644 in
+  // and 644 out; this file holds every password hash and every session id and
+  // was not. A file this server wrote is already 0600 and this costs a `stat`;
+  // one restored from a backup, or unpacked from an archive that did not carry
+  // modes, was readable by every account on the machine until somebody
+  // happened to sign in — a server nobody signs in to never writes it at all.
+  await tightenMode(accountsFile).catch(() => {})
+
   try {
     if (await runAccountCommand(options, accountsFile)) return
   } catch (error) {

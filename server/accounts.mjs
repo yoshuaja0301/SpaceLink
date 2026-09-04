@@ -149,7 +149,11 @@ export async function loadAccounts(file) {
  * @param {AccountsFile} store
  */
 export async function saveAccounts(file, store) {
-  await mkdir(dirname(file), { recursive: true })
+  // 0700 on a folder this server creates for its own secrets: the file inside
+  // is 0600, but a folder anyone can walk into is what turns a moment of a
+  // loose file into a read of it. Only what is created here — an existing
+  // folder keeps the mode its owner chose.
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${randomBytes(6).toString('hex')}.tmp`
   const body = `${JSON.stringify({ accounts: store.accounts, sessions: store.sessions }, null, 2)}\n`
   await writeFile(temporary, body, { mode: 0o600 })
@@ -188,7 +192,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  */
 async function withFileLock(file, work) {
   const lock = `${file}.lock`
-  await mkdir(dirname(file), { recursive: true })
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const deadline = Date.now() + LOCK_WAIT_MS
 
   for (;;) {

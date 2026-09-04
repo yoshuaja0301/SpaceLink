@@ -2902,6 +2902,51 @@ describe('the folder the server keeps its token in', { timeout: 60_000 }, () => 
     }
   })
 
+  it('tightens an accounts file that was left readable by everyone on the machine', async () => {
+    // The same rule as the token file, on the file that holds every password
+    // hash and every session id. It is written 0600 and read on every start,
+    // so one that arrived some other way — restored from a backup, unpacked
+    // from an archive that did not carry modes — kept the mode it arrived
+    // with. Measured: 644 in, a signed-in device served, 644 still. Only a
+    // write fixed it, and a server nobody signs in to never writes.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      await mkdir(join(home, 'Notes'), { recursive: true })
+      const made = await runAt(home, '--vault', join(home, 'Notes'), '--add-account', 'me@example.com', '--password', 'a long enough password')
+      expect(made.code, made.err).toBe(0)
+
+      const file = join(home, '.spacelink', 'accounts.json')
+      const before = await readFile(file, 'utf8')
+      await chmod(file, 0o644)
+      expect(await modeOf(file)).toBe('644')
+
+      const listed = await runAt(home, '--list-accounts')
+      expect(listed.code, listed.err).toBe(0)
+      expect(await modeOf(file), 'still readable by every other user').toBe('600')
+      // Tightened, not rewritten: the accounts are exactly as they were.
+      expect(await readFile(file, 'utf8')).toBe(before)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the folder it makes for its own secrets to itself', async () => {
+    // The files inside are 0600, but a folder anyone can walk into is what
+    // turns a moment of a loose file into a read of it. Only the folder this
+    // server creates — one that was already there keeps the mode its owner
+    // chose.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
+    try {
+      await mkdir(join(home, 'Notes'), { recursive: true })
+      const made = await runAt(home, '--vault', join(home, 'Notes'), '--add-account', 'me@example.com', '--password', 'a long enough password')
+      expect(made.code, made.err).toBe(0)
+      expect(await modeOf(join(home, '.spacelink')), 'anyone on the machine could walk into it').toBe('700')
+      expect(await modeOf(join(home, '.spacelink', 'accounts.json'))).toBe('600')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('is ~/.spacelink on a machine that has never run this server', async () => {
     const home = await mkdtemp(join(tmpdir(), 'spacelink-home-'))
     try {

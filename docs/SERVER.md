@@ -476,6 +476,14 @@ never produce a conflict — only genuinely simultaneous edits to the same note 
   not. Both tunnel options above give you HTTPS.
 - **The token file is readable by you alone** (`0600`), written whole or not
   at all, and tightened on the next start if something left it wider.
+- **So is the accounts file**, which holds every password hash and every session
+  id — same `0600`, same tightening, on every command and every server start.
+  It matters most for a file that arrived some other way: restored from a
+  backup, unpacked from an archive that did not carry modes, copied under a
+  different umask. Such a file used to keep the mode it arrived with until
+  somebody happened to sign in, and a server nobody signs in to never writes it.
+  `~/.spacelink` itself is `0700` when this server creates it; a folder that was
+  already there keeps the mode you gave it.
 - **Rotate the token** by deleting `~/.spacelink/server.json` and restarting;
   **change a password** with `--set-password`. Either signs every device out,
   which is exactly what you want if one has been lost — including a device that

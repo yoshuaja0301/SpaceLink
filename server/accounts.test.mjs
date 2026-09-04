@@ -187,6 +187,16 @@ describe('the file the accounts live in', () => {
     await expect(loadAccounts(file)).rejects.toThrow(/not valid JSON/)
   })
 
+  it('makes the folder it needs, and keeps it to its owner', async () => {
+    // `saveAccounts` is the writer, and it creates the folder when it is not
+    // there. The file it lands is 0600 — but a folder anyone can walk into is
+    // what turns a moment of a loose file into a read of it.
+    const nested = join(home, 'nested', 'deeper')
+    await saveAccounts(join(nested, 'accounts.json'), { accounts: [], sessions: [] })
+    expect(((await stat(nested)).mode & 0o777).toString(8), 'anyone on the machine could walk into it').toBe('700')
+    expect(((await stat(join(nested, 'accounts.json'))).mode & 0o777).toString(8)).toBe('600')
+  })
+
   it('is written whole or not at all, leaving nothing behind', async () => {
     await saveAccounts(file, { accounts: [], sessions: [] })
     await make()

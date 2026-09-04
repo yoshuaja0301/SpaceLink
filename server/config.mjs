@@ -79,7 +79,7 @@ export async function loadOrCreateToken() {
     // No config yet, or an unreadable one: fall through and write a fresh token.
   }
   const token = generateToken()
-  await mkdir(CONFIG_DIRECTORY, { recursive: true })
+  await mkdir(CONFIG_DIRECTORY, { recursive: true, mode: 0o700 })
   // Through a temporary file and a rename, for two reasons. A power cut in the
   // middle of a plain write would leave half a file, and half a file is a
   // fresh token on the next start and every paired device sent to copy it
@@ -93,8 +93,20 @@ export async function loadOrCreateToken() {
   return { token, created: true, file: CONFIG_FILE }
 }
 
-/** Make `file` readable by its owner only, when it is not already. */
-async function tightenMode(file) {
+/**
+ * Make `file` readable by its owner only, when it is not already.
+ *
+ * Exported because the accounts file needs exactly this and needs it for the
+ * same reason: it is written 0600 and read on every start, so one that arrived
+ * some other way — restored from a backup, unpacked from an archive that did
+ * not carry modes, copied under a different umask — kept the mode it arrived
+ * with for as long as nobody wrote to it. Measured on `accounts.json`, which
+ * holds every password hash and every session id: 644 in, served, 644 still.
+ *
+ * A file that is not there, or not ours to change, is not an error. Refusing
+ * to start over a mode would be worse than the mode.
+ */
+export async function tightenMode(file) {
   const info = await stat(file)
   if ((info.mode & 0o077) !== 0) await chmod(file, 0o600)
 }
