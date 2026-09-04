@@ -250,6 +250,46 @@ describe('reading and writing', () => {
     expect(response.headers.get('etag')).toBe(`"${hashOf(body)}"`)
   })
 
+  it('says a note is too large, and leaves the connection fit to use again', async () => {
+    // 32 MB is the cap, and the server has a sentence for exceeding it. It was
+    // never delivered: the connection was destroyed before the 413 could leave,
+    // so a reader saving an enormous note saw a network error and no reason.
+    //
+    // Answering without hanging up opened the opposite hole: the megabytes the
+    // server stopped reading stay queued on a keep-alive connection, and the
+    // next request on it is parsed from those. Both halves are checked here
+    // over one deliberate connection — one socket, kept alive — because that
+    // is the only way the second failure shows at all.
+    const { Agent, request: httpRequest } = await import('node:http')
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 })
+    /** Send one request over that single socket. */
+    const overTheSameSocket = (path, options = {}, body = null) =>
+      new Promise((done, fail) => {
+        const sent = httpRequest(`${base}${path}`, { agent, headers: { authorization: `Bearer ${TOKEN}` }, ...options }, (answer) => {
+          let text = ''
+          answer.on('data', (chunk) => (text += String(chunk)))
+          answer.on('end', () => done({ status: answer.statusCode, text }))
+        })
+        sent.on('error', fail)
+        sent.end(body)
+      })
+
+    try {
+      const refused = await overTheSameSocket('/api/file?path=TooBig.md', { method: 'PUT' }, 'x'.repeat(33 * 1024 * 1024))
+      expect(refused.status).toBe(413)
+      expect(JSON.parse(refused.text).error).toMatch(/too large to sync/i)
+
+      // The next call. On a poisoned connection this hangs or resets.
+      const after = await overTheSameSocket('/api/file?path=Home.md')
+      expect(after.status, 'the refusal left the connection unusable').toBe(200)
+      expect(after.text).toContain('# Home')
+      // And nothing of the refused note was written.
+      expect((await overTheSameSocket('/api/file?path=TooBig.md')).status).toBe(404)
+    } finally {
+      agent.destroy()
+    }
+  }, 60_000)
+
   it('writes to disk and announces the change', async () => {
     const response = await call('/api/file?path=Home.md', { method: 'PUT', body: '# Home\n\nEdited.\n' })
     expect(response.status).toBe(200)
@@ -1718,6 +1758,23 @@ describe('signing in with an account', { timeout: 40_000 }, () => {
 
     expect((await as(phone.token, '/api/files')).status).toBe(401)
     expect((await as(laptop.token, '/api/files')).status).toBe(200)
+  })
+
+  it('says a sign-in body is too large, rather than hanging up on it', async () => {
+    // The limit exists so the one endpoint an unauthenticated caller can reach
+    // cannot be used to spend the server's memory. Refusing it was right; the
+    // way it refused was not — the connection was destroyed before the answer
+    // could leave, and the caller saw only `fetch failed`.
+    const response = await fetch(`${at}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'me@example.com', password: 'x'.repeat(1024 * 1024) }),
+    })
+    expect(response.status).toBe(413)
+    // And in the caller's own terms: it is not a file, and not a syntax error.
+    const body = await response.json()
+    expect(body.error).toMatch(/sign-in request is too large/i)
+    expect(body.error).not.toMatch(/json|file/i)
   })
 
   it('reads the Bearer scheme without regard to case, as the RFC says', async () => {

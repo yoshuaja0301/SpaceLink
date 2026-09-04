@@ -126,21 +126,54 @@ function sendJson(response, status, body, headers = {}) {
   response.end(payload)
 }
 
-/** @param {import('node:http').IncomingMessage} request */
-function readBody(request, limit = MAX_BODY_BYTES) {
+/**
+ * The headers for an answer sent to a request whose body was not read to its
+ * end — which is to say, one `readBody` gave up on.
+ *
+ * Those unread bytes are still queued on the connection, and a keep-alive
+ * connection is where the next request is parsed from: leaving it open meant
+ * the megabytes of a refused note were read as somebody's next call. Measured
+ * as three unrelated tests failing right after this one, with ECONNRESET and
+ * a timeout. Saying `close` is what ends it, and the leftovers go with it.
+ *
+ * @param {unknown} error
+ */
+function tornDown(error) {
+  return /** @type {any} */ (error)?.status === 413 ? { connection: 'close' } : {}
+}
+
+/**
+ * Buffer a request body, up to `limit` bytes.
+ *
+ * Over the limit it stops reading and rejects with a 413 the route turns into
+ * an answer — but it does not destroy the connection, which is the whole point
+ * of the change that put this comment here. Destroying it meant the 413 and
+ * its message were written to a socket that was already gone, and the caller
+ * saw a dropped connection instead: measured, a 40 MB note came back as
+ * `fetch failed`, with "That file is too large to sync." never leaving the
+ * building. Node closes a connection whose request body was not drained once
+ * the response ends, so nothing is left half-read.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ * @param {number} [limit]
+ * @param {string} [tooLarge] what to tell the caller, in the caller's terms
+ */
+function readBody(request, limit = MAX_BODY_BYTES, tooLarge = 'That file is too large to sync.') {
   return new Promise((resolvePromise, rejectPromise) => {
     /** @type {Buffer[]} */
     const chunks = []
     let length = 0
-    request.on('data', (chunk) => {
+    const onData = (chunk) => {
       length += chunk.length
       if (length > limit) {
-        rejectPromise(Object.assign(new Error('That file is too large to sync.'), { status: 413 }))
-        request.destroy()
+        request.off('data', onData)
+        request.pause()
+        rejectPromise(Object.assign(new Error(tooLarge), { status: 413 }))
         return
       }
       chunks.push(chunk)
-    })
+    }
+    request.on('data', onData)
     request.on('end', () => resolvePromise(Buffer.concat(chunks)))
     request.on('error', rejectPromise)
   })
@@ -578,7 +611,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       }
       const body = { error: known ? error.message : 'Something went wrong.' }
       if (error instanceof VaultConflictError) body.currentHash = error.currentHash
-      sendJson(response, known ? error.status : 500, body)
+      sendJson(response, known ? error.status : 500, body, tornDown(error))
     }
   }
 
@@ -791,13 +824,29 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
         sendJson(response, 404, { error: 'This server has no accounts. It is reached with an access token.' })
         return true
       }
-      /** @type {any} */
-      let body
+      /** @type {Buffer} */
+      let raw
       try {
         // A kilobyte, not the 32 MB a note may be. This is the one endpoint an
         // unauthenticated caller can reach, and buffering whatever they care to
         // send would make it a way to spend the server's memory for free.
-        body = JSON.parse((await readBody(request, LOGIN_BODY_BYTES)).toString('utf8') || '{}')
+        raw = await readBody(request, LOGIN_BODY_BYTES, 'That sign-in request is too large.')
+      } catch (error) {
+        // A body over the limit is not a syntax error, and calling it one
+        // sends somebody hunting for a typo in a request that was only too big.
+        const known = typeof error?.status === 'number' && error instanceof Error
+        sendJson(
+          response,
+          known ? error.status : 400,
+          { error: known ? error.message : 'The request body is not valid JSON.' },
+          tornDown(error),
+        )
+        return true
+      }
+      /** @type {any} */
+      let body
+      try {
+        body = JSON.parse(raw.toString('utf8') || '{}')
       } catch {
         sendJson(response, 400, { error: 'The request body is not valid JSON.' })
         return true
