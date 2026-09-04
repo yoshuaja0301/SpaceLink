@@ -1029,6 +1029,7 @@ describe('FileExplorer — context menu', () => {
     expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
       'New note here',
       'New subfolder',
+      'Open as a table',
       'Rename',
       'Delete',
     ])
@@ -1037,6 +1038,19 @@ describe('FileExplorer — context menu', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: 'New note here' }))
     })
     expect(createNoteFromTitle).toHaveBeenCalledWith('Untitled', 'Notes')
+  })
+
+  it('opens a folder as a table from its menu', async () => {
+    // The way in. Without it the view exists and nothing reaches it.
+    seed({ 'Notes/A.md': '# A' })
+    render(<FileExplorer />)
+
+    fireEvent.contextMenu(row('Notes'), { clientX: 5, clientY: 5 })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Open as a table' }))
+    })
+    const tabs = useAppStore.getState().panes.flatMap((pane) => pane.tabs)
+    expect(tabs.some((tab) => tab.kind === 'table' && tab.path === 'Notes')).toBe(true)
   })
 
   it('opens to the right by splitting when there is no second pane', () => {

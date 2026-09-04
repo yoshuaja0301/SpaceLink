@@ -56,6 +56,7 @@ let blankSeq = 0
 export function tabTitle(tab: Tab, notes: Map<NotePath, Note>): string {
   if (tab.kind === 'graph') return 'Graph'
   if (tab.kind === 'search') return 'Search'
+  if (tab.kind === 'table') return tab.path === '' ? 'All notes' : (tab.path?.split('/').pop() ?? 'Table')
   if (!tab.path) return 'New tab'
   return notes.get(tab.path)?.parsed.title || basename(tab.path)
 }
@@ -102,7 +103,10 @@ export function reopenClosedTab(paneId: string): void {
   const store = useAppStore.getState()
   const tab = popClosed((candidate) => isReopenable(candidate, store.notes))
   if (!tab) return
-  if (tab.kind !== 'note') store.openView(tab.kind, { paneId })
+  // A table's `path` is the folder it showed, so reopening it is that folder
+  // again rather than a fresh empty one.
+  if (tab.kind === 'table') store.openTable(tab.path ?? '', { paneId })
+  else if (tab.kind !== 'note') store.openView(tab.kind, { paneId })
   else if (tab.path) store.openPath(tab.path, { paneId, newTab: true, mode: tab.mode })
   else openBlankTab(paneId)
 }

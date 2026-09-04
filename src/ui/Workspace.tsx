@@ -19,6 +19,7 @@ import { Editor, GraphView } from './lazy'
 import { PageHeader } from './PageHeader'
 import { Preview } from './Preview'
 import { SearchPanel } from './SearchPanel'
+import { TableView } from './TableView'
 import { TabBar } from './TabBar'
 import { push as pushHistory, rename as renameHistory, reset as resetHistory } from './paneHistory'
 
@@ -128,6 +129,10 @@ function TabContent({ tab, paneId }: { tab: Tab | null; paneId: string }): JSX.E
   if (!tab) return <PaneEmptyState paneId={paneId} />
   if (tab.kind === 'graph') return <GraphView />
   if (tab.kind === 'search') return <SearchPanel variant="tab" />
+  // A table's `path` is the folder it shows, so it is routed before the check
+  // below that treats a missing path as an empty tab — the vault root is `''`,
+  // which is a folder and not "nothing chosen".
+  if (tab.kind === 'table') return <TableView folder={tab.path ?? ''} paneId={paneId} />
   if (tab.path === null) return <PaneEmptyState paneId={paneId} />
 
   // The header sits above whichever view the tab is in, because the icon, the

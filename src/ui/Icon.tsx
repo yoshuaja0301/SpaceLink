@@ -41,6 +41,7 @@ export type IconName =
   | 'arrow-right'
   | 'check'
   | 'copy'
+  | 'table'
 
 export interface IconProps {
   name: IconName
@@ -54,6 +55,13 @@ export interface IconProps {
  * explicitly; everything else inherits the stroke settings from `<svg>`.
  */
 const SHAPES: Record<IconName, ReactNode> = {
+  table: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9.5h18" />
+      <path d="M9.5 9.5V20" />
+    </>
+  ),
   files: (
     <>
       <path d="M9 3h5.5L19 7.5V16a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />

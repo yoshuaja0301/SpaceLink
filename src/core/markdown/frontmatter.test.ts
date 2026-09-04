@@ -42,6 +42,13 @@ describe('writing frontmatter', () => {
     expect(withFrontmatter('---\ntitle: One\n---\n# Title\n', {})).toBe('# Title\n')
   })
 
+  it('keeps whatever separated the block from the body', () => {
+    // Both shapes are notes people write. An edit to a property must not
+    // insert — or remove — a line they never typed.
+    expect(setProperty('---\na: 1\n---\n# Body\n', 'a', 2)).toBe('---\na: 2\n---\n# Body\n')
+    expect(setProperty('---\na: 1\n---\n\n# Body\n', 'a', 2)).toBe('---\na: 2\n---\n\n# Body\n')
+  })
+
   it('does not push the note further down on every edit', () => {
     let source = '---\na: 1\n---\n\n# Title\n'
     for (let i = 0; i < 5; i += 1) source = setProperty(source, 'a', i)

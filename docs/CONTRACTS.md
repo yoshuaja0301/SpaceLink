@@ -125,6 +125,31 @@ export function readProperties(source: string): NoteFrontmatter
   where it was and puts a new one last; `renameProperty` keeps its place.
 - No properties left means no block, and no blank line where it was.
 
+## `src/core/table/folderTable.ts`
+
+```ts
+export function buildFolderTable(notes: ReadonlyMap<NotePath, Note>, folder: string): FolderTable
+export function sortRows(rows: readonly TableRow[], key: string | null, direction: SortDirection): TableRow[]
+export function filterRows(rows: readonly TableRow[], query: string): TableRow[]
+export function compareCells(a: unknown, b: unknown): number
+```
+
+- A folder's table includes its **subfolders**. A project with `Tasks/2024/`
+  under it is still the project.
+- Columns are every frontmatter key the folder's notes use, minus `icon` and
+  `cover` (the page header draws those), ordered by how many notes use them and
+  then alphabetically.
+- `inFolder` matches on a `/` boundary: `ProjectsOld/` is not inside
+  `Projects/`.
+- Numbers compare as numbers — `10` after `9` — and everything else as text,
+  case-insensitively.
+- An **empty cell sorts last in both directions**. Sorting by a column is how
+  somebody asks to see what is in it.
+- Ties break by name, so the same sort twice looks the same.
+- Filtering is a case-insensitive **substring**, not the fuzzy match the quick
+  switcher uses: in a list somebody can already see, "dr" quietly matching
+  "Dashboard" is noise.
+
 ## `src/core/graph/index.ts`
 
 ```ts

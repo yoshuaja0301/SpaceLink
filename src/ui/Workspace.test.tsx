@@ -9,7 +9,7 @@ import { makeNote, useAppStore } from '../state/store'
 import { Ribbon } from './Ribbon'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
-import { TabBar, dropSlotFor, isReopenable, tabTitle } from './TabBar'
+import { TabBar, dropSlotFor, isReopenable, reopenClosedTab, tabTitle } from './TabBar'
 import { Workspace, MIN_PANE_WIDTH, PANE_KEY_STEP, PANE_SIZES_KEY, loadPaneSizes, resizePanes } from './Workspace'
 import { canReopen, reset as resetHistory } from './paneHistory'
 
@@ -234,6 +234,19 @@ describe('Workspace routing', () => {
     expect(split?.querySelector('.split-editor [data-testid="editor"]')).not.toBeNull()
     expect(split?.querySelector('.split-preview [data-testid="preview"]')).not.toBeNull()
     expect(screen.getByTestId('preview').getAttribute('data-scroll-sync')).toBe('true')
+  })
+
+  it('routes a table tab to the table, and names it after its folder', async () => {
+    // A table's `path` is a folder, not a note, so it has to be routed before
+    // the check that treats a missing note path as an empty tab — and the
+    // vault root is `''`, which is a folder and not "nothing chosen".
+    seedNotes({ 'Notes/A.md': '---\nstatus: doing\n---\n# A\n' } as Record<NotePath, string>)
+    setPanes([pane(PANE_A, [tab('t', { kind: 'table', path: 'Notes' as NotePath })], 't')])
+    render(<Workspace />)
+
+    expect(document.querySelector('.table-view')).not.toBeNull()
+    expect(screen.getByRole('columnheader', { name: /status/ })).toBeTruthy()
+    expect(tabTitles()).toEqual(['Notes'])
   })
 
   it('routes graph and search tabs to their views', async () => {
@@ -706,6 +719,39 @@ describe('tabTitle', () => {
     expect(tabTitle(tab('x', { kind: 'graph' }), notes)).toBe('Graph')
     expect(tabTitle(tab('x', { kind: 'search' }), notes)).toBe('Search')
     expect(tabTitle(tab('x'), notes)).toBe('New tab')
+  })
+
+  it('names a table after its folder, and the root by what it holds', () => {
+    // The root folder is `''`, which is falsy — read as a note path it looks
+    // like a tab with nothing chosen, and the whole vault would be called
+    // "New tab".
+    const notes = new Map<NotePath, Note>()
+    expect(tabTitle(tab('x', { kind: 'table', path: 'Projects/Deep' as NotePath }), notes)).toBe('Deep')
+    expect(tabTitle(tab('x', { kind: 'table', path: '' as NotePath }), notes)).toBe('All notes')
+  })
+})
+
+describe('reopening a closed table', () => {
+  it('comes back onto the folder it was showing', () => {
+    // A table's `path` is a folder. Reopened through the path meant for the
+    // graph and the search views, it would come back as a table of nothing.
+    seedNotes({ 'Notes/a.md': '# a' } as Record<NotePath, string>)
+    setPanes([
+      pane(PANE_A, [tab('keep', { path: 'Notes/a.md' as NotePath }), tab('t1', { kind: 'table', path: 'Notes' as NotePath })], 't1'),
+    ])
+    // Closed through the tab's own close button, which is what puts it on the
+    // reopen stack — the store's `closeTab` only removes it.
+    render(<TabBar pane={panesNow()[0]!} />)
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close Notes' }))
+    })
+    expect(panesNow()[0]!.tabs.some((one) => one.kind === 'table')).toBe(false)
+
+    act(() => {
+      reopenClosedTab(PANE_A)
+    })
+    const back = panesNow()[0]!.tabs.find((one) => one.kind === 'table')
+    expect(back?.path).toBe('Notes')
   })
 })
 

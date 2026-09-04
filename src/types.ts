@@ -295,7 +295,12 @@ export interface QuickSwitchItem {
 
 export type ViewMode = 'edit' | 'preview' | 'split'
 
-export type TabKind = 'note' | 'graph' | 'search'
+/**
+ * `'table'` reads a folder as rows and its frontmatter keys as columns. Its
+ * `path` holds the folder, not a note — the field is what the tab is about,
+ * and for a table that is a folder.
+ */
+export type TabKind = 'note' | 'graph' | 'search' | 'table'
 
 export interface Tab {
   id: string

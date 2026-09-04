@@ -31,6 +31,12 @@ yourself and sign in to it.
 - Editing a value keeps the kind it was: a list stays a list, a number stays a
   number while it still reads as one
 
+**A folder as a table**
+- Right-click a folder → *Open as a table*: its notes are the rows, their
+  frontmatter keys are the columns, and a cell writes back to that note
+- Sortable by any column, filterable across every value, and nothing is stored
+  — the table is computed from the notes, so it is never out of date
+
 **Linking**
 - `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`, `[[Note#^block]]` and
   `![[Note]]` transclusion
@@ -155,7 +161,7 @@ npm run build    # typecheck (app, server and scripts) + bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build
-npm test         # vitest — 1841 unit and component tests
+npm test         # vitest — 1878 unit and component tests
 npm run e2e      # drive the built app in a real browser (needs `npm run build` first)
 ```
 

@@ -38,6 +38,7 @@ const NAME_MAP: Record<IconName, true> = {
   'arrow-right': true,
   check: true,
   copy: true,
+  table: true,
 }
 
 const NAMES = Object.keys(NAME_MAP) as IconName[]
@@ -54,7 +55,7 @@ describe('Icon', () => {
 
   it('covers every name in the union', () => {
     // Guards against the map above drifting out of sync with the real set.
-    expect(NAMES).toHaveLength(29)
+    expect(NAMES).toHaveLength(30)
   })
 
   it('renders an svg with drawable geometry for every name', () => {

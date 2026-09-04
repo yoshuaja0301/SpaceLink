@@ -260,6 +260,8 @@ export interface AppState {
   openPath: (path: NotePath, options?: OpenOptions) => void
   openLink: (target: string, fromPath: NotePath, options?: OpenOptions) => Promise<void>
   openView: (kind: 'graph' | 'search', options?: OpenOptions) => void
+  /** Open `folder` as a table of its notes. One tab per folder, reused. */
+  openTable: (folder: string, options?: OpenOptions) => void
   closeTab: (paneId: string, tabId: string) => void
   closeOtherTabs: (paneId: string, tabId: string) => void
   setActiveTab: (paneId: string, tabId: string) => void
@@ -1199,6 +1201,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const path = await get().createNote(joinPath(folder, `${name}.md`), `# ${name}\n\n`)
     get().openPath(path, { ...options, mode: 'edit' })
     get().pushToast(`Created ${path}`, 'success')
+  },
+
+  openTable(folder, options = {}) {
+    set((state) => {
+      const paneId = options.paneId ?? state.activePaneId
+      const panes = state.panes.map((pane) => {
+        if (pane.id !== paneId) return pane
+        // Matched on the folder as well as the kind: two folders are two
+        // tables, and reusing one for the other would look like the table
+        // silently changing what it was showing.
+        const existing = pane.tabs.find((tab) => tab.kind === 'table' && tab.path === folder)
+        if (existing) return { ...pane, activeTabId: existing.id }
+        const tab = makeTab('table', folder as NotePath, 'preview')
+        return { ...pane, tabs: [...pane.tabs, tab], activeTabId: tab.id }
+      })
+      return { panes, activePaneId: paneId }
+    })
   },
 
   openView(kind, options = {}) {

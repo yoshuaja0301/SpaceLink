@@ -794,6 +794,26 @@ describe('tabs and panes', () => {
     expect(useAppStore.getState().activeTab()?.mode).toBe('edit')
   })
 
+  it('gives each folder its own table tab, and reuses it', async () => {
+    // Two folders are two tables. Matching on the kind alone — the way the
+    // graph and the search tabs are matched — would reuse one for the other,
+    // which looks like the table silently changing what it was showing.
+    await openSeededVault()
+    useAppStore.getState().openTable('Concepts')
+    const first = useAppStore.getState().activeTab()
+    expect(first?.kind).toBe('table')
+    expect(first?.path).toBe('Concepts')
+
+    useAppStore.getState().openTable('Concepts')
+    expect(useAppStore.getState().activeTab()?.id, 'a second tab for the same folder').toBe(first?.id)
+
+    useAppStore.getState().openTable('Journal')
+    const second = useAppStore.getState().activeTab()
+    expect(second?.path).toBe('Journal')
+    expect(second?.id).not.toBe(first?.id)
+    expect(pane().tabs.filter((tab) => tab.kind === 'table')).toHaveLength(2)
+  })
+
   it('always leaves the last pane with at least one tab', async () => {
     await openSeededVault()
     const id = pane().id

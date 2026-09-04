@@ -629,6 +629,86 @@ ul, ol { margin: 0; padding: 0; }
 
 /* ---- split view (edit + preview side by side) -------------------------- */
 
+/* ---- a folder as a table ------------------------------------------------ */
+
+.table-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.table-view-bar {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.table-view-bar h2 { margin: 0; font-size: 1.05em; font-weight: 650; }
+.table-view-filter {
+  flex: 0 1 18em;
+  min-width: 6em;
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 0.9em;
+}
+.table-view-count { flex: none; color: var(--text-muted); font-size: 0.82em; }
+.table-view-empty { margin: var(--space-5) var(--space-4); color: var(--text-muted); }
+.table-view-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+.table-view-grid { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.table-view-grid th, .table-view-grid td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.table-view-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.table-view-grid thead th > button {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.table-view-grid thead th > button:hover { background: var(--bg-hover); color: var(--text-normal); }
+.table-view-grid tbody tr:hover { background: var(--bg-hover); }
+.table-view-grid tbody th { font-weight: 500; white-space: nowrap; }
+.table-view-open {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.table-view-open:hover { text-decoration: underline; }
+.table-cell-input {
+  width: 100%;
+  min-width: 6em;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-normal);
+  font: inherit;
+}
+.table-cell-input:focus { border-color: var(--accent); background: var(--bg-primary); outline: none; }
+
 /* ---- the page header (icon, cover, properties) --------------------------- *
  * Above whichever view the tab is in, and scrolling is left to the view below:
  * the header is short, and a header that scrolled away would take the property

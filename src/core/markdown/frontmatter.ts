@@ -87,12 +87,18 @@ export function serializeFrontmatter(properties: Readonly<Record<string, unknown
  * deleted should look like a note that never had any.
  */
 export function withFrontmatter(source: string, properties: Readonly<Record<string, unknown>>): string {
-  const { body } = parseFrontmatter(source)
+  const { raw, body, bodyOffset } = parseFrontmatter(source)
   const yaml = serializeFrontmatter(properties)
   if (yaml === '') return body.replace(/^\r?\n/, '')
-  // One blank line between the block and the body, unless the body already
-  // starts with one — repeated edits must not push the note further down.
-  const separator = body === '' || body.startsWith('\n') || body.startsWith('\r\n') ? '' : '\n'
+  // A note that already had a block keeps whatever separated it from the body,
+  // blank line or none. Adding one would be a line the person did not type,
+  // inserted by an edit to something else entirely.
+  //
+  // A note that had none is a block being introduced, and it gets a blank line
+  // after it — unless the body already opens with one, or there is no body.
+  const hadBlock = raw !== '' || bodyOffset > 0
+  const opensBlank = body === '' || body.startsWith('\n') || body.startsWith('\r\n')
+  const separator = hadBlock || opensBlank ? '' : '\n'
   return `---\n${yaml}\n---\n${separator}${body}`
 }
 

@@ -908,6 +908,13 @@ export function FileExplorer(): JSX.Element {
       { id: 'new-note', label: 'New note here', icon: 'plus', onSelect: () => void newNoteIn(node.path) },
       { id: 'new-folder', label: 'New subfolder', icon: 'folder', onSelect: () => beginCreateFolder(node.path) },
       { id: 'sep-new', label: '', separator: true },
+      {
+        id: 'open-table',
+        label: 'Open as a table',
+        icon: 'table',
+        onSelect: () => useAppStore.getState().openTable(node.path),
+      },
+      { id: 'sep-table', label: '', separator: true },
       { id: 'rename', label: 'Rename', icon: 'edit', onSelect: () => beginRename(node) },
       { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => setConfirming(node.path) },
     ],
