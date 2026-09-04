@@ -255,6 +255,42 @@ mark { padding: 0 0.15em; border-radius: 2px; background: var(--highlight); colo
 .callout-warning, .callout[data-callout='warning'], .callout[data-callout='caution'] { --callout-color: var(--callout-warning); }
 .callout-danger, .callout[data-callout='danger'], .callout[data-callout='error'] { --callout-color: var(--text-error); }
 
+/* A callout written with a fold marker (`> [!note]-`) is a real <details>, so
+ * its title is a <summary>. The default disclosure triangle is replaced by one
+ * drawn in the callout's own colour, which turns as it opens. */
+details.callout > summary.callout-title {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  cursor: pointer;
+  list-style: none;          /* Firefox */
+  user-select: none;
+}
+details.callout > summary.callout-title::-webkit-details-marker { display: none; }
+details.callout > summary.callout-title::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 0.42em solid currentColor;
+  border-top: 0.3em solid transparent;
+  border-bottom: 0.3em solid transparent;
+  transform: translateY(-0.08em);
+  transition: transform 120ms ease;
+}
+details.callout[open] > summary.callout-title::before { transform: translateY(0.08em) rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  details.callout > summary.callout-title::before { transition: none; }
+}
+/* Closed, the title is the whole box, so the gap under it would be padding
+ * with nothing beneath it. */
+details.callout:not([open]) > summary.callout-title { margin-bottom: 0; }
+details.callout > summary.callout-title:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 /* ---- embeds (`![[Note]]`) ----------------------------------------------- */
 
 .embed {

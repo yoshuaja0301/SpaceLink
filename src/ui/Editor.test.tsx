@@ -5,6 +5,7 @@
  * the store subscription — match the window event contract and never fight the
  * person typing.
  */
+import { foldCode, foldedRanges, unfoldCode } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import { cleanup, render } from '@testing-library/react'
 import { StrictMode, act } from 'react'
@@ -435,4 +436,65 @@ describe('Editor — remembered positions', () => {
     },
     20000,
   )
+})
+
+describe('Editor — folding a heading', () => {
+  /**
+   * `markdown()` has always known how to fold a heading's section. Nothing in
+   * this editor ever switched folding on, so it never did — no gutter arrow, no
+   * command, and `foldCode` refusing because the state it writes to was not
+   * there. These pin the decision to turn it on, not the language's idea of
+   * where a section ends.
+   */
+  it('folds a heading and hides the section under it', () => {
+    const path = freshPath()
+    seed({ [path]: '# One\nfirst\n\n# Two\nsecond' })
+    const { container } = render(<Editor path={path} paneId={PANE_ID} />)
+    const cm = view(container)
+
+    act(() => {
+      cm.dispatch({ selection: { anchor: 0 } })
+    })
+    expect(foldCode(cm), 'folding is not switched on').toBe(true)
+
+    const folded: string[] = []
+    foldedRanges(cm.state).between(0, cm.state.doc.length, (from, to) => {
+      folded.push(cm.state.doc.sliceString(from, to))
+    })
+    expect(folded).toEqual(['\nfirst'])
+    // And the reader sees something in its place they can click to bring it
+    // back. `foldCode` installs the fold state on its own if nobody did, so
+    // without `codeFolding()` the range folds and there is nothing to click.
+    expect(cm.dom.querySelector('.cm-foldPlaceholder'), 'a fold with nothing to undo it').not.toBeNull()
+    // The heading itself stays, and so does the next one — a fold that hid its
+    // own title would leave nothing to click to undo it.
+    expect(cm.state.doc.sliceString(0, 5)).toBe('# One')
+
+    act(() => {
+      unfoldCode(cm)
+    })
+    const left: string[] = []
+    foldedRanges(cm.state).between(0, cm.state.doc.length, (from, to) => {
+      left.push(cm.state.doc.sliceString(from, to))
+    })
+    expect(left).toEqual([])
+  })
+
+  it('gives the gutter its arrow', () => {
+    const path = freshPath()
+    seed({ [path]: '# One\nfirst' })
+    const { container } = render(<Editor path={path} paneId={PANE_ID} />)
+    expect(view(container).dom.querySelector('.cm-foldGutter'), 'no fold gutter').not.toBeNull()
+  })
+
+  it('offers nothing on a note with no headings', () => {
+    const path = freshPath()
+    seed({ [path]: 'just a paragraph' })
+    const { container } = render(<Editor path={path} paneId={PANE_ID} />)
+    const cm = view(container)
+    act(() => {
+      cm.dispatch({ selection: { anchor: 0 } })
+    })
+    expect(foldCode(cm)).toBe(false)
+  })
 })

@@ -12,6 +12,7 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
+import { foldGutter, foldKeymap } from '@codemirror/language'
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
 import type { Extension } from '@codemirror/state'
 import { Compartment, EditorState } from '@codemirror/state'
@@ -104,6 +105,17 @@ export function createEditorExtensions(opts: EditorSetupOptions): Extension[] {
     // `codeLanguages` is deliberately omitted: no per-language parsers means no
     // extra bundle weight, and fenced code renders as plain monospace.
     markdown(),
+    // Folding, which `markdown()` already knows how to do and nothing here had
+    // ever switched on: a heading folds the section under it, up to the next
+    // heading of the same rank or higher, and a `#` inside a fenced block is
+    // correctly not one. The gutter arrow only appears on a line that can
+    // actually fold, so a note without headings gets no furniture.
+    //
+    // `codeFolding()` is deliberately not here beside it. It reads like the
+    // switch and is not one: the gutter and the fold command both install the
+    // state they need on first use, and with it removed every guarantee below
+    // still held — the fold, the placeholder to click, the gutter.
+    foldGutter(),
     EditorView.lineWrapping,
     EditorState.allowMultipleSelections.of(true),
     EditorState.tabSize.of(2),
@@ -134,6 +146,7 @@ export function createEditorExtensions(opts: EditorSetupOptions): Extension[] {
       ...defaultKeymap,
       ...searchKeymap,
       ...historyKeymap,
+      ...foldKeymap,
       indentWithTab,
     ]),
   ]

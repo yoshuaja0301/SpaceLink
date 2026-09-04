@@ -815,13 +815,21 @@ function calloutRule(state: StateCore): void {
     const titleText = (m[3] as string).trim() || calloutTitleFallback(kind)
     const rest = newline === -1 ? '' : inline.content.slice(newline + 1)
 
-    open.tag = 'div'
+    // A fold marker makes it a real `<details>`. It used to make it a `<div>`
+    // carrying `data-callout-fold`, which nothing anywhere read: a note written
+    // in Obsidian as `> [!note]- Title` arrived collapsed there and permanently
+    // open here, with no way to close it. `<details>` folds without a line of
+    // script, takes the keyboard for free, and survives being exported.
+    const foldable = fold === '+' || fold === '-'
+    open.tag = foldable ? 'details' : 'div'
     open.attrJoin('class', 'callout')
     open.attrSet('data-callout', kind)
     if (fold) open.attrSet('data-callout-fold', fold)
-    ;(tokens[closeIdx] as Token).tag = 'div'
+    // `+` is "foldable, and starts open"; `-` is "foldable, and starts closed".
+    if (fold === '+') open.attrSet('open', '')
+    ;(tokens[closeIdx] as Token).tag = open.tag
 
-    const titleOpen = new state.Token('callout_title_open', 'div', 1)
+    const titleOpen = new state.Token('callout_title_open', foldable ? 'summary' : 'div', 1)
     titleOpen.attrSet('class', 'callout-title')
     titleOpen.block = true
     titleOpen.level = open.level + 1
@@ -832,7 +840,7 @@ function calloutRule(state: StateCore): void {
     titleInline.level = open.level + 2
     state.md.inline.parse(titleText, state.md, state.env, titleInline.children)
 
-    const titleClose = new state.Token('callout_title_close', 'div', -1)
+    const titleClose = new state.Token('callout_title_close', foldable ? 'summary' : 'div', -1)
     titleClose.block = true
     titleClose.level = open.level + 1
 

@@ -723,10 +723,49 @@ describe('callouts', () => {
 
   it('records the fold marker and renders markdown inside the title', () => {
     const el = render('> [!tip]- Try [[Known]]\n> and #hint')
-    const callout = el.querySelector('div.callout')!
+    const callout = el.querySelector('details.callout')!
     expect(callout.getAttribute('data-callout-fold')).toBe('-')
     expect(callout.querySelector('.callout-title a.internal-link')).not.toBeNull()
     expect(callout.querySelector('.callout-body a.tag')).not.toBeNull()
+  })
+
+  it('makes a fold marker an actual <details>, not a div nobody folds', () => {
+    // The marker was recorded as `data-callout-fold` and read by nothing at
+    // all. A note written in Obsidian as `> [!note]- Title` arrived collapsed
+    // there and permanently open here, with no way to close it.
+    const closed = render('> [!note]- Closed\n> body').querySelector('details.callout')!
+    expect(closed.tagName.toLowerCase()).toBe('details')
+    expect(closed.hasAttribute('open'), 'a `-` callout opened itself').toBe(false)
+    // The title has to be the <summary>, or clicking it does nothing.
+    const summary = closed.querySelector('summary.callout-title')!
+    expect(summary.tagName.toLowerCase()).toBe('summary')
+    expect(summary.textContent).toBe('Closed')
+    expect(closed.querySelector('.callout-body')!.textContent).toContain('body')
+  })
+
+  it('starts a plus-marked callout open, which is what the two markers are for', () => {
+    const open = render('> [!warning]+ Open\n> body').querySelector('details.callout')!
+    expect(open.hasAttribute('open')).toBe(true)
+    expect(open.getAttribute('data-callout-fold')).toBe('+')
+  })
+
+  it('leaves a callout without a marker as a plain div', () => {
+    // Not everything should fold: a callout with no marker is a box, and
+    // turning every one of them into a <details> would put an arrow on notes
+    // nobody asked to make foldable.
+    const plain = render('> [!note] Plain\n> body')
+    expect(plain.querySelector('div.callout')).not.toBeNull()
+    expect(plain.querySelector('details')).toBeNull()
+    expect(plain.querySelector('div.callout-title')!.textContent).toBe('Plain')
+  })
+
+  it('survives sanitising, which is where a new tag usually dies', () => {
+    // `details`, `summary` and `open` all have to clear DOMPurify. A tag the
+    // sanitiser strips would leave the body with no way to be shown.
+    const html = renderMarkdown('> [!tip]+ Kept\n> body', ctx())
+    expect(html).toContain('<details')
+    expect(html).toContain('<summary')
+    expect(html).toContain('open')
   })
 
   it('leaves an ordinary blockquote as a blockquote', () => {
