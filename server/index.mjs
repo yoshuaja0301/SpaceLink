@@ -470,7 +470,24 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
   let cachedAccounts = { mtimeMs: -1, store: null }
   async function accountsStore() {
     if (!accountsFile) return { accounts: [], sessions: [] }
-    const info = await stat(accountsFile).catch(() => null)
+    const info = await stat(accountsFile).catch((error) => {
+      /*
+       * Only "there is no such file" is an empty store. That is a server whose
+       * accounts have not been made yet, and it is the ordinary first run.
+       *
+       * Anything else is a file that is there and could not be looked at — a
+       * mistyped `--accounts`, a folder in the path that turned into a file, a
+       * symlink pointing at itself — and answering that with an empty store is
+       * answering a question nobody asked. Measured: every signed-in device got
+       * 401 and was told its sign-in had ended, the owner's own password was
+       * refused as not matching an account, and every open change stream was
+       * closed — while `--list-accounts` on the very same path said exactly
+       * what was wrong. `loadAccounts` one line down already refuses to call an
+       * unreadable file empty; this is the same rule one step earlier.
+       */
+      if (error?.code === 'ENOENT') return null
+      throw new Error(`${accountsFile} could not be read (${error?.code ?? error?.message ?? error}).`)
+    })
     if (!info) return { accounts: [], sessions: [] }
     if (cachedAccounts.store && cachedAccounts.mtimeMs === info.mtimeMs) return cachedAccounts.store
     const loaded = await loadAccounts(accountsFile)
@@ -1366,6 +1383,19 @@ async function main() {
   const accountsFile = options.accounts ?? ACCOUNTS_FILE
   try {
     if (await runAccountCommand(options, accountsFile)) return
+  } catch (error) {
+    process.stderr.write(`\n  ${error.message}\n\n`)
+    process.exit(1)
+    return
+  }
+
+  // Read once before anything is listening, so a path that cannot be read is
+  // said here, to the person who typed it, rather than to every device as
+  // "that email and password do not match an account". A path that is simply
+  // not there yet is not an error: that is a server with no accounts, which is
+  // how most of them run.
+  try {
+    await loadAccounts(accountsFile)
   } catch (error) {
     process.stderr.write(`\n  ${error.message}\n\n`)
     process.exit(1)

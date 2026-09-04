@@ -2969,3 +2969,192 @@ describe('typing a password at the terminal', () => {
     expect(type('pass', '\u0003')).toEqual({ typed: 'pass', done: true, interrupted: true })
   })
 })
+
+/**
+ * An accounts file the server was pointed at and cannot look at.
+ *
+ * Not a corrupt file — that one is already refused honestly — but a path that
+ * `stat` itself fails on: a mistyped `--accounts`, a folder in the path that
+ * turned into a file, a symlink pointing at itself. That was read as "there
+ * are no accounts", which is a different sentence entirely.
+ */
+describe('an accounts path that cannot be looked at', { timeout: 40_000 }, () => {
+  const PASSWORD = 'a long enough password'
+  /** @type {string} */
+  let home
+  /** @type {string} */
+  let notes
+  /** @type {string} */
+  let session
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'spacelink-unreadable-'))
+    notes = join(home, 'Notes')
+    await mkdir(notes, { recursive: true })
+    await writeFile(join(notes, 'Private.md'), '# Private\n')
+    const real = join(home, 'accounts.json')
+    const account = await addAccount({ file: real, email: 'me@example.com', password: PASSWORD, vault: notes })
+    const { createSession } = await import('./accounts.mjs')
+    session = (await createSession({ file: real, account, device: 'a Mac' })).token
+    // A regular file where the next segment expects a folder: every call on
+    // the path below fails with ENOTDIR, `stat` included.
+    await writeFile(join(home, 'notafolder'), 'x')
+  })
+
+  afterAll(async () => {
+    await rm(home, { recursive: true, force: true })
+  })
+
+  /** A server pointed at `accountsFile`, and a way to call it. */
+  async function serving(accountsFile) {
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(home, '__no_dist__'), accountsFile })
+    const listener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => listener.listen(0, '127.0.0.1', done))
+    const at = `http://127.0.0.1:${listener.address().port}`
+    return {
+      at,
+      close: () => new Promise((done) => listener.close(done)),
+      files: (token) => fetch(`${at}/api/files`, { headers: { authorization: `Bearer ${token}` } }),
+      login: () =>
+        fetch(`${at}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'me@example.com', password: PASSWORD }),
+        }),
+    }
+  }
+
+  it('does not sign every device out because it could not look at the file', async () => {
+    // Both halves, because the bug is the difference between them: the same
+    // session, the same password, against the file itself and against a path
+    // that cannot be reached. An empty store made the second answer 401 — a
+    // signed-in device was told its sign-in had ended, and the owner's own
+    // password was refused as not matching an account, while nothing anywhere
+    // named the file.
+    const working = await serving(join(home, 'accounts.json'))
+    try {
+      expect((await working.files(session)).status).toBe(200)
+      expect((await working.login()).status).toBe(200)
+    } finally {
+      await working.close()
+    }
+
+    const broken = await serving(join(home, 'notafolder', 'accounts.json'))
+    try {
+      expect((await broken.files(session)).status, 'a device was signed out by an unreadable file').toBe(500)
+      const refused = await broken.login()
+      expect(refused.status, 'the owner was told their own password was wrong').toBe(500)
+      expect((await refused.json()).error).not.toContain('do not match an account')
+    } finally {
+      await broken.close()
+    }
+  })
+
+  it('still reads a file that is not there yet as no accounts at all', async () => {
+    // The other side of the same line. A server whose accounts have not been
+    // made is the ordinary first run, and it must keep working: refusing it
+    // would turn every fresh install into an error.
+    const fresh = await serving(join(home, 'never-made.json'))
+    try {
+      expect((await fresh.files(TOKEN)).status).toBe(200)
+      expect((await fresh.login()).status).toBe(401)
+    } finally {
+      await fresh.close()
+    }
+  })
+
+  it('keeps an open change stream rather than closing it on a check it could not make', async () => {
+    // The re-check reads the accounts file every five seconds. A file it
+    // cannot parse already leaves the stream alone — "a check that could not
+    // be made is not an answer of no". A path it cannot look at closed it, and
+    // the device saw its own sync stop with nothing said.
+    //
+    // Its own folder, because the path has to go bad while the stream is open:
+    // a session cannot be presented against a file that was already broken.
+    const alone = await mkdtemp(join(tmpdir(), 'spacelink-midstream-'))
+    const held = join(alone, 'Notes')
+    await mkdir(held, { recursive: true })
+    const inner = join(alone, 'config')
+    await mkdir(inner, { recursive: true })
+    const accountsFile = join(inner, 'accounts.json')
+    const account = await addAccount({ file: accountsFile, email: 'mid@example.com', password: PASSWORD, vault: held })
+    const { createSession } = await import('./accounts.mjs')
+    const held_session = (await createSession({ file: accountsFile, account, device: 'a Mac' })).token
+
+    const sync = createSyncServer({ vault: held, token: TOKEN, distDir: join(alone, '__no_dist__'), accountsFile })
+    const listener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => listener.listen(0, '127.0.0.1', done))
+    const at = `http://127.0.0.1:${listener.address().port}`
+
+    const controller = new AbortController()
+    try {
+      const stream = await fetch(`${at}/api/events?token=${encodeURIComponent(held_session)}`, {
+        signal: controller.signal,
+      })
+      expect(stream.status).toBe(200)
+      let closed = false
+      const reader = stream.body.getReader()
+      void (async () => {
+        try {
+          for (;;) {
+            const { done } = await reader.read()
+            if (done) {
+              closed = true
+              return
+            }
+          }
+        } catch {
+          closed = true
+        }
+      })()
+
+      // The folder the accounts file lives in becomes a file. Nothing about
+      // this session has been revoked; the server simply cannot look.
+      await rm(inner, { recursive: true, force: true })
+      await writeFile(inner, 'x')
+      // Past the interval, with room to spare.
+      await new Promise((done) => setTimeout(done, 7000))
+      expect(closed, 'a stream was closed by a check that could not be made').toBe(false)
+    } finally {
+      controller.abort()
+      await new Promise((done) => listener.close(done))
+      await rm(alone, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('refuses to start on an accounts path it cannot read, and says which', async () => {
+    // With the person standing right there, rather than to every device as
+    // "that email and password do not match an account". A path that is not
+    // there yet is not an error — that is a server with no accounts.
+    const { spawn } = await import('node:child_process')
+    const { fileURLToPath } = await import('node:url')
+    const entry = fileURLToPath(new URL('./index.mjs', import.meta.url))
+
+    /** @param {string} accountsFile @returns {Promise<{ code: number, said: string }>} */
+    const start = (accountsFile) =>
+      new Promise((done) => {
+        const child = spawn(
+          process.execPath,
+          [entry, '--vault', notes, '--port', '0', '--token', TOKEN, '--print-ready', '--accounts', accountsFile],
+          { stdio: ['ignore', 'pipe', 'pipe'] },
+        )
+        let said = ''
+        child.stderr.on('data', (chunk) => (said += String(chunk)))
+        // A server that does start never exits on its own; the ready line is
+        // how we know it got that far.
+        child.stdout.on('data', (chunk) => {
+          if (String(chunk).includes('"ready"')) child.kill('SIGTERM')
+        })
+        child.on('exit', (code) => done({ code: code ?? 0, said }))
+      })
+
+    const broken = await start(join(home, 'notafolder', 'accounts.json'))
+    expect(broken.code).toBe(1)
+    expect(broken.said).toContain(join(home, 'notafolder', 'accounts.json'))
+    expect(broken.said).toContain('could not be read')
+
+    // And the ordinary first run is not refused.
+    const fresh = await start(join(home, 'not-made-either.json'))
+    expect(fresh.said).not.toContain('could not be read')
+  }, 30_000)
+})

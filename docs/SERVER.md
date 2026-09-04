@@ -570,6 +570,14 @@ guessing at their own password can use up part of the same budget.
 access token is the way in. Make one with `--add-account` and restart if you
 would rather sign in.
 
+**The server refuses to start, naming the accounts file.** The path it was
+given exists and cannot be read — a mistyped `--accounts`, a folder in the path
+that turned into a file, a file that is not valid JSON. It is said here rather
+than to every device, which used to hear it as "that email and password do not
+match an account" while every signed-in device was told its session had ended.
+A file that is simply *not there* is not an error: that is a server with no
+accounts, which is how most of them run.
+
 **Changes are not appearing on the other device.** Each device holds an open
 connection for changes. Phones drop it when the screen is off and reconnect on
 wake, so give it a moment after unlocking. If it persists, reload the page.
