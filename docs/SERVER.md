@@ -570,6 +570,16 @@ guessing at their own password can use up part of the same budget.
 access token is the way in. Make one with `--add-account` and restart if you
 would rather sign in.
 
+**`--list-accounts` says entries had to be left out.** The file holds
+something that is not an account or a session — `null` where a record was
+deleted, a bare address where a record was meant. Nothing this server writes
+produces those; a hand edit, or two backups merged, does. They could never have
+matched anything, so they are left out and the rest is listed; the next command
+that writes the file will not write them back. Before this they were read as
+records, and the reader was whatever touched one first: the listing stopped on
+`Cannot read properties of null` and printed no accounts at all, or every
+signed-in device got a 500 on every request.
+
 **The server refuses to start, naming the accounts file.** The path it was
 given exists and cannot be read — a mistyped `--accounts`, a folder in the path
 that turned into a file, a file that is not valid JSON. It is said here rather

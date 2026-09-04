@@ -2488,6 +2488,70 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(listed.out).not.toMatch(/[A-Fa-f0-9]{64}/)
   })
 
+  it('still lists a file a hand edit has damaged, rather than stopping on it', async () => {
+    // This is *the* command for looking at a file that has gone wrong — it is
+    // where `accountProblems` reports, and where a folder that is not there is
+    // named. Measured before this: four shapes a hand edit or two merged
+    // backups actually take, and four of them printed a raw JavaScript error
+    // and no accounts at all.
+    //
+    //   a session with no createdAt      Invalid time value
+    //   a session whose createdAt is text Invalid time value
+    //   an account that is null          Cannot read properties of null (reading 'id')
+    //   a session that is null           Cannot read properties of null (reading 'accountId')
+    const { createSession, loadAccounts, saveAccounts } = await import('./accounts.mjs')
+    const built = join(home, 'hand-edited.json')
+    const account = await addAccount({ file: built, email: 'edited@example.com', password: PASSWORD, vault: join(home, 'Notes') })
+    await createSession({ file: built, account, device: 'a Mac' })
+    const clean = await loadAccounts(built)
+    await saveAccounts(built, {
+      accounts: [null, ...clean.accounts, 'edited@example.com'],
+      sessions: [{ ...clean.sessions[0], createdAt: 'yesterday' }, null],
+    })
+
+    const listed = await run('--accounts', built, '--list-accounts')
+    expect(listed.code, listed.err).toBe(0)
+    // The accounts it *can* read are still listed, with their devices.
+    expect(listed.out).toContain('edited@example.com')
+    expect(listed.out).toContain('a Mac')
+    // The date it cannot read does not take the listing with it.
+    expect(listed.out).not.toContain('Invalid time value')
+    expect(listed.out).toMatch(/a date this file does not say/)
+    // And what was left out is said, because the next write will drop it.
+    expect(listed.out).toMatch(/3 entries are not an account or a session/)
+  })
+
+  it('keeps serving the devices it can read when one entry is not a record', async () => {
+    // The other half, and the worse one: a single `null` among the accounts
+    // made `accountForSession` throw on every authenticated request, so every
+    // signed-in device got a 500 — over an entry that could never have matched
+    // anything. A `null` among the sessions did the same to signing in.
+    const { createSession, loadAccounts, saveAccounts } = await import('./accounts.mjs')
+    const notes = join(home, 'Notes')
+    const built = join(home, 'null-entries.json')
+    const account = await addAccount({ file: built, email: 'served@example.com', password: PASSWORD, vault: notes })
+    const { token: session } = await createSession({ file: built, account, device: 'a Mac' })
+    const clean = await loadAccounts(built)
+    await saveAccounts(built, { accounts: [null, ...clean.accounts], sessions: [null, ...clean.sessions] })
+
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(home, '__no_dist__'), accountsFile: built })
+    const listener = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => listener.listen(0, '127.0.0.1', done))
+    const at = `http://127.0.0.1:${listener.address().port}`
+    try {
+      const paired = await fetch(`${at}/api/files`, { headers: { authorization: `Bearer ${session}` } })
+      expect(paired.status, 'a signed-in device was cut off by an entry that is not a record').toBe(200)
+      const signedIn = await fetch(`${at}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'served@example.com', password: PASSWORD }),
+      })
+      expect(signedIn.status, 'signing in was broken by an entry that is not a record').toBe(200)
+    } finally {
+      await new Promise((done) => listener.close(done))
+    }
+  })
+
   it('does not sign every device out when an account is made beside them', async () => {
     // The documented way to make an account is this command, run while the
     // server is up. It is a different *process*, so the queue that orders

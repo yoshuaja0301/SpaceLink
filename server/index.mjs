@@ -1289,6 +1289,27 @@ function askPassword(prompt) {
 }
 
 /**
+ * When a device signed in, as a number that can be compared and a date that can
+ * be printed.
+ *
+ * A record with no `createdAt`, or one holding text, is not something this
+ * server writes — but a file edited by hand is exactly what this command is for
+ * looking at, and `new Date('yesterday').toISOString()` throws `RangeError:
+ * Invalid time value`. Measured: the listing stopped there and printed no
+ * accounts at all, over one session out of one.
+ *
+ * @param {{ createdAt?: unknown }} session
+ */
+function signedInAt(session) {
+  return Number.isFinite(session.createdAt) ? Number(session.createdAt) : 0
+}
+
+/** @param {{ createdAt?: unknown }} session */
+function signedInOn(session) {
+  return Number.isFinite(session.createdAt) ? new Date(Number(session.createdAt)).toISOString().slice(0, 10) : 'a date this file does not say'
+}
+
+/**
  * The account commands, which run instead of a server.
  *
  * Making an account needs the machine that holds the notes, which is the
@@ -1310,6 +1331,15 @@ async function runAccountCommand(options, accountsFile) {
     // reach the notes, so it is where an account that cannot has to say so.
     const problems = accountProblems(store.accounts)
     process.stdout.write(`\n  Accounts in ${accountsFile}\n\n`)
+    // Said before the list, because it changes what the list means: entries
+    // that are not records at all were left out of it, and the next thing that
+    // writes this file will not write them back.
+    if (store.unreadable) {
+      process.stdout.write(
+        `  ** ${store.unreadable} ${store.unreadable === 1 ? 'entry is' : 'entries are'} not an account or a session` +
+          ` at all and had to be left out. They will be gone from the file the next time it is written.\n\n`,
+      )
+    }
     for (const [index, account] of store.accounts.entries()) {
       const devices = store.sessions.filter((session) => session.accountId === account.id && session.expiresAt > now)
       // Printed through `plainText` even though what is written now is clean:
@@ -1326,10 +1356,8 @@ async function runAccountCommand(options, accountsFile) {
       if (devices.length === 0) process.stdout.write('      no device signed in\n')
       // Each device by what it said it was and when, so it is obvious whether
       // the list holds one you no longer recognise.
-      for (const device of devices.sort((a, b) => a.createdAt - b.createdAt)) {
-        process.stdout.write(
-          `      signed in  ${plainText(device.device)} — ${new Date(device.createdAt).toISOString().slice(0, 10)}\n`,
-        )
+      for (const device of devices.sort((a, b) => signedInAt(a) - signedInAt(b))) {
+        process.stdout.write(`      signed in  ${plainText(device.device)} — ${signedInOn(device)}\n`)
       }
       process.stdout.write('\n')
     }

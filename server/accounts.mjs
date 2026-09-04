@@ -64,11 +64,37 @@ export const MIN_PASSWORD_LENGTH = 8
  * @property {number} expiresAt
  */
 
-/** @typedef {{ accounts: Account[], sessions: Session[] }} AccountsFile */
+/**
+ * @typedef {object} AccountsFile
+ * @property {Account[]} accounts
+ * @property {Session[]} sessions
+ * @property {number} [unreadable] How many entries in the file were not records
+ *   at all and were left out. Never written back — `saveAccounts` names the two
+ *   fields it writes — so it says something about the file as it was read.
+ */
 
 /** An empty store, used for a file that is missing or unreadable. */
 function emptyStore() {
-  return { accounts: [], sessions: [] }
+  return { accounts: [], sessions: [], unreadable: 0 }
+}
+
+/**
+ * Whether a value can be an account or a session at all.
+ *
+ * Nothing this server writes is anything else. A file edited by hand, or two
+ * backups merged, holds `null` where a record was deleted, or a bare address
+ * where a record was meant — and one of those took down whatever touched it
+ * next: `--list-accounts` stopped on "Cannot read properties of null" and
+ * listed nothing, and a single `null` among the accounts made every request
+ * from every signed-in device a 500. Which of the two it broke depended on
+ * where in the array it happened to sit.
+ *
+ * A record that is not a record cannot match anything, so dropping it loses
+ * nothing that was ever reachable — but it is dropped *loudly*: the count
+ * comes back with the store, and `--list-accounts` says it.
+ */
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -104,9 +130,12 @@ export async function loadAccounts(file) {
   } catch {
     throw new Error(`${file} is not valid JSON. Move it aside to start over, or repair it — it holds every account.`)
   }
+  const accounts = Array.isArray(parsed?.accounts) ? parsed.accounts : []
+  const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : []
+  const usable = { accounts: accounts.filter(isRecord), sessions: sessions.filter(isRecord) }
   return {
-    accounts: Array.isArray(parsed?.accounts) ? parsed.accounts : [],
-    sessions: Array.isArray(parsed?.sessions) ? parsed.sessions : [],
+    ...usable,
+    unreadable: accounts.length - usable.accounts.length + (sessions.length - usable.sessions.length),
   }
 }
 

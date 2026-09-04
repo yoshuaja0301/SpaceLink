@@ -177,7 +177,7 @@ describe('making an account', () => {
 
 describe('the file the accounts live in', () => {
   it('is an empty store when it is not there yet', async () => {
-    expect(await loadAccounts(join(home, 'nothing.json'))).toEqual({ accounts: [], sessions: [] })
+    expect(await loadAccounts(join(home, 'nothing.json'))).toEqual({ accounts: [], sessions: [], unreadable: 0 })
   })
 
   it('says so when it is corrupt, rather than starting with no accounts', async () => {
@@ -695,6 +695,38 @@ describe('an accounts file that two backups or a hand edit have damaged', () => 
     expect(accountProblems([shell('a', 'one@example.com'), shell('b', 'two@example.com')]).size).toBe(0)
     expect(accountProblems([]).size).toBe(0)
   })
+
+  it('leaves out an entry that is not a record at all, and counts it', async () => {
+    // `null` where a record was deleted, or a bare address where one was
+    // meant. Neither could ever match anything — but reading them as records
+    // did: `--list-accounts` stopped on "Cannot read properties of null" and
+    // printed no accounts whatsoever, and a single `null` among the accounts
+    // made every request from every signed-in device a 500. Which of the two
+    // broke depended only on where in the array it sat.
+    const damaged = join(home, 'damaged.json')
+    await writeFile(
+      damaged,
+      JSON.stringify({
+        accounts: [null, shell('a', 'me@example.com'), 'me@example.com', ['me@example.com']],
+        sessions: [{ id: 's', accountId: 'a' }, null],
+      }),
+    )
+    const store = await loadAccounts(damaged)
+    expect(store.accounts.map((account) => account.id)).toEqual(['a'])
+    expect(store.sessions.map((session) => session.id)).toEqual(['s'])
+    expect(store.unreadable, 'the entries that had to be left out were not counted').toBe(4)
+    expect((await loadAccounts(file)).unreadable, 'a file this server wrote had entries left out').toBe(0)
+  })
+
+  it('never writes the count back into the file', async () => {
+    // It says something about the file as it was read, not about the accounts.
+    const damaged = join(home, 'counted.json')
+    await writeFile(damaged, JSON.stringify({ accounts: [null, shell('a', 'me@example.com')], sessions: [] }))
+    await updateAccounts(damaged, (store) => {
+      store.sessions.push({ id: 's', accountId: 'a', device: 'a Mac', createdAt: 1, expiresAt: 2 })
+    })
+    expect(Object.keys(JSON.parse(await readFile(damaged, 'utf8')))).toEqual(['accounts', 'sessions'])
+  })
 })
 
 describe('a session whose account cannot be told apart from another', () => {
@@ -761,7 +793,7 @@ describe('an accounts path that cannot be read', () => {
     // The one read failure that is not a failure: a first run.
     const home = await mkdtemp(join(tmpdir(), 'spacelink-acctshape-'))
     try {
-      await expect(loadAccounts(join(home, 'never-made.json'))).resolves.toEqual({ accounts: [], sessions: [] })
+      await expect(loadAccounts(join(home, 'never-made.json'))).resolves.toEqual({ accounts: [], sessions: [], unreadable: 0 })
     } finally {
       await rm(home, { recursive: true, force: true })
     }
