@@ -219,7 +219,9 @@ export class VaultStore {
       this.realRoot = undefined
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
         throw new VaultUnreachableError(
-          'The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.',
+          error?.code === 'ENOTDIR'
+            ? 'The path this vault points at is not a folder.'
+            : 'The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.',
         )
       }
       throw error
@@ -318,8 +320,14 @@ export class VaultStore {
         // told, with a 200, that the person has no notes. "I cannot see your
         // notes" and "you have no notes" must never be the same answer.
         if (!isRoot) return
+        // ENOTDIR is a different sentence: the path is there, it is simply not
+        // a folder — a vault pointed at a file. Telling that person their
+        // folder has been moved or unmounted sends them looking for something
+        // that never happened.
         throw new VaultUnreachableError(
-          `The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.`,
+          error?.code === 'ENOTDIR'
+            ? 'The path this vault points at is not a folder.'
+            : 'The folder this vault lives in is not there. It may have been moved or renamed, or its drive may not be mounted.',
         )
       }
       for (const entry of contents) {

@@ -1282,6 +1282,14 @@ async function runAccountCommand(options, accountsFile) {
 
   if (options.addAccount) {
     if (!options.vaultChosen) throw new Error('--add-account needs --vault, so the account has a folder of notes.')
+    // A folder that does not exist yet is fine — the server makes it. A path
+    // that exists and is not one is not: the account was made cheerfully, and
+    // the device that signed in to it got a 503 on everything. This is the
+    // moment to say so, with the person standing right here.
+    const chosen = await stat(options.vault).catch(() => null)
+    if (chosen && !chosen.isDirectory()) {
+      throw new Error(`${options.vault} is not a folder, so it cannot hold an account's notes.`)
+    }
     const password = options.password ?? (await askPassword(`  Password for ${options.addAccount}: `))
     const again = options.password ?? (await askPassword('  Again: '))
     if (password !== again) throw new Error('Those did not match.')

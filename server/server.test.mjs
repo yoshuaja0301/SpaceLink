@@ -7,6 +7,7 @@
  * read straight back with `fs`.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { chmod, mkdtemp, mkdir, readdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -2191,6 +2192,40 @@ describe('a page served from somewhere else', () => {
   })
 })
 
+describe('a vault pointed at something that is not a folder', () => {
+  it('says so, rather than saying the folder is missing', async () => {
+    // Two different sentences, because they call for two different things.
+    // A folder that is not there may come back — put it back, plug the drive
+    // in. A path that is a file will never become a folder by waiting, and
+    // being told to wait is the wrong instruction.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-shape-'))
+    try {
+      const file = join(home, 'notes.txt')
+      await writeFile(file, 'a file, not a folder\n')
+      const store = new VaultStore(file)
+      await expect(store.list()).rejects.toThrow(/not a folder/i)
+      await expect(store.list()).rejects.not.toThrow(/moved or renamed/i)
+
+      const missing = new VaultStore(join(home, 'Gone'))
+      await expect(missing.list()).rejects.toThrow(/moved or renamed/i)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('says so for a note read through it, too, not only for a listing', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-shape-'))
+    try {
+      const file = join(home, 'notes.txt')
+      await writeFile(file, 'a file, not a folder\n')
+      const store = new VaultStore(join(file, 'inside'))
+      await expect(store.read('Home.md')).rejects.toThrow(/not a folder/i)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('the account commands', { timeout: 60_000 }, () => {
   /** @type {string} */
   let home
@@ -2264,6 +2299,36 @@ describe('the account commands', { timeout: 60_000 }, () => {
     expect(again.code).toBe(1)
     expect(again.err).toMatch(/already an account/i)
     expect(JSON.parse(await readFile(accountsFile(), 'utf8')).accounts).toHaveLength(1)
+  })
+
+  it('refuses a vault that exists and is not a folder, while the person is still here', async () => {
+    // Measured: --add-account took a path to a file cheerfully, printed "Sign
+    // in from any device", and every request from the device that did got a
+    // 503 — saying the folder had been moved or unmounted, which it had not.
+    const notAFolder = join(home, 'not-a-folder.txt')
+    await writeFile(notAFolder, 'this is a file\n')
+    const refused = await run(
+      '--vault', notAFolder,
+      '--accounts', join(home, 'shapes.json'),
+      '--add-account', 'shape@example.com',
+      '--password', PASSWORD,
+    )
+    expect(refused.code, 'the account was made anyway').toBe(1)
+    expect(refused.err).toMatch(/is not a folder/i)
+    expect(existsSync(join(home, 'shapes.json')), 'an accounts file was written for it').toBe(false)
+  })
+
+  it('still accepts a folder that does not exist yet, which the server makes', async () => {
+    // The other half: naming a folder before it exists is how most people
+    // start, and refusing that would be worse than the bug.
+    const made = await run(
+      '--vault', join(home, 'NotYetMade'),
+      '--accounts', join(home, 'later.json'),
+      '--add-account', 'later@example.com',
+      '--password', PASSWORD,
+    )
+    expect(made.code, made.err).toBe(0)
+    expect((await loadAccounts(join(home, 'later.json'))).accounts).toHaveLength(1)
   })
 
   it('says in the listing when an account’s folder is not there', async () => {

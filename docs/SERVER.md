@@ -510,6 +510,11 @@ should not happen — `~/.spacefore` is read when `~/.spacelink` does not exist 
 but if both are there, the new one wins and holds a different token. Move the
 old files across (`mv ~/.spacefore/*.json ~/.spacelink/`) and restart.
 
+**"The path this vault points at is not a folder."** An account was pointed at
+a file. Waiting will not help, and neither will putting anything back: make the
+account again with `--add-account` and a folder. New accounts are refused this
+at the moment they are made.
+
 **"The folder this vault lives in is not there."** Exactly what it says: that
 account's folder has been moved, renamed, or is on a drive that is not mounted.
 The server answers `503` rather than reporting an empty vault, because "I cannot
