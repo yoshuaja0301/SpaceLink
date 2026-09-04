@@ -750,6 +750,25 @@ describe('parseArgs', () => {
     expect(parseArgs(['/tmp/notes']).vaultChosen).toBe(true)
   })
 
+  it('takes a token as it was pasted, padding and all', () => {
+    // A token is copied out of a terminal, and a copy brings a newline or a
+    // space with it. The server compares byte for byte, so that one character
+    // is the difference between the token that was handed out and the one
+    // being checked against.
+    expect(parseArgs(['--token', ' abc123 ']).token).toBe('abc123')
+    expect(parseArgs(['--token', '\tabc123\n']).token).toBe('abc123')
+    expect(parseArgs(['--token', 'abc123']).token).toBe('abc123')
+  })
+
+  it('refuses a --token with nothing in it rather than quietly serving under another', () => {
+    // `--token "$SPACELINK_TOKEN"` with the variable unset. The empty string
+    // was falsy, so the stored token was used instead and printed on the ready
+    // line as though it were the one that had been passed — while every device
+    // was configured with the one that was meant to be.
+    expect(() => parseArgs(['--token', ''])).toThrow(/--token was given nothing/)
+    expect(() => parseArgs(['--token', '   '])).toThrow(/--token was given nothing/)
+  })
+
   it('reads the account commands', () => {
     const options = parseArgs(['--accounts', '/tmp/a.json', '--add-account', 'me@example.com', '--password', 'secret'])
     expect(options).toMatchObject({
@@ -801,6 +820,44 @@ describe('the change stream accepts a query token', () => {
   it('does not accept a query token anywhere else', async () => {
     const response = await fetch(`${base}/api/files?token=${encodeURIComponent(TOKEN)}`)
     expect(response.status).toBe(401)
+  })
+
+  it('takes the same padded token the header door takes', async () => {
+    // Both halves, because the bug was the disagreement between them. Node
+    // strips the padding off a header value on the way in, so a token pasted
+    // with the newline a terminal copy brings was accepted by every endpoint
+    // and refused only here, where a query parameter arrives exactly as it was
+    // written. The vault opened, listed and saved, and never received one
+    // change from another device — with nothing anywhere saying why.
+    const padded = `${TOKEN}\n`
+    const header = await fetch(`${base}/api/files`, { headers: { authorization: `Bearer ${padded}` } })
+    expect(header.status).toBe(200)
+    const controller = new AbortController()
+    const stream = await fetch(`${base}/api/events?token=${encodeURIComponent(padded)}`, {
+      signal: controller.signal,
+    })
+    expect(stream.status).toBe(200)
+    controller.abort()
+  })
+
+  it('is not opened by a credential that is nothing at all', async () => {
+    // `tokensMatch` compares two strings, and two empty strings are equal. A
+    // server built with an empty token therefore matched a caller who sent no
+    // credential whatsoever, and served them every note in the vault.
+    const root = await mkdtemp(join(tmpdir(), 'spacelink-blank-'))
+    await writeFile(join(root, 'Private.md'), '# Private\n')
+    const server = createSyncServer({ vault: root, token: '', distDir: join(root, '__no_dist__') })
+    const alone = createServer((request, response) => void server.handle(request, response))
+    await new Promise((resolve) => alone.listen(0, '127.0.0.1', resolve))
+    const at = `http://127.0.0.1:${alone.address().port}`
+    try {
+      expect((await fetch(`${at}/api/files`)).status).toBe(401)
+      expect((await fetch(`${at}/api/files`, { headers: { authorization: 'Bearer ' } })).status).toBe(401)
+      expect((await fetch(`${at}/api/events?token=`)).status).toBe(401)
+    } finally {
+      await new Promise((resolve) => alone.close(resolve))
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

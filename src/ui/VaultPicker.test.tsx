@@ -431,6 +431,37 @@ describe('VaultPicker', () => {
       expect(onReady).not.toHaveBeenCalled()
     })
 
+    it('connects with the token it is about to remember, padding and all', async () => {
+      // A token is pasted, and a paste out of a terminal brings a newline with
+      // it. The pairing was tried with the padded token and remembered as the
+      // trimmed one — and the server, which trims a header but not the change
+      // stream's query parameter, took the padded one everywhere except there.
+      // The vault opened, listed and saved, and never received one change.
+      await show()
+      await act(async () => {
+        fireEvent.click(card('remote'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('radio', { name: 'Access token' }))
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'http://mac.local:4899' } })
+      })
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Access token'), { target: { value: '  the-token\n' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      })
+
+      expect(vi.mocked(createRemoteVault)).toHaveBeenCalledWith({
+        url: 'http://mac.local:4899',
+        token: 'the-token',
+      })
+      const remembered = JSON.parse(localStorage.getItem('spacelink.remote') ?? '{}') as Record<string, unknown>
+      expect(remembered.token).toBe('the-token')
+    })
+
     it('starts on the token form for a device that was paired with a token', async () => {
       localStorage.setItem(
         'spacelink.remote',

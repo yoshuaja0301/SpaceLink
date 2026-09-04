@@ -175,10 +175,14 @@ export function VaultPicker({ onReady }: { onReady?: () => void }): JSX.Element 
     if (choice === 'remote') {
       const url = serverUrl.trim()
       if (signInWith === 'token') {
-        const adapter = await createRemoteVault({ url, token: serverToken })
+        // Trimmed before it is used, not only before it is stored. A token is
+        // pasted, and a paste out of a terminal brings a newline with it — so
+        // the pairing was tried with one token and remembered as another.
+        const token = serverToken.trim()
+        const adapter = await createRemoteVault({ url, token })
         // Only remembered once the server has actually accepted the pairing, so
         // a typo never becomes the connection this device retries on every load.
-        saveRemoteConnection({ url, token: serverToken.trim(), name: adapter.name })
+        saveRemoteConnection({ url, token, name: adapter.name })
         return adapter
       }
       // Signing in and opening the vault are one call: a sign-in that works

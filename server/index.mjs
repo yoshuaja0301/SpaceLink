@@ -509,6 +509,12 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * @returns {Promise<{ kind: 'token' | 'account', account?: any, context: ReturnType<typeof createVault> } | null>}
    */
   async function identify(presented) {
+    // No credential is never a credential. `tokensMatch` compares two strings,
+    // and two empty strings are equal — so a server built with an empty token
+    // served every note to a caller who sent no `Authorization` header at all.
+    // The command line refuses `--token ""` now, which is how that used to
+    // happen; this is the door itself refusing to be opened by nothing.
+    if (typeof presented !== 'string' || presented === '') return null
     if (tokensMatch(presented, token)) return { kind: 'token', context: primary }
     const store = await accountsStore()
     const account = accountForSession(store, presented)
@@ -591,9 +597,16 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       return
     }
 
+    // Trimmed here as `bearerToken` trims the header it reads, so a credential
+    // is the same credential whichever door it arrives at. It was not: a token
+    // pasted with the newline a terminal copy brings was accepted everywhere —
+    // Node strips the padding off a header value on the way in — and refused
+    // here, where a query parameter arrives exactly as it was written. The
+    // vault opened, listed, saved, and never received a single change from
+    // another device, with nothing anywhere saying why.
     const presented =
       url.pathname === '/api/events' && url.searchParams.has('token')
-        ? String(url.searchParams.get('token'))
+        ? String(url.searchParams.get('token')).trim()
         : bearerToken(request)
 
     const caller = await identify(presented)
@@ -1359,7 +1372,10 @@ async function main() {
     return
   }
 
-  const stored = options.token ? { token: options.token, created: false, file: '(passed on the command line)' } : await loadOrCreateToken()
+  const stored =
+    options.token !== null
+      ? { token: options.token, created: false, file: '(passed on the command line)' }
+      : await loadOrCreateToken()
   const server = createSyncServer({ vault: options.vault, token: stored.token, accountsFile })
   await server.store.ensureRoot()
 

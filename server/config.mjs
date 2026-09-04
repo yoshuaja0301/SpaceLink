@@ -206,6 +206,22 @@ export function parseArgs(argv) {
   if ((options.tlsCert === null) !== (options.tlsKey === null)) {
     throw new Error('--tls-cert and --tls-key must be given together.')
   }
+  if (options.token !== null) {
+    // Trimmed, because the token is copied out of a terminal and a copy brings
+    // a newline or a space with it more often than not. The server compares it
+    // byte for byte, so that stray character is the difference between the
+    // token that was handed out and the one being checked against.
+    options.token = options.token.trim()
+    // And a token with nothing in it is refused rather than used. `--token
+    // "$SPACELINK_TOKEN"` with the variable unset is an empty string, not a
+    // missing option: the server took it, found it falsy, quietly fell back to
+    // the token in ~/.spacelink/server.json, and announced a token nobody had
+    // asked for — while every device was configured with the one that was
+    // meant to be passed.
+    if (options.token === '') {
+      throw new Error('--token was given nothing. Leave it out to use the stored token, or pass the token itself.')
+    }
+  }
   options.vaultChosen = options.vault !== ''
   options.vault = options.vault ? resolve(options.vault) : resolve(process.cwd(), 'vault')
   return options
@@ -223,6 +239,8 @@ Options
   --host <address>  Address to bind (default 127.0.0.1 — loopback only).
                     Use 0.0.0.0 to reach it from other devices on your network.
   --token <value>   Access token. Defaults to one stored in ~/.spacelink/server.json.
+                    Surrounding whitespace is trimmed; an empty value is
+                    refused rather than quietly falling back to the stored one.
   --tls-cert <file> Certificate for HTTPS. Usually unnecessary: a tunnel
   --tls-key <file>  (Tailscale, Cloudflare) terminates TLS for you.
   --print-ready     Print one line of JSON on stdout once the server is

@@ -544,7 +544,14 @@ Firewall*).
 
 **"That token was not accepted."** Copy it again from the server's output. If you
 have deleted `~/.spacelink/server.json` at some point, the token changed and
-every device needs pairing again.
+every device needs pairing again. A newline or a space picked up with the paste
+is not the problem: both ends trim what they are given.
+
+**The server started, but on a token nobody handed out.** `--token "$MY_TOKEN"`
+with the variable unset is an empty string, not a missing option. That used to
+be ignored, and the stored token in `~/.spacelink/server.json` was used and
+announced instead, while every device was configured with the one that was meant
+to be passed. It is now refused, with the reason.
 
 **"That sign-in is no longer valid."** The session expired, or somebody ran
 `--set-password` on that account, which ends every session. Sign in again.
@@ -592,7 +599,7 @@ which vault the request reaches.
 | `PUT /api/file?path=…` | write it. `If-Match: "<hash>"` makes it conditional; `If-Match: *` means create-only. A mismatch is `409` with the current hash. Writes to one file run one at a time, so two devices saving against the same hash at the same moment get one `200` and one `409`, never two `200`s |
 | `DELETE /api/file?path=…` | remove it |
 | `POST /api/rename` | `{ from, to }` |
-| `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers. The credential is re-checked every five seconds while the stream is open, so revoking it closes the stream rather than only refusing the next request |
+| `GET /api/events` | server-sent events as the vault changes. Takes `?token=` because `EventSource` cannot send headers — the same credential the header door takes, surrounding whitespace and all, so a token pasted with a newline is not accepted everywhere else and refused here. The credential is re-checked every five seconds while the stream is open, so revoking it closes the stream rather than only refusing the next request |
 
 Writes are atomic: the file is written beside the target and moved into place, so
 an interrupted save leaves the previous version whole rather than a truncated
