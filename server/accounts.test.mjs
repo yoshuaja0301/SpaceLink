@@ -9,7 +9,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -724,5 +724,57 @@ describe('a session whose account cannot be told apart from another', () => {
       sessions: [session('a-token', 'theirs')],
     }
     expect(accountForSession(store, 'a-token')?.email).toBe('them@example.com')
+  })
+})
+
+describe('an accounts path that cannot be read', () => {
+  it('names it, and says a folder is a folder', async () => {
+    // The corrupt-JSON case one line below this in the source has always named
+    // the file and said what to do. A path that is a folder escaped as Node
+    // wrote it — "EISDIR: illegal operation on a directory, read" — with the
+    // path nowhere in it, so somebody who mistyped --accounts had nothing.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-acctshape-'))
+    try {
+      const folder = join(home, 'not-a-file')
+      await mkdir(folder, { recursive: true })
+      await expect(loadAccounts(folder)).rejects.toThrow(new RegExp(folder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+      await expect(loadAccounts(folder)).rejects.toThrow(/is a folder, not a file/i)
+      await expect(loadAccounts(folder), 'Node\'s own words reached the person').rejects.not.toThrow(/EISDIR/)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('names it for a failure nobody anticipated, rather than passing Node\'s words through', async () => {
+    // Not every way a read can fail is worth its own sentence, but every one
+    // of them is worth naming the file: that is what tells somebody which of
+    // their paths is wrong. A name too long for the filesystem stands in for
+    // the whole class — a permission, a broken mount, a drive that answers EIO.
+    const tooLong = join(tmpdir(), 'x'.repeat(300))
+    await expect(loadAccounts(tooLong)).rejects.toThrow(/could not be read/i)
+    await expect(loadAccounts(tooLong)).rejects.toThrow(/ENAMETOOLONG/)
+    // The path is in it, which is the point.
+    await expect(loadAccounts(tooLong)).rejects.toThrow(/xxxxxxxxxx/)
+  })
+
+  it('still treats a file that is not there as no accounts yet', async () => {
+    // The one read failure that is not a failure: a first run.
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-acctshape-'))
+    try {
+      await expect(loadAccounts(join(home, 'never-made.json'))).resolves.toEqual({ accounts: [], sessions: [] })
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('still names a file that is there and is not JSON', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'spacelink-acctshape-'))
+    try {
+      const broken = join(home, 'broken.json')
+      await writeFile(broken, 'this is not json at all\n')
+      await expect(loadAccounts(broken)).rejects.toThrow(/is not valid JSON/i)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
   })
 })

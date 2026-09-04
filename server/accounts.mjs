@@ -85,7 +85,16 @@ export async function loadAccounts(file) {
     raw = await readFile(file, 'utf8')
   } catch (error) {
     if (error?.code === 'ENOENT') return emptyStore()
-    throw error
+    // Named, and said in the terms the person used. The line below already
+    // does this for a file that is not JSON; a path that is a folder, or one
+    // that cannot be read, escaped as Node wrote it — "EISDIR: illegal
+    // operation on a directory, read", with no path in it at all. Somebody who
+    // mistyped --accounts had nothing to go on, and the sibling case one line
+    // down told them exactly what was wrong.
+    if (error?.code === 'EISDIR') {
+      throw new Error(`${file} is a folder, not a file. --accounts wants the file the accounts live in.`)
+    }
+    throw new Error(`${file} could not be read (${error?.code ?? error?.message ?? error}).`)
   }
   if (raw.trim() === '') return emptyStore()
   /** @type {any} */
