@@ -2577,6 +2577,91 @@ describe('a caller leaning on the sign-in endpoint', { timeout: 60_000 }, () => 
     expect(reached).toBeLessThanOrEqual(8)
   }, 30_000)
 
+  it('bounds how much a made-up address can cost, without conflating a real one', async () => {
+    // The limiter holds ten thousand keys and takes each from the request
+    // body, so its size was the caller's to choose: measured, ten thousand
+    // four-thousand-character addresses came to 45 MB of heap, spent by
+    // anyone on the network with no token and no account. Keys are cut to the
+    // longest address an account can have — 254 — so two that differ only
+    // past that share a key, and nothing that could ever match an account is
+    // conflated.
+    //
+    // Its own server: the limiter is per server, and the bursts above leave
+    // this address's budget well spent.
+    const quiet = await mkdtemp(join(tmpdir(), 'spacelink-keys-'))
+    const notes = join(quiet, 'Notes')
+    await mkdir(notes, { recursive: true })
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(quiet, '__no_dist__'), accountsFile: join(quiet, 'a.json') })
+    await addAccount({ file: join(quiet, 'a.json'), email: 'real@example.com', password: PASSWORD, vault: notes })
+    const server = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => server.listen(0, '127.0.0.1', done))
+    const address = server.address()
+    const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    const guess = (email) =>
+      fetch(`${url}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password: 'not the password' }),
+      })
+
+    try {
+      // Two addresses alike for their first 254 characters and different after.
+      const head = 'x'.repeat(3900)
+      for (let attempt = 0; attempt < 6; attempt += 1) await guess(`${head}a@example.com`)
+      const sibling = await guess(`${head}b@example.com`)
+      expect(sibling.status, 'a caller could mint a fresh key per request').toBe(429)
+
+      // Two ordinary addresses are still two keys, which is the point of one —
+      // including two that are alike almost all the way, since a cut too short
+      // would count strangers against each other and lock out the wrong person.
+      const nearly = `${'long-but-ordinary-'.repeat(11)}`.slice(0, 200)
+      for (let attempt = 0; attempt < 6; attempt += 1) await guess(`${nearly}one@example.com`)
+      const other = await guess(`${nearly}two@example.com`)
+      expect(other.status, 'ordinary addresses were conflated into one key').toBe(401)
+    } finally {
+      await new Promise((done) => server.close(done))
+      await rm(quiet, { recursive: true, force: true })
+    }
+  })
+
+  it('counts one address under one key however it is capitalised', async () => {
+    // Addresses match case-insensitively, so the limiter must count them that
+    // way too: otherwise the budget is per capitalisation, and a guesser gets
+    // a fresh one by shifting a letter.
+    const quiet = await mkdtemp(join(tmpdir(), 'spacelink-case-'))
+    const notes = join(quiet, 'Notes')
+    await mkdir(notes, { recursive: true })
+    const sync = createSyncServer({ vault: notes, token: TOKEN, distDir: join(quiet, '__no_dist__'), accountsFile: join(quiet, 'a.json') })
+    await addAccount({ file: join(quiet, 'a.json'), email: 'Cased@Example.com', password: PASSWORD, vault: notes })
+    const server = createServer((request, response) => void sync.handle(request, response))
+    await new Promise((done) => server.listen(0, '127.0.0.1', done))
+    const address = server.address()
+    const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+    const guess = (email) =>
+      fetch(`${url}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password: 'not the password' }),
+      })
+
+    try {
+      for (let attempt = 0; attempt < 6; attempt += 1) await guess('cased@example.com')
+      const shifted = await guess('CASED@EXAMPLE.COM')
+      expect(shifted.status, 'a different capitalisation bought a fresh budget').toBe(429)
+    } finally {
+      await new Promise((done) => server.close(done))
+      await rm(quiet, { recursive: true, force: true })
+    }
+  })
+
+  it('tells an impossible address exactly what it tells a wrong password', async () => {
+    // Refusing a 4,000-character address differently would be a way to learn
+    // which shapes the server treats as real. It gets what any wrong guess does.
+    const answer = await login(`${'y'.repeat(3900)}@example.com`, 'not the password')
+    expect([401, 429], 'an impossible address was answered its own way').toContain(answer.status)
+    if (answer.status === 401) expect((await answer.json()).error).toMatch(/do not match an account/i)
+  })
+
   it('counts a caller who never repeats an address, too', async () => {
     // Every attempt names its own email, so limiting by email alone never
     // counts a caller who uses a fresh one each time — while each miss still

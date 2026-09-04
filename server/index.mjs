@@ -180,6 +180,25 @@ function readBody(request, limit = MAX_BODY_BYTES, tooLarge = 'That file is too 
 }
 
 /**
+ * The key an address is counted under, folded and bounded.
+ *
+ * The address comes from the request body, and the limiter holds ten thousand
+ * keys — so its size is the caller's to choose. The sign-in body allows about
+ * four thousand characters, and ten thousand of those measured 45 MB of heap,
+ * spent by anyone on the network with no token and no account.
+ *
+ * Cut to the longest address an account can have, which `assertUsableEmail`
+ * puts at 254: anything longer could never match one, so nothing is conflated
+ * that was ever distinguishable. Nothing else about the answer changes — the
+ * refusal is worded and timed the same, whatever was sent.
+ *
+ * @param {string} email
+ */
+function limiterKey(email) {
+  return email.toLowerCase().slice(0, 254)
+}
+
+/**
  * Who a request came from, for rate-limiting purposes only.
  *
  * The socket's own address, never `x-forwarded-for`: that header is written by
@@ -875,7 +894,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // passwords is never locked out, small enough to bound the cost.
       /** @type {[ReturnType<typeof createAttemptLimiter>, string][]} */
       const limits = [
-        [attempts, email.toLowerCase()],
+        [attempts, limiterKey(email)],
         [byAddress, clientAddress(request)],
       ]
 
