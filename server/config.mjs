@@ -105,6 +105,8 @@ export async function loadOrCreateToken() {
  *
  * A file that is not there, or not ours to change, is not an error. Refusing
  * to start over a mode would be worse than the mode.
+ *
+ * @param {string} file
  */
 export async function tightenMode(file) {
   const info = await stat(file)
@@ -114,8 +116,15 @@ export async function tightenMode(file) {
 /**
  * Parse the command line.
  *
+ * The shape comes from the literal below and is not written out a second time
+ * here. It was: an `@returns` listing nine fields while the function returned
+ * fourteen, and the five it had fallen behind on were exactly the account
+ * options — `--accounts`, `--add-account`, `--set-password`, `--list-accounts`,
+ * `--password`. Every use of them was a type error nobody could see, because
+ * nothing typechecked this folder. A second copy of a shape is a second thing
+ * to keep true; the fields below say what they are, one at a time.
+ *
  * @param {string[]} argv
- * @returns {{ vault: string, vaultChosen: boolean, port: number, host: string, token: string | null, tlsCert: string | null, tlsKey: string | null, printReady: boolean, help: boolean }}
  */
 export function parseArgs(argv) {
   const options = {

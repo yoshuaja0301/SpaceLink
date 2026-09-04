@@ -25,7 +25,19 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import { dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
-const scrypt = promisify(scryptCallback)
+/**
+ * The promisified `scrypt`.
+ *
+ * Typed by hand because `promisify` resolves to the three-argument overload and
+ * loses the one that takes the cost parameters — the very argument this file
+ * exists to get right. Written out, the `N`, `r` and `keylen` below are checked
+ * against what `node:crypto` accepts rather than passed into a signature that
+ * does not admit them.
+ *
+ * @type {(password: string | Buffer, salt: string | Buffer, keylen: number,
+ *   options?: import('node:crypto').ScryptOptions) => Promise<Buffer>}
+ */
+const scrypt = /** @type {any} */ (promisify(scryptCallback))
 
 /**
  * scrypt's cost. N=2^15 with r=8 needs 128·N·r = 32 MiB per hash, which is the
@@ -93,6 +105,7 @@ function emptyStore() {
  * nothing that was ever reachable — but it is dropped *loudly*: the count
  * comes back with the store, and `--list-accounts` says it.
  */
+/** @param {unknown} value */
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -172,6 +185,7 @@ const LOCK_WAIT_MS = 5_000
 /** One promise chain per file, so calls in this process queue instead of racing. */
 const inProcess = new Map()
 
+/** @param {number} ms */
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
@@ -276,7 +290,11 @@ export async function updateAccounts(file, change) {
   }
 }
 
-/** Emails differ only by case as often as by accident; compare them folded. */
+/**
+ * Emails differ only by case as often as by accident; compare them folded.
+ * @param {unknown} a
+ * @param {unknown} b
+ */
 export function sameEmail(a, b) {
   return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
 }
@@ -298,7 +316,7 @@ export function findAccount(accounts, email) {
  */
 export async function hashPassword(password) {
   const salt = randomBytes(16)
-  const derived = /** @type {Buffer} */ (await scrypt(password, salt, SCRYPT.keylen, SCRYPT))
+  const derived = await scrypt(password, salt, SCRYPT.keylen, SCRYPT)
   return {
     salt: salt.toString('base64'),
     hash: derived.toString('base64'),
@@ -321,14 +339,12 @@ export async function verifyPassword(password, account) {
   try {
     const parameters = account.kdf ?? { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, keylen: SCRYPT.keylen }
     const expected = Buffer.from(account.hash, 'base64')
-    const derived = /** @type {Buffer} */ (
-      await scrypt(password, Buffer.from(account.salt, 'base64'), parameters.keylen, {
-        N: parameters.N,
-        r: parameters.r,
-        p: parameters.p,
-        maxmem: SCRYPT.maxmem,
-      })
-    )
+    const derived = await scrypt(password, Buffer.from(account.salt, 'base64'), parameters.keylen, {
+      N: parameters.N,
+      r: parameters.r,
+      p: parameters.p,
+      maxmem: SCRYPT.maxmem,
+    })
     if (derived.length !== expected.length) return false
     return timingSafeEqual(derived, expected)
   } catch {
@@ -481,12 +497,19 @@ export async function setPassword({ file, email, password }) {
  * Sessions
  * ------------------------------------------------------------------ */
 
-/** The stored form of a session token: what the file holds instead of the token. */
+/**
+ * The stored form of a session token: what the file holds instead of the token.
+ * @param {unknown} token
+ */
 export function sessionId(token) {
   return createHash('sha256').update(String(token)).digest('hex')
 }
 
-/** Sessions that have not expired, oldest first. */
+/**
+ * Sessions that have not expired, oldest first.
+ * @param {AccountsFile} store
+ * @param {number} now
+ */
 export function liveSessions(store, now) {
   return store.sessions.filter((session) => session.expiresAt > now)
 }
@@ -646,6 +669,7 @@ export function createAttemptLimiter({
    * long as it is fed. Expired entries go first; if that is not enough, the
    * least recently touched go, which is exactly the run nobody is still making.
    */
+  /** @param {number} now @param {string} except the key just counted, which is never evicted */
   const prune = (now, except) => {
     for (const [key, record] of seen) {
       if (now - record.last > forgetAfterMs) seen.delete(key)
@@ -681,13 +705,20 @@ export function createAttemptLimiter({
     }
   }
 
-  /** When `record`'s current wait, if any, is over. */
+  /**
+   * When `record`'s current wait, if any, is over.
+   * @param {{ failures: number, last: number }} record
+   */
   const lockedUntil = (record) => {
     if (record.failures <= freeAttempts) return 0
     return record.last + Math.min(maxDelayMs, 1000 * 2 ** (record.failures - freeAttempts - 1))
   }
 
-  /** How long `key` must wait before another attempt is worth making. */
+  /**
+   * How long `key` must wait before another attempt is worth making.
+   * @param {string} key
+   * @param {number} now
+   */
   const retryAfterMs = (key, now) => {
     const record = seen.get(key)
     if (!record) return 0
@@ -699,7 +730,11 @@ export function createAttemptLimiter({
   }
 
   return {
-    /** @returns {number} milliseconds to wait, 0 when the attempt may proceed */
+    /**
+     * @param {string} key
+     * @param {number} [now]
+     * @returns {number} milliseconds to wait, 0 when the attempt may proceed
+     */
     retryAfter(key, now = Date.now()) {
       return retryAfterMs(key, now)
     },
@@ -713,6 +748,7 @@ export function createAttemptLimiter({
      * limit at all. Counting first makes concurrency count against the
      * attacker rather than for them; `succeed` clears the run afterwards.
      */
+    /** @param {string} key @param {number} [now] */
     fail(key, now = Date.now()) {
       const record = seen.get(key)
       // Delete before setting, so the re-insert moves this key to the back of
@@ -722,7 +758,10 @@ export function createAttemptLimiter({
       else seen.set(key, { failures: record.failures + 1, last: now })
       prune(now, key)
     },
-    /** A password that worked clears the run — the person is who they said. */
+    /**
+     * A password that worked clears the run — the person is who they said.
+     * @param {string} key
+     */
     succeed(key) {
       seen.delete(key)
     },

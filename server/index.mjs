@@ -89,6 +89,7 @@ const REVOCATION_CHECK_MS = 5000
  */
 const WATCH_RETRY_MS = 5000
 
+/** @type {Record<string, string>} */
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -140,7 +141,9 @@ function sendJson(response, status, body, headers = {}) {
  * @param {unknown} error
  */
 function tornDown(error) {
-  return /** @type {any} */ (error)?.status === 413 ? { connection: 'close' } : {}
+  return /** @type {Record<string, string>} */ (
+    /** @type {any} */ (error)?.status === 413 ? { connection: 'close' } : {}
+  )
 }
 
 /**
@@ -162,8 +165,10 @@ function tornDown(error) {
 function readBody(request, limit = MAX_BODY_BYTES, tooLarge = 'That file is too large to sync.') {
   return new Promise((resolvePromise, rejectPromise) => {
     /** @type {Buffer[]} */
+    /** @type {Buffer[]} */
     const chunks = []
     let length = 0
+    /** @param {Buffer} chunk */
     const onData = (chunk) => {
       length += chunk.length
       if (length > limit) {
@@ -212,6 +217,23 @@ function limiterKey(email) {
  */
 function clientAddress(request) {
   return request.socket?.remoteAddress ?? 'unknown'
+}
+
+/**
+ * The status on an error that was raised on purpose, or null.
+ *
+ * Everything this server refuses deliberately carries one — the vault store's
+ * own errors, and the 413 a body over its limit gets — along with a message
+ * written for the caller. Anything else is Node's, and those name the file on
+ * disk, which is nobody's business.
+ *
+ * @param {unknown} error
+ * @returns {number | null}
+ */
+function deliberateStatus(error) {
+  if (!(error instanceof Error)) return null
+  const status = /** @type {{ status?: unknown }} */ (/** @type {unknown} */ (error)).status
+  return typeof status === 'number' ? status : null
 }
 
 /** @param {import('node:http').IncomingMessage} request */
@@ -310,7 +332,10 @@ function createVault(root) {
     return recent.hash === hash
   }
 
-  /** Tell every listening device what one changed file now looks like. */
+  /**
+   * Tell every listening device what one changed file now looks like.
+   * @param {string | Buffer | null | undefined} filename
+   */
   async function announceChange(filename) {
     if (!filename) return
     const relativePath = String(filename).split(/[\\/]/).join('/')
@@ -366,7 +391,10 @@ function createVault(root) {
    */
   function startWatching(signal, mode = process.platform === 'linux' ? 'folders' : 'recursive') {
     if (signal?.aborted) return null
-    const watcher = new EventEmitter()
+    // The `close` it is handed back by is part of what this is, not something
+    // bolted on afterwards — and a no-op until the real one is set below, so
+    // the `error` handler cannot call a method that is not there yet.
+    const watcher = Object.assign(new EventEmitter(), { close: () => {} })
     let stop = () => {}
 
     watcher.on('error', (error) => {
@@ -451,7 +479,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * the command line is simply the first entry.
    */
   const byFolder = new Map([[resolve(vault), primary]])
-  /** Held so a vault opened after the server started is watched too. */
+  /**
+   * Held so a vault opened after the server started is watched too.
+   * @type {AbortSignal | null}
+   */
   let watchSignal = null
 
   /** Password guessing is slowed per address; the token has never needed it. */
@@ -467,6 +498,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * many times would be a poor way to spend a save. Keyed on mtime rather than
    * a timer so an account added from the terminal is live at once.
    */
+  /** @type {{ mtimeMs: number, store: import('./accounts.mjs').AccountsFile | null }} */
   let cachedAccounts = { mtimeMs: -1, store: null }
   async function accountsStore() {
     if (!accountsFile) return { accounts: [], sessions: [] }
@@ -499,7 +531,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     cachedAccounts = { mtimeMs: -1, store: null }
   }
 
-  /** The vault an account owns, opened and watched the first time it is asked for. */
+  /**
+   * The vault an account owns, opened and watched the first time it is asked for.
+   * @param {import('./accounts.mjs').Account} account
+   */
   function vaultFor(account) {
     const root = resolve(account.vault)
     const existing = byFolder.get(root)
@@ -523,6 +558,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * is compared in constant time, and a session is looked up by the hash of
    * itself.
    *
+   * @param {unknown} presented
    * @returns {Promise<{ kind: 'token' | 'account', account?: any, context: ReturnType<typeof createVault> } | null>}
    */
   async function identify(presented) {
@@ -649,8 +685,8 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       // Only an error raised on purpose carries a status and a message written
       // for the caller. Anything else is Node's own, and those name the file
       // on disk — the vault's whole path — which is nobody's business.
-      const known = typeof error?.status === 'number' && error instanceof Error
-      if (!known) process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
+      const known = deliberateStatus(error)
+      if (known === null) process.stderr.write(`SpaceLink: ${request.method} ${url.pathname} failed (${error?.message ?? error}).\n`)
       if (response.headersSent) {
         // A streamed response that failed part-way. The status is already out
         // and cannot be revised; all that is left is to stop cleanly rather
@@ -659,9 +695,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
         response.end()
         return
       }
-      const body = { error: known ? error.message : 'Something went wrong.' }
+      /** @type {{ error: string, currentHash?: string }} */
+      const body = { error: known === null ? 'Something went wrong.' : error.message }
       if (error instanceof VaultConflictError) body.currentHash = error.currentHash
-      sendJson(response, known ? error.status : 500, body, tornDown(error))
+      sendJson(response, known ?? 500, body, tornDown(error))
     }
   }
 
@@ -669,6 +706,8 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * @param {import('node:http').IncomingMessage} request
    * @param {import('node:http').ServerResponse} response
    * @param {URL} url
+   * @param {ReturnType<typeof createVault>} context
+   * @param {(() => Promise<boolean>) | null} [stillAllowed]
    */
   async function handleApi(request, response, url, context, stillAllowed = null) {
     const path = url.searchParams.get('path') ?? ''
@@ -827,7 +866,7 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
               // Stop asking, and end it. Everything else — the keep-alive, the
               // listeners set — the connection's `close` handler below already
               // owns, and ending the response is what fires it.
-              clearInterval(recheck)
+              if (recheck) clearInterval(recheck)
               response.end()
             } catch (error) {
               /*
@@ -867,6 +906,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
    * There is no way to *make* an account here. Accounts are made with a command
    * on the machine that holds the notes, which is the whole reason this server
    * has no sign-up form to attack.
+   *
+   * @param {import('node:http').IncomingMessage} request
+   * @param {import('node:http').ServerResponse} response
+   * @param {URL} url
    */
   async function handleAuth(request, response, url) {
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
@@ -884,11 +927,11 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
       } catch (error) {
         // A body over the limit is not a syntax error, and calling it one
         // sends somebody hunting for a typo in a request that was only too big.
-        const known = typeof error?.status === 'number' && error instanceof Error
+        const known = deliberateStatus(error)
         sendJson(
           response,
-          known ? error.status : 400,
-          { error: known ? error.message : 'The request body is not valid JSON.' },
+          known ?? 400,
+          { error: known === null ? 'The request body is not valid JSON.' : error.message },
           tornDown(error),
         )
         return true
@@ -988,6 +1031,10 @@ export function createSyncServer({ vault, token, distDir = DIST, accountsFile = 
     return false
   }
 
+  /**
+   * @param {AbortSignal} [signal]
+   * @param {'folders' | 'recursive'} [mode]
+   */
   function startWatching(signal, mode) {
     watchSignal = signal ?? null
     const watcher = primary.startWatching(signal, mode)
@@ -1063,7 +1110,7 @@ function watchEachFolder(root, facade, store) {
       }
       throw error
     }
-    native.on('error', (error) => {
+    native.on('error', (/** @type {NodeJS.ErrnoException} */ error) => {
       // The folder itself went away: its watch is done, the others carry on.
       if (error?.code === 'ENOENT') forget(folder)
       else facade.emit('error', error)
@@ -1273,6 +1320,7 @@ function askPassword(prompt) {
     input.setRawMode(true)
     input.resume()
     input.setEncoding('utf8')
+    /** @param {string} chunk */
     const onData = (chunk) => {
       const next = takeKeys(typed, chunk)
       typed = next.typed

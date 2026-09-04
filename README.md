@@ -139,7 +139,7 @@ npm run dev      # http://localhost:5173
 ```
 
 ```bash
-npm run build    # typecheck + production bundle into dist/
+npm run build    # typecheck (app, server and scripts) + bundle into dist/
 npm run preview  # serve the built bundle
 npm start        # build, then serve it — add -- --vault ~/Notes
 npm run server -- --vault ~/Notes   # serve an existing build

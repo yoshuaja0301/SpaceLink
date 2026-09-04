@@ -605,6 +605,21 @@ wake, so give it a moment after unlocking. If it persists, reload the page.
 
 ---
 
+## Working on the server
+
+The server is plain JavaScript with JSDoc types, and `npm run build` typechecks
+it — `tsconfig.server.json` covers `server/` and `scripts/` beside the app's own
+project, at the same `strict` the app uses. It was not always so: every file
+here opened with `// @ts-check` while nothing ever ran a checker over the folder,
+and `parseArgs` had a hand-written `@returns` listing nine fields for a function
+that returned fourteen. The five it had fallen behind on were the account
+options, so every use of `--accounts`, `--add-account`, `--set-password`,
+`--list-accounts` and `--password` was a type error nobody could see.
+
+The tests are not in that project. They are checked by being run.
+
+---
+
 ## The API, briefly
 
 For anything you might want to script against. Every endpoint but `/api/health`

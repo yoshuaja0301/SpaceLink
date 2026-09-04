@@ -69,7 +69,12 @@ function circleCoverage(px, py, cx, cy, radius) {
   return hits / 9
 }
 
-/** Distance from a point to a line segment, for stroking the edges. */
+/**
+ * Distance from a point to a line segment, for stroking the edges.
+ * @param {number} px @param {number} py the point
+ * @param {number} ax @param {number} ay one end of the segment
+ * @param {number} bx @param {number} by the other
+ */
 function distanceToSegment(px, py, ax, ay, bx, by) {
   const dx = bx - ax
   const dy = by - ay

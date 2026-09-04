@@ -216,7 +216,7 @@ export class VaultStore {
       // The vault's folder is not there. Said plainly, and not cached as a
       // rejected promise: the drive may be mounted again a moment later, and a
       // remembered failure would outlast the problem.
-      this.realRoot = undefined
+      this.realRoot = null
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
         throw new VaultUnreachableError(
           error?.code === 'ENOTDIR'
