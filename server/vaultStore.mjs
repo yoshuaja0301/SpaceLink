@@ -28,7 +28,28 @@ const SKIP_DIRECTORIES = new Set([
   'node_modules',
   '.trash',
   '.DS_Store',
+  // Heavy system folders that never hold notes. Pointing a vault at a whole
+  // home folder or a disk is only usable if the walk does not descend into
+  // them: `Library` alone (caches, DerivedData, application support) is larger
+  // than most people's entire document tree, and `Applications` is bundles.
+  'Library',
+  'Applications',
 ])
+
+/**
+ * Package folders that hold a media library's thousands of internal files.
+ * They are never notes, and any one of them (a Photos library especially) is
+ * large enough on its own to make a whole-home or whole-disk vault hang. Their
+ * names end in a known extension but do not start with a dot, so the dot-file
+ * rule does not already exclude them.
+ */
+const SKIP_DIRECTORY_PATTERN =
+  /\.(photoslibrary|photolibrary|aplibrary|migratedaplibrary|musiclibrary|tvlibrary|imovielibrary|theater|fcpbundle|logicx|band)$/i
+
+/** @param {string} name */
+function isSkippedDirectory(name) {
+  return SKIP_DIRECTORIES.has(name) || SKIP_DIRECTORY_PATTERN.test(name)
+}
 
 /** @typedef {{ path: string, size: number, mtime: number, hash: string, isMarkdown: boolean }} VaultEntry */
 
@@ -188,7 +209,7 @@ export class VaultStore {
     // does not show must not be announced, served or written either — a device
     // would add it, then lose it on the next reload.
     for (const segment of inside.split(sep)) {
-      if (SKIP_DIRECTORIES.has(segment)) {
+      if (isSkippedDirectory(segment)) {
         throw new VaultPathError(`"${inputPath}" is in a directory the vault does not sync.`)
       }
       if (segment.startsWith('.')) {
@@ -331,7 +352,7 @@ export class VaultStore {
         )
       }
       for (const entry of contents) {
-        if (entry.name.startsWith('.') || SKIP_DIRECTORIES.has(entry.name)) continue
+        if (entry.name.startsWith('.') || isSkippedDirectory(entry.name)) continue
         const childAbsolute = join(absolute, entry.name)
         const childPath = prefix ? `${prefix}/${entry.name}` : entry.name
         if (entry.isDirectory()) {
@@ -341,14 +362,27 @@ export class VaultStore {
         if (!entry.isFile()) continue
         try {
           const info = await stat(childAbsolute)
-          const hash = await this.hashFor(childAbsolute, info)
-          if (hash === null) continue
+          const isMarkdown = /\.md$/i.test(entry.name)
+          let hash
+          if (isMarkdown) {
+            // Notes are read and content-hashed: they are small, few, and their
+            // text is what the app actually shows.
+            hash = await this.hashFor(childAbsolute, info)
+            if (hash === null) continue
+          } else {
+            // Attachments can be large and are not read until a note embeds one.
+            // Hashing their bytes on every listing is what makes a broad vault —
+            // a whole home folder, a disk — hang. Size and mtime identify a
+            // change well enough for a device to refetch, the same heuristic
+            // every backup tool uses, and cost nothing: `stat` already has them.
+            hash = hashOf(`${info.size}:${Math.round(info.mtimeMs)}`)
+          }
           entries.push({
             path: childPath,
             size: info.size,
             mtime: Math.round(info.mtimeMs),
             hash,
-            isMarkdown: /\.md$/i.test(entry.name),
+            isMarkdown,
           })
         } catch {
           // A file that vanished mid-walk simply is not in this listing.
