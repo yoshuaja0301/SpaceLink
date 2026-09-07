@@ -23,10 +23,10 @@
 import { EventEmitter } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { watch as watchDirectory } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { rmSync, watch as watchDirectory } from 'node:fs'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
-import { extname, join, relative, resolve, sep } from 'node:path'
+import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -43,6 +43,12 @@ import {
 } from './accounts.mjs'
 import { ACCOUNTS_FILE, HELP, loadOrCreateToken, parseArgs, tightenMode, tokensMatch } from './config.mjs'
 import { SKIP_DIRECTORIES, TEMP_PREFIX, VaultConflictError, VaultNotFoundError, VaultPathError, VaultStore, hashOf } from './vaultStore.mjs'
+
+/**
+ * Where the running server records its live address for local tools to find.
+ * Beside the token and accounts, in the same private config directory.
+ */
+const RUNTIME_FILE = join(dirname(ACCOUNTS_FILE), 'runtime.json')
 
 /**
  * Where this file lives, used only to find `dist/`.
@@ -1525,6 +1531,28 @@ async function main() {
           vault: server.store.root,
         })}\n`,
       )
+
+      // A discovery file beside the token, so a local tool — the MCP server —
+      // can find the running server without being told its port. The port is
+      // chosen by the OS (`--port 0`) and printed only on the line above, which
+      // the launching app consumes; nothing else can see it. Written 0600
+      // because it carries the token, and removed on shutdown so a stale file
+      // never points a tool at a port nobody is listening on.
+      void (async () => {
+        try {
+          // The config directory may not exist yet: when a token is passed on
+          // the command line — as the macOS app does — nothing has created it.
+          await mkdir(dirname(RUNTIME_FILE), { recursive: true, mode: 0o700 })
+          await rm(RUNTIME_FILE, { force: true })
+          await writeFile(
+            RUNTIME_FILE,
+            `${JSON.stringify({ url: `${scheme}://127.0.0.1:${port}/`, port, token: stored.token, vault: server.store.root, pid: process.pid }, null, 2)}\n`,
+            { mode: 0o600 },
+          )
+        } catch {
+          // Discovery is a convenience; a server that cannot write it still runs.
+        }
+      })()
     }
 
     const lines = [
@@ -1550,6 +1578,15 @@ async function main() {
 
   const shutdown = () => {
     controller.abort()
+    // Remove the discovery file synchronously: the process may exit before any
+    // async unlink runs, and a leftover file would point a tool at a dead port.
+    if (options.printReady) {
+      try {
+        rmSync(RUNTIME_FILE, { force: true })
+      } catch {
+        // Already gone, or never ours to remove.
+      }
+    }
     listener.close(() => process.exit(0))
     setTimeout(() => process.exit(0), 2000).unref()
   }
